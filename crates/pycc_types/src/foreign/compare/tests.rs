@@ -165,6 +165,17 @@ fn isinstance_of_an_object_against_a_plain_compiled_class_is_admitted() {
     }
 }
 
+/// A local spelled like a compiled class shadows it, as in CPython: the
+/// test is then against the local's value, here an object, so even an
+/// exception class's name is admitted once shadowed.
+#[test]
+fn isinstance_against_a_local_shadowing_a_compiled_class_tests_the_local() {
+    assert_admitted(
+        "class E(Exception):\n    pass\n\n\ndef f() -> bool:\n    \
+         E = numpy.pi\n    return isinstance(numpy.e, E)\n",
+    );
+}
+
 /// Part 7 of #1371: the compiled classes that have no exported CPython type
 /// object of their own kind are refused, each naming its kind.
 #[test]

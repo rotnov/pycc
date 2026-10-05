@@ -2,6 +2,7 @@
 //! (Part 1 of #1371), of membership in and slices of one (Part 2b), and of
 //! deleting a slice of one (Part 2c), exercised from real HIR with `numpy` bound as a foreign import.
 
+use super::lower_object_isinstance;
 use crate::*;
 use pycc_diag::Span;
 use pycc_hir::{CmpOpKind, HirExpr, HirItem, HirModule, HirStmt, ImportBinding};
@@ -199,6 +200,35 @@ fn isinstance_against_a_compiled_class_carries_the_class_name() {
         "{lowered:?}"
     );
     assert_eq!(lowered.ty(), Ty::Bool);
+}
+
+/// A local spelled like a compiled class shadows it: the class argument is
+/// then the evaluated local, not the published family.
+#[test]
+fn a_local_shadowing_a_compiled_class_is_an_evaluated_object_class() {
+    let classes: HashMap<String, pycc_hir::HirClassDef> =
+        [("Base".to_string(), plain_class("Base", &["Base", "object"]))]
+            .into_iter()
+            .collect();
+    let scopes = vec![[("Base".to_string(), Ty::Object)].into_iter().collect()];
+    let value = lower_discarded(numpy_attr("pi"));
+    let lowered = lower_object_isinstance(
+        value,
+        &HirExpr::Name("Base".to_string()),
+        &scopes,
+        &classes,
+        None,
+    );
+    assert!(
+        matches!(
+            &lowered,
+            MirExpr::ObjIsInstance {
+                class: ObjIsInstanceClass::Object(_),
+                ..
+            }
+        ),
+        "{lowered:?}"
+    );
 }
 
 /// A walrus can hide in either operand of a comparison, and in either

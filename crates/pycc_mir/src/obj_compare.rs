@@ -118,7 +118,11 @@ pub(super) fn lower_object_isinstance(
     };
     let class = match (builtin, class_arg) {
         (Some(builtin), _) => ObjIsInstanceClass::Builtin(builtin),
-        (None, HirExpr::Name(name)) if classes.contains_key(name) => {
+        // A local or parameter spelled like a compiled class shadows it.
+        (None, HirExpr::Name(name))
+            if classes.contains_key(name)
+                && !scopes.iter().any(|scope| scope.contains_key(name)) =>
+        {
             ObjIsInstanceClass::Compiled(name.clone())
         }
         (None, _) => ObjIsInstanceClass::Object(Box::new(lower_expr(

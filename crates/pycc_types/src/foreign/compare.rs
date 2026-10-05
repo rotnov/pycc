@@ -187,7 +187,10 @@ pub(crate) fn check_object_isinstance(
         if is_object_isinstance_builtin(name) {
             return Ok(Ty::Bool);
         }
-        if let Some(class_def) = env.lookup_class(name) {
+        // A local or parameter spelled like a compiled class shadows it, as
+        // in CPython: it is then the evaluated `object` operand below.
+        let shadowed = local_names.contains(&name.as_str());
+        if let Some(class_def) = env.lookup_class(name).filter(|_| !shadowed) {
             return match compiled_class_refusal(class_def) {
                 None => Ok(Ty::Bool),
                 Some(kind) => Err(object_operation_unsupported(&format!(

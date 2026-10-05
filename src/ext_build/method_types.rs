@@ -227,8 +227,10 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
 pub(crate) fn compiled_class_isinstance_c(publications: &[ExtPublishedClass]) -> String {
     let mut out = format!("{COMPILED_CLASS_ISINSTANCE_DECL}\n{{\n");
     let mut names: Vec<&str> = Vec::new();
+    // `object` ends every MRO but is never a compiled class argument
+    // (`isinstance(o, object)` is not a `Compiled` test), so it gets no test.
     for name in publications.iter().flat_map(|published| &published.mro) {
-        if !names.contains(&name.as_str()) {
+        if name != "object" && !names.contains(&name.as_str()) {
             names.push(name);
         }
     }

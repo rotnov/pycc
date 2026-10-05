@@ -10,8 +10,9 @@ use super::*;
 
 /// Part 7 of #1371: a class name answers through every published type
 /// whose MRO contains it, in publication order -- a base through itself
-/// and its published subclass, a subclass through itself only -- and a
-/// shared ancestor (`object`) is tested once per name, not once per class.
+/// and its published subclass, a subclass through itself only -- each
+/// shared ancestor gets one test per name, not one per class, and `object`,
+/// never a compiled class argument, gets none.
 #[test]
 fn the_compiled_class_isinstance_tests_each_published_type_whose_mro_names_the_class() {
     let published = |class: &str, mro: &[&str]| ExtPublishedClass {
@@ -32,7 +33,6 @@ fn the_compiled_class_isinstance_tests_each_published_type_whose_mro_names_the_c
     let expected = format!(
         "{COMPILED_CLASS_ISINSTANCE_DECL}\n{{\n    int found;\n    \
          if (strcmp(name, \"Base\") == 0) {{\n{base}{derived}        return 0;\n    }}\n    \
-         if (strcmp(name, \"object\") == 0) {{\n{base}{derived}        return 0;\n    }}\n    \
          if (strcmp(name, \"Derived\") == 0) {{\n{derived}        return 0;\n    }}\n    \
          return {UNPUBLISHED_CLASS_ISINSTANCE}(o);\n}}\n\n",
         base = test("Base"),

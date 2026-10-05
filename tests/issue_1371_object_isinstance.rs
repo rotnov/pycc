@@ -115,7 +115,8 @@ fn isinstance_against_a_special_compiled_class_or_a_tuple_is_refused() {
 /// The module the hosted carrier test builds. `Base`/`Derived` are a
 /// published family, `ParserState.same` is the lark `__eq__` shape on an
 /// `Any` parameter, `_Hidden` is private and so has no published type, and
-/// `pin` repeats the test 200 times on one object inside compiled code,
+/// `shadowed` takes a parameter spelled like `Base`, which shadows the
+/// class as in CPython, and `pin` repeats the test 200 times on one object inside compiled code,
 /// returning `1000 * refcount drift + hits`: a reference the shim failed to
 /// release would show as a drift.
 const MODULE: &str = "import builtins\n\
@@ -164,6 +165,9 @@ const MODULE: &str = "import builtins\n\
     def len_is_base() -> bool:\n    return isinstance(builtins.len, Base)\n\
     \n\
     \n\
+    def shadowed(o: object, Base: object) -> bool:\n    return isinstance(o, Base)\n\
+    \n\
+    \n\
     def pin(o: object) -> int:\n    \
     before = int(sys.getrefcount(o))\n    \
     hits = 0\n    \
@@ -201,7 +205,8 @@ const DRIVER: &str = "import pycc_obj_isinstance_mod as m\n\
     \x20   except ValueError as e:\n\
     \x20       print('ValueError', e)\n\
     print(m.is_base(Posing()), m.is_derived(Posing()), m.is_hidden(Posing()), m.is_base(object()))\n\
-    print(m.pin(b), m.pin(d), m.pin([1]))\n";
+    print(m.pin(b), m.pin(d), m.pin([1]))\n\
+    print(m.shadowed(b, int), m.shadowed(3, int), m.shadowed(b, m.Base))\n";
 
 const DRIVER_OUT: &str = "True True False False True\n\
     False False False False False\n\
@@ -210,7 +215,8 @@ const DRIVER_OUT: &str = "True True False False True\n\
     ValueError boom\n\
     ValueError boom\n\
     True True False False\n\
-    200 200 0\n";
+    200 200 0\n\
+    False True True\n";
 
 fn run_driver(path_entry: &Path, cwd: &Path) -> Output {
     host_python()
