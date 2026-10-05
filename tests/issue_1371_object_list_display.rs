@@ -249,8 +249,9 @@ fn every_packed_element_is_consumed_exactly_once() {
 
 /// The shapes Part 2d does not admit keep a diagnostic, never a panic: an
 /// element with no boxing helper, a dict display bound to an object, an
-/// empty display with no object evidence, and a non-empty display whose
-/// only object evidence is another binding of the name.
+/// empty display with no object evidence, a non-empty display whose only
+/// object evidence is another binding of the name, and an `.append` on an
+/// empty display that became the object (`I0404`, formerly `T0023`).
 #[test]
 fn the_shapes_outside_part_2d_are_refused() {
     const HEAD: &str = "import builtins\n\n\n";
@@ -285,6 +286,15 @@ fn the_shapes_outside_part_2d_are_refused() {
              return len(s)\n",
             "T0023",
             "cannot assign",
+        ),
+        // `T0023` before Part 2d: the empty display now becomes the object,
+        // so the `.append` is a method on an object, which is #1095.
+        (
+            "obj_list_append_then_object",
+            "def f() -> int:\n    xs = []\n    xs.append(1)\n    \
+             xs = builtins.list(\"ab\")[1:]\n    return len(xs)\n",
+            "I0404",
+            "using `xs`, which is bound to a CPython object, in this position is not supported yet",
         ),
     ] {
         let dir = ScratchDir::new(tag).expect("scratch");
