@@ -111,12 +111,15 @@ fn artifact_name() -> &'static str {
     if cfg!(windows) { "m.pyd" } else { "m.abi3.so" }
 }
 
-/// Runs `script` with `dir` as the working directory.
+/// Runs `script` with `dir` as the working directory. Stdout is forced to
+/// UTF-8 so a non-ASCII default reads back byte-exactly on a host whose
+/// console encoding is not UTF-8 (Windows).
 fn host_run(dir: &Path, script: &str) -> Output {
     host_python()
         .args(["-B", "-c", script])
         .current_dir(dir)
         .env("PYTHONUNBUFFERED", "1")
+        .env("PYTHONIOENCODING", "utf-8")
         .output()
         .expect("python3 should spawn")
 }
