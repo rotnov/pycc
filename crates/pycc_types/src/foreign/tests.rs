@@ -488,24 +488,24 @@ fn the_in_function_condition_sites_are_admitted() {
 /// `isinstance` is the one site whose two producer shapes give different
 /// answers, so it is pinned separately rather than bent into the table.
 ///
-/// The direct shape reaches `check_isinstance`'s new `I0404` guard. The
-/// helper shape never gets there: `isinstance` is a compile-time predicate
-/// in pycc and already refuses *any* call expression as its first argument
-/// with `C0001`, because evaluating one would lose its side effects. That
-/// pre-existing rule is a superset of the new one here, and Part 2 extends
-/// rather than replaces it.
+/// The direct shape is a run-time `PyObject_IsInstance` since Part 1 of
+/// #1371 (`foreign::compare::check_object_isinstance`), so a builtin class
+/// is admitted and a tuple of classes is the refused shape. The helper
+/// shape never gets there: `isinstance` already refuses *any* call
+/// expression as its first argument with `C0001`, because evaluating one
+/// would lose its side effects.
 #[test]
-fn isinstance_refuses_a_cpython_object_and_a_call_expression_for_different_reasons() {
-    let source = "if isinstance(numpy.pi, int):\n    print(1)\n";
+fn isinstance_admits_a_cpython_object_and_refuses_a_call_expression() {
+    assert!(check_foreign("if isinstance(numpy.pi, int):\n    print(1)\n").is_none());
     assert_refused(
         "`numpy.pi`",
-        source,
+        "if isinstance(numpy.pi, (int, str)):\n    print(1)\n",
         "I0404",
-        "testing a CPython object with `isinstance`",
+        "against a tuple of classes",
     );
     assert_refused(
         "a private helper returning `object`",
-        &both_producer_shapes(source)[1].1,
+        &both_producer_shapes("if isinstance(numpy.pi, int):\n    print(1)\n")[1].1,
         "C0001",
         "side effects would be lost",
     );
@@ -523,11 +523,6 @@ fn isinstance_refuses_a_cpython_object_and_a_call_expression_for_different_reaso
 fn the_operations_with_a_pre_existing_refusal_keep_it() {
     for (code, phrase, snippet) in [
         ("T0021", "operator Add is not defined", "x = numpy.pi + 1\n"),
-        (
-            "T0021",
-            "cannot compare",
-            "if numpy.pi < 1:\n    print(1)\n",
-        ),
         (
             "T0021",
             "unary operator USub is not defined",

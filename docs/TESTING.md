@@ -896,7 +896,7 @@ whole past the first layer, so this list is a **lower bound**.
 | function-local bindings of objects (`state_stack = self.state_stack`, 68-72) | `I0404` | #1333 / #1362 |
 | `action, arg = states[state][token.type]` (77) | `C0001` tuple target | #891 |
 | `{s for s in states[state].keys() if s.isupper()}` (79) | `C0001` comprehension iterable | #1255 |
-| `raise UnexpectedToken(token, expected, state=self, ...)` (80); `is`/`==`/`!=` on objects (82, 84, 104, 108); `value_stack[-size:]` (95); `del ...[-size:]` (96-97); `callbacks[...](...)` (88, 101, misdiagnosed as a generic-class argument) | `T0021` / `C0001` / `T0033` | [#1371](https://github.com/rotnov/pycc/issues/1371) |
+| `raise UnexpectedToken(token, expected, state=self, ...)` (80); `value_stack[-size:]` (95); `del ...[-size:]` (96-97); `callbacks[...](...)` (88, 101, misdiagnosed as a generic-class argument); `isinstance(other, ParserState)` (52); `is_end and state_stack[-1] == end_state` (108) | `T0021` / `C0001` / `T0033`; `I0404` for line 52 (`isinstance` against a pycc class, which has no CPython type object) and line 108 (an object as an `and` operand) | [#1371](https://github.com/rotnov/pycc/issues/1371). Part 1 cleared the comparisons themselves: `assert arg != end_state` (82), `action is Shift` (84), `assert _action is Shift` (104) and the `==` of line 108 compile and match CPython in a probe with function-local objects, as does `isinstance` against `int`/`float`/`bool`/`str` or a foreign class |
 | `.append` on an object stack (87, 88, 105, 106) | `I0404` | #1095 |
 
 Fourteen rows are listed. #1366 has cleared the relative-import row,

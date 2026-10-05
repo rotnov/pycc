@@ -283,7 +283,7 @@ pub(crate) fn infer_expr_in(
         HirExpr::Compare { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;
-            crate::compare_chain::compare_link_ty(env, *op, left, &left_ty, &right_ty)
+            crate::compare_chain::compare_link_ty(env, *op, left, right, &left_ty, &right_ty)
         }
         HirExpr::CompareChain { first, links } => {
             crate::compare_chain::infer_compare_chain(env, local_names, first, links)

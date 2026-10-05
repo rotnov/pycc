@@ -253,6 +253,32 @@ pub const EXT_OBJ_TRUTHY_SYMBOL: &str = "pycc_ext_obj_truthy";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_GETITEM_SYMBOL: &str = "pycc_ext_obj_getitem";
 
+/// The fixed C shim's rich-comparison helper (Part 1 of #1371): it takes two
+/// `PyObject *` operands, CPython's `Py_LT`..`Py_GE` selector and an
+/// ownership mask (bit 0 the left operand, bit 1 the right) naming which
+/// operands a `pycc_ext_obj_pack_*` helper produced, and returns a *new*
+/// reference to `PyObject_RichCompare(l, r, op)`, or `NULL` with the
+/// CPython exception already set. It consumes every packed operand on
+/// every path, for the reason [`EXT_OBJ_GETITEM_SYMBOL`] records.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_RICHCOMPARE_SYMBOL: &str = "pycc_ext_obj_richcompare";
+
+/// The fixed C shim's `None` accessor (Part 1 of #1371): a *borrowed*
+/// pointer to CPython's immortal `None`, the right-hand side of `o is None`.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_NONE_SYMBOL: &str = "pycc_ext_obj_none";
+
+/// The fixed C shim's `isinstance` helper (Part 1 of #1371): it takes a
+/// borrowed object, a borrowed class (or `NULL`, which selects a builtin
+/// class by the third argument, `pycc_mir::ObjBuiltinClass::shim_code`) and
+/// returns `PyObject_IsInstance`'s `1`/`0`, or `-1` with the CPython
+/// exception already set.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_ISINSTANCE_SYMBOL: &str = "pycc_ext_obj_isinstance";
+
 /// The fixed C shim's iterator-acquisition helper (Part 3 of #1026, PR 3c
 /// of #1082): it takes a borrowed `PyObject *` and returns a *new*
 /// reference to `iter(o)` -- `PyObject_GetIter` -- or `NULL` with the

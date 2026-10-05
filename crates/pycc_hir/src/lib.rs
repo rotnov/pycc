@@ -284,11 +284,11 @@ pub enum CmpOpKind {
     /// `is` (D-197, #763, Part 1 of #747). This compiler's first `is`/`is
     /// not` support of any kind -- deliberately scoped at HIR-lowering to
     /// exactly the case #763 needs: one operand is syntactically
-    /// `Expr::NoneLiteral`, the other anything. General object-identity
-    /// `is`/`is not` between two arbitrary non-`None` operands still falls
-    /// through to the pre-existing `C0001` "comparison operator not
-    /// supported yet" rejection unchanged -- see
-    /// `crates/pycc_hir/src/expr.rs`'s `Expr::Compare` arm.
+    /// `Expr::NoneLiteral`, the other anything. Since Part 1 of #1371 a
+    /// single comparison between two non-literal operands lowers too, and
+    /// `pycc_types` admits it only between two CPython objects; every other
+    /// pair keeps the `C0001` "comparison operator not supported yet"
+    /// rejection (see `crate::compare_chain::lower_cmp_op`).
     Is,
     /// `is not`. Same scoping as `Is` above.
     IsNot,
@@ -1104,13 +1104,10 @@ pub enum NoneTestPolarity {
 /// depend on `pycc_types` (see `crates/pycc_mir/Cargo.toml`), so this
 /// recognizer lives here in `pycc_hir`, which both already depend on.
 ///
-/// HIR lowering (`crates/pycc_hir/src/expr.rs`'s `Expr::Compare` arm,
-/// D-197) already guarantees that whenever `op` is `Is`/`IsNot`, exactly
-/// one operand is syntactically `HirExpr::NoneLiteral` -- every other
-/// `is`/`is not` shape is rejected at HIR-lowering time with `C0001` and
-/// never reaches this function at all. This function re-derives which side
-/// is which rather than assuming an operand order, so it stays correct
-/// regardless of that lowering invariant.
+/// Since Part 1 of #1371 an `Is`/`IsNot` node need not have a `None`
+/// operand (identity between two CPython objects), so this function
+/// re-derives which side is which, and answers `None` for any other shape,
+/// rather than assuming an operand order or a `None` side.
 pub fn optional_none_test(test: &HirExpr) -> Option<(&str, NoneTestPolarity)> {
     let HirExpr::Compare { op, left, right } = test else {
         return None;

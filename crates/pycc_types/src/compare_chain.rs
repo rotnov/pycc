@@ -12,33 +12,34 @@ use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{CmpOpKind as CmpOp, CompareLink, HirExpr, Ty};
 
 /// Types one comparison link `left op right` whose operand types are
-/// already inferred. The `is`/`is not` arm needs the left operand
-/// expression, not only its type, because it keys on whether that side is
-/// the `None` literal.
+/// already inferred. The `is`/`is not` arm needs both operand expressions,
+/// not only their types, because it keys on whether either side is the
+/// `None` literal.
 pub(crate) fn compare_link_ty(
     env: &Environment,
     op: CmpOp,
     left: &HirExpr,
+    right: &HirExpr,
     left_ty: &Ty,
     right_ty: &Ty,
 ) -> Result<Ty, Diagnostic> {
-    // `is`/`is not` (D-197, #763, Part 1 of #747): HIR lowering
-    // (`pycc_hir::compare_chain::lower_cmp_op`) already
-    // guarantees one operand is syntactically `HirExpr::NoneLiteral`
-    // whenever `op` is `Is`/`IsNot` -- this is the type-level half
-    // of that scoping: the *other* operand's static type must be
-    // `Ty::Optional(_)` or `Ty::None` itself. Every other `is`/`is
-    // not` shape never reaches this arm at all (still `C0001` at
-    // HIR-lowering), so this deliberately does not implement
-    // general object-identity comparison.
+    // `is`/`is not` (D-197, #763, Part 1 of #747): with a `None` literal
+    // operand, the *other* operand's static type must be `Ty::Optional(_)`,
+    // `Ty::None` itself, or (Part 1 of #1371) a CPython object, whose
+    // `None` test is pointer identity against `Py_None`. Without a `None`
+    // literal operand, HIR lowering (`pycc_hir::compare_chain::lower_cmp_op`)
+    // admits a single comparison between two non-literal operands, and
+    // `foreign::compare::general_identity_ty` admits only two objects.
     if matches!(op, CmpOp::Is | CmpOp::IsNot) {
         let other_ty = if matches!(left, HirExpr::NoneLiteral) {
-            &right_ty
+            right_ty
+        } else if matches!(right, HirExpr::NoneLiteral) {
+            left_ty
         } else {
-            &left_ty
+            return crate::foreign::compare::general_identity_ty(op, left_ty, right_ty);
         };
         return match other_ty {
-            Ty::Optional(_) | Ty::None => Ok(Ty::Bool),
+            Ty::Optional(_) | Ty::None | Ty::Object => Ok(Ty::Bool),
             other => Err(Diagnostic::error(
                 "T0021",
                 format!(
@@ -48,6 +49,11 @@ pub(crate) fn compare_link_ty(
                 Span::new(0, 0),
             )),
         };
+    }
+    // Part 1 of #1371: a rich comparison with a CPython object operand is
+    // CPython's own `PyObject_RichCompare`, whose result is an object.
+    if let Some(result) = crate::foreign::compare::rich_compare_ty(left_ty, right_ty) {
+        return result;
     }
     // #378 (PR-18): `==`/`!=` between same-class dataclass instances
     // is accepted -- the compiler-synthesized `__eq__` method has a
@@ -96,10 +102,12 @@ pub(crate) fn infer_compare_chain(
     for link in links {
         operands.push((&link.right, infer_expr_in(env, local_names, &link.right)?));
     }
+    let operand_tys: Vec<Ty> = operands.iter().map(|(_, ty)| ty.clone()).collect();
+    crate::foreign::compare::reject_object_in_chain(&operand_tys)?;
     for (index, link) in links.iter().enumerate() {
         let (left, left_ty) = &operands[index];
-        let (_, right_ty) = &operands[index + 1];
-        compare_link_ty(env, link.op, left, left_ty, right_ty)?;
+        let (right, right_ty) = &operands[index + 1];
+        compare_link_ty(env, link.op, left, right, left_ty, right_ty)?;
     }
     Ok(Ty::Bool)
 }

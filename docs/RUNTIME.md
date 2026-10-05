@@ -1364,6 +1364,28 @@ to owns that reference from then on. Codegen consequently emits no release of
 its own around a subscript load, and a failed packer's `NULL` is safe to pass
 straight through.
 
+**A rich comparison is one more producer; identity and `isinstance` are not.**
+Part 1 of [#1371](https://github.com/rotnov/pycc/issues/1371) adds
+`pycc_ext_obj_richcompare(l, r, op, owned)`, which wraps
+`PyObject_RichCompare` and returns its new reference unreleased, so `o == 1`
+or `o < p` leaks one reference per evaluation on the same terms as an
+attribute load. An `object` operand is borrowed; a scalar operand is packed by
+the same four packers and the `owned` bit mask tells the helper which slots it
+received a new reference for, and the helper **consumes those on every
+path**, including the one where a packer already failed with `NULL` -- the
+key slot's rule once more. A `NULL` result routes to the operation's failure
+edge (the module-exec `-1` in a module body, the bridged pycc exception in a
+function body), so a raising `__eq__` or `__lt__` surfaces CPython's own
+exception. An identity test (`is`, `is not`) is a plain pointer comparison in
+compiled code with no failure edge; a `None` operand adds only the
+infallible `pycc_ext_obj_none` call, which returns the borrowed `Py_None`, so
+it creates no reference either. `pycc_ext_obj_isinstance(o, cls, builtin)` wraps `PyObject_IsInstance`
+and answers a C `int` (`-1` on failure); it borrows both operands, and when
+`cls` is `NULL` the `builtin` selector (`0`..`3` for `int`, `str`, `float`,
+`bool`) names CPython's own static type object instead, so it adds nothing to
+the leaked set either. An out-of-range selector or a `NULL` operand raises
+`SystemError` rather than reading undefined memory.
+
 `len`, a truth test, Part 4's four conversions and Part 4's tuple unpack are
 the operations that add nothing to that leaked set. `pycc_ext_obj_len` answers a `Py_ssize_t` and
 `pycc_ext_obj_truthy` answers a C `int`; neither creates a reference and neither

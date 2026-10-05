@@ -786,7 +786,13 @@ pub(crate) fn lower_expr(
             lower_compare_chain(cmp, in_function, class_name, imports, signatures)?
         }
         Expr::Compare(cmp) => {
-            let op = lower_cmp_op(cmp.ops[0], &cmp.left, &cmp.comparators[0], cmp.range.into())?;
+            let op = lower_cmp_op(
+                cmp.ops[0],
+                &cmp.left,
+                &cmp.comparators[0],
+                cmp.range.into(),
+                true,
+            )?;
             HirExpr::Compare {
                 op,
                 left: Box::new(lower_expr(

@@ -1867,6 +1867,86 @@ PyObject *pycc_ext_obj_getitem(PyObject *o, PyObject *k)
 }
 
 /*
+ * Part 1 of #1371: `l op r` where at least one operand is a CPython object
+ * (`EXT_OBJ_RICHCOMPARE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `op` is CPython's own rich-comparison selector (`Py_LT` .. `Py_GE`), and
+ * the call is `PyObject_RichCompare`, never `PyObject_RichCompareBool`: the
+ * latter short-circuits on identity, so `n == n` would answer `True` for a
+ * NaN `n` where CPython's `==` answers `False`, and it would collapse a
+ * non-`bool` result (an array, say) to its truth value.
+ *
+ * `owned` says which operands were produced by a `pycc_ext_obj_pack_*`
+ * helper (bit 0 the left, bit 1 the right): those are consumed on every
+ * path, including a `NULL` one, exactly as `pycc_ext_obj_getitem` consumes
+ * its packed key, so a failed packer needs no failure edge of its own.
+ * Every other operand is borrowed. The result is a *new* reference that is
+ * deliberately never released, on the leak-only rule `docs/RUNTIME.md`
+ * records for the rest of this boundary, or `NULL` with the exception set.
+ */
+PyObject *pycc_ext_obj_richcompare(PyObject *l, PyObject *r, int op, int owned)
+{
+    PyObject *result;
+
+    result = (l == NULL || r == NULL) ? NULL : PyObject_RichCompare(l, r, op);
+    if (owned & 1) {
+        Py_XDECREF(l);
+    }
+    if (owned & 2) {
+        Py_XDECREF(r);
+    }
+    return result;
+}
+
+/*
+ * Part 1 of #1371: a *borrowed* pointer to CPython's `None` singleton, the
+ * operand compiled code compares an object against for `o is None`
+ * (`EXT_OBJ_NONE_SYMBOL`). `None` is immortal, so the borrow never dangles.
+ */
+PyObject *pycc_ext_obj_none(void)
+{
+    return Py_None;
+}
+
+/*
+ * Part 1 of #1371: `isinstance(o, cls)` with an object `o`
+ * (`EXT_OBJ_ISINSTANCE_SYMBOL`). Both operands are borrowed. A `NULL`
+ * `cls` selects a builtin class by `builtin`: 0 `int`, 1 `str`, 2 `float`,
+ * 3 `bool` (`pycc_mir::ObjBuiltinClass::shim_code`). Returns 1, 0, or -1
+ * with the exception set (`PyObject_IsInstance` raises `TypeError` for a
+ * `cls` that is not a class, and propagates a raising
+ * `__instancecheck__`).
+ */
+int pycc_ext_obj_isinstance(PyObject *o, PyObject *cls, int builtin)
+{
+    if (cls == NULL) {
+        switch (builtin) {
+        case 0:
+            cls = (PyObject *)&PyLong_Type;
+            break;
+        case 1:
+            cls = (PyObject *)&PyUnicode_Type;
+            break;
+        case 2:
+            cls = (PyObject *)&PyFloat_Type;
+            break;
+        case 3:
+            cls = (PyObject *)&PyBool_Type;
+            break;
+        default:
+            PyErr_SetString(PyExc_SystemError,
+                            "pycc_ext_obj_isinstance: unrecognized builtin class selector");
+            return -1;
+        }
+    }
+    if (o == NULL) {
+        PyErr_SetString(PyExc_SystemError, "pycc_ext_obj_isinstance: NULL operand");
+        return -1;
+    }
+    return PyObject_IsInstance(o, cls);
+}
+
+/*
  * Part 3 of #1026 (PR 3c of #1082): `iter(o)` for a `for x in <object>:`
  * loop (`EXT_OBJ_GET_ITER_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *

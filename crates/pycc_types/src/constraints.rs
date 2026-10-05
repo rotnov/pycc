@@ -956,9 +956,19 @@ pub(crate) fn collect_expr_constraints(
             }
             Ok(Some(Ok(Ty::Str)))
         }
-        HirExpr::Compare { left, right, .. } => {
-            collect_expr_constraints(signatures, parents, concrete, deferred, env, left)?;
-            collect_expr_constraints(signatures, parents, concrete, deferred, env, right)?;
+        HirExpr::Compare { op, left, right } => {
+            let left_ty =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, left)?;
+            let right_ty =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, right)?;
+            // Part 1 of #1371: a rich comparison with a CPython object
+            // operand is an object, mirroring `compare_link_ty`.
+            let is_object = |ty: &Option<Result<Ty, usize>>| matches!(ty, Some(Ok(Ty::Object)));
+            if !matches!(op, pycc_hir::CmpOpKind::Is | pycc_hir::CmpOpKind::IsNot)
+                && (is_object(&left_ty) || is_object(&right_ty))
+            {
+                return Ok(Some(Ok(Ty::Object)));
+            }
             Ok(Some(Ok(Ty::Bool)))
         }
         // #1212: a chained comparison mirrors `Compare` -- every operand is
