@@ -1168,9 +1168,10 @@ This is the canonical statement of the rule; other documents cross-reference
 it ([#1244](https://github.com/rotnov/pycc/issues/1244), Part 1 of
 [#1216](https://github.com/rotnov/pycc/issues/1216)). `del a, (b, [c])`
 deletes `a`, `b` and `c`, left to right, and `del ()` deletes nothing, as in
-CPython. HIR expands the statement into one `HirStmt::Delete` per name
+CPython. HIR expands the statement into one `HirStmt::Delete` per name and,
+since Part 2c of #1371, one `HirStmt::DeleteSlice` per slice target
 (`crates/pycc_hir/src/stmt/del.rs`). Under D-124's leak-only model, MIR lowers
-each one to a no-op: nothing is released, and the checker alone guarantees
+each name deletion to a no-op: nothing is released, and the checker alone guarantees
 that no read follows the deletion.
 
 **Binding state.** A `del x` needs `x` to be `Definitely` bound. A `Maybe`
@@ -1201,9 +1202,10 @@ before the body is checked (`narrow::apply_delete_prescan`):
 - a target that is not a bare name: an attribute (`del o.a`), a subscript
   (`del d[k]`, `del xs[i]`, tracked in
   [#1245](https://github.com/rotnov/pycc/issues/1245) and
-  [#1246](https://github.com/rotnov/pycc/issues/1246)), or a slice of any
-  base but a CPython object (see below). Unlike the rest of this list, the
-  slice refusal is located at the slice target;
+  [#1246](https://github.com/rotnov/pycc/issues/1246)), or a slice of a
+  base that infers to anything but a CPython object (see below; a base that
+  does not infer at all keeps its own diagnostic). Unlike the rest of this
+  list, the slice refusal is located at the slice target;
 - `del __name__`, and a `del` in a class body;
 - a `del` of a method's receiver (`self`, a renamed receiver, or `cls`),
   because the zero-argument `super()` reads the receiver slot. A

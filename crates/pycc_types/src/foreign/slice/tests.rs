@@ -78,7 +78,9 @@ fn a_native_base_keeps_its_t0033() {
 /// bound shape, in a module body and in a function body, including inside
 /// an unannotated helper (the constraint solver's arm, which must also
 /// walk the operands so a helper called from one is inferred) and a
-/// generic function (the monomorphizer's rewrite).
+/// generic function (the monomorphizer's rewrite), and with a generic
+/// function call or generic class instantiation in a bound (the
+/// monomorphizer's call rewrite and class-instantiation collector).
 #[test]
 fn an_object_slice_delete_is_admitted() {
     for source in [
@@ -95,6 +97,17 @@ fn an_object_slice_delete_is_admitted() {
         "def _f(x):\n    return x\n\n\ndel numpy.pi[_f(1):_f(2):_f(1)]\n",
         "def _f(x):\n    return x\n\n\ndel _f(numpy.pi)[1:]\n",
         "def _h(n):\n    del numpy.pi[n:]\n\n\n_h(1)\n",
+        "def g[T](x: T) -> T:\n    return x\n\n\ndel numpy.pi[g(1):g(2):g(1)]\n",
+        "def g[T](x: T) -> T:\n    return x\n\n\ndef f() -> None:\n    del numpy.pi[g(1):]\n",
+        "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\n\
+         class C:\n    def __init__(self) -> None:\n        self.x = 0\n    \
+         def foo(self) -> int:\n        return 1\n\
+         def proto_fn(p: P) -> int:\n    return p.foo()\n\
+         def caller() -> None:\n    del numpy.pi[proto_fn(c):proto_fn(c):proto_fn(c)]\n\
+         c = C()\ndel numpy.pi[proto_fn(c):]\ncaller()\n",
+        "class Box[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\n\n    \
+         def size(self) -> int:\n        return 1\n\n\n\
+         del numpy.pi[Box(1).size():Box(2).size():Box(1).size()]\n",
         "def g[T](x: T) -> T:\n    del numpy.pi[1:]\n    return x\n\n\nn = g(1)\n",
     ] {
         if let Err(diagnostics) = check_foreign(source) {
@@ -130,5 +143,44 @@ fn a_native_or_unpackable_slice_delete_is_refused() {
         "del numpy.pi[:None]\n",
         "I0404",
         "slicing a CPython object with a `None` bound",
+    );
+}
+
+/// An operand the constraint solver rejects inside an unannotated helper
+/// surfaces that rejection: the solver's `DeleteSlice` arm propagates it.
+#[test]
+fn a_solver_error_in_a_slice_delete_operand_is_reported() {
+    let source = "def _h():\n    del numpy.pi[1 + \"a\":]\n\n\n_h()\n";
+    let diagnostics = check_foreign(source).expect_err(source);
+    assert!(
+        diagnostics.iter().any(|d| d.code.starts_with('T')),
+        "{diagnostics:?}"
+    );
+}
+
+/// A call of a protocol-parameter function in a slice `del` operand is
+/// rewritten to its specialization: monomorphization drops the original
+/// `proto_fn` item, so an unrewritten call would dangle.
+#[test]
+fn a_protocol_call_in_a_slice_delete_operand_is_specialized() {
+    let source = "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\n\
+                  class C:\n    def __init__(self) -> None:\n        self.x = 0\n    \
+                  def foo(self) -> int:\n        return 1\n\
+                  def proto_fn(p: P) -> int:\n    return p.foo()\n\
+                  def caller() -> None:\n    del xs[proto_fn(c):proto_fn(c):proto_fn(c)]\n\
+                  xs = [1, 2]\nc = C()\ndel xs[proto_fn(c):]\ncaller()\n";
+    // The rewrite is type-blind and runs before the slice `del` base check,
+    // so a native base exercises it without seeding a foreign import.
+    let hir =
+        pycc_hir::lower_checked(&pycc_parser::parse(source).expect("parses")).expect("lowers");
+    let rewritten = format!(
+        "{:?}",
+        crate::monomorphize::monomorphize(&hir)
+            .expect("monomorphizes")
+            .items
+    );
+    assert!(
+        !rewritten.contains("callee: \"proto_fn\""),
+        "a dangling `proto_fn` call survived: {rewritten}"
     );
 }

@@ -2576,6 +2576,27 @@ fn rewrite_protocol_calls_in_stmt(
                 seen,
             );
         }
+        // Part 2c of #1371: a slice `del` reads its base and bounds; an
+        // unrewritten protocol call there would dangle once the original
+        // function item is dropped.
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            for operand in std::iter::once(base).chain([start, stop, step].into_iter().flatten()) {
+                rewrite_protocol_calls_in_expr(
+                    operand,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
+            }
+        }
         // #1254: the loop variable is bound in a scoped clone of `env`
         // before `cond` and the elements are walked, so a protocol call
         // whose argument reads it resolves; before, `infer_expr_in` failed

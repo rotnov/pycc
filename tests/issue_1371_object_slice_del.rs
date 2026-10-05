@@ -9,7 +9,7 @@
 //! with `cargo test --workspace -- --include-ignored`. The changed lines are
 //! covered by the unit tests in `crates/pycc_hir/src/stmt/del/tests.rs`,
 //! `crates/pycc_types/src/foreign/slice/tests.rs`,
-//! `crates/pycc_mir/src/tests.rs` and
+//! `crates/pycc_mir/src/obj_compare/tests.rs` and
 //! `crates/pycc_codegen/src/tests/object_membership_slice.rs`.
 
 use pycc_scratch::ScratchDir;
