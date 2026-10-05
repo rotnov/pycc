@@ -259,3 +259,46 @@ fn a_walrus_in_a_chain_operand_is_killed_for_module_constant_folding() {
         );
     }
 }
+
+/// Part 1 of #1371: a single `is`/`is not` between two non-literal operands
+/// lowers, because either may be a CPython object (`pycc_types` decides),
+/// while `optional_none_test` still recognizes only a `None` side.
+#[test]
+fn a_single_general_identity_between_non_literals_lowers() {
+    for (source_op, op) in [("is", CmpOpKind::Is), ("is not", CmpOpKind::IsNot)] {
+        let value = returned(&format!(
+            "def f(a: int, b: int) -> bool:\n    return a {source_op} b\n"
+        ));
+        assert_eq!(
+            value,
+            HirExpr::Compare {
+                op,
+                left: Box::new(name("a")),
+                right: Box::new(name("b")),
+            }
+        );
+        assert_eq!(optional_none_test(&value), None);
+    }
+}
+
+/// A literal operand is never a CPython object, so it keeps the located
+/// HIR rejection on either side, for every literal kind.
+#[test]
+fn a_single_identity_with_a_literal_operand_keeps_its_c0001() {
+    for operand in ["1", "1.5", "'s'", "b's'", "True", "..."] {
+        for source in [
+            format!("def f(a: int) -> bool:\n    return a is {operand}\n"),
+            format!("def f(a: int) -> bool:\n    return {operand} is not a\n"),
+        ] {
+            let error = lowering_error(&source);
+            assert_eq!(error.code, "C0001", "{source}");
+            assert!(
+                error
+                    .message
+                    .contains("comparison operator not supported yet: Is"),
+                "{source}: {}",
+                error.message
+            );
+        }
+    }
+}

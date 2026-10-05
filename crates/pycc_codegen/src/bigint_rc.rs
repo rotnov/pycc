@@ -639,7 +639,12 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         | MirExpr::FrozenSetFrom { .. }
         // #1335: `hash(instance)` *is* `Ty::Int`, and owning: its word is
         // born by `pycc_rt_int_from_i64`, exactly like `hash(x)`'s `Call`.
-        | MirExpr::InstanceHash { .. } => false,
+        | MirExpr::InstanceHash { .. }
+        // Part 1 of #1371: an object comparison's `.ty()` is `Ty::Object`
+        // or `Ty::Bool`, and `isinstance`'s is `Ty::Bool` -- never
+        // `Ty::Int` -- so neither can reach this function.
+        | MirExpr::ObjCompare { .. }
+        | MirExpr::ObjIsInstance { .. } => false,
     }
 }
 

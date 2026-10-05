@@ -38,6 +38,7 @@ mod object_binding;
 
 // Part 1 of #1333: passing a CPython object to a pycc function.
 mod object_argument;
+mod object_compare;
 
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s

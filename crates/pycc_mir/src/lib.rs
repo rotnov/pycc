@@ -25,6 +25,8 @@ mod item_names;
 #[cfg(test)]
 use item_names::resolve_method_owner_class;
 use item_names::{item_anchor_class, source_frame_name};
+mod obj_compare;
+pub use obj_compare::{ObjBuiltinClass, ObjIsInstanceClass};
 mod receiver_exact;
 mod set_ops;
 pub use set_ops::{SetElementOps, SetEqOp, SetHashOp};
@@ -512,6 +514,32 @@ pub enum MirExpr {
         base: Box<MirExpr>,
         index: Box<MirExpr>,
     },
+    /// `left op right` where at least one operand is a CPython object
+    /// (Part 1 of #1371; `pycc_types::foreign::compare` owns the admitted
+    /// shapes).
+    ///
+    /// `is`/`is not` is pointer identity: it cannot fail and answers
+    /// [`Ty::Bool`]. An operand of an identity test may be
+    /// [`MirExpr::NoneLiteral`], which codegen materializes as CPython's
+    /// `None` singleton. Every other operator is CPython's
+    /// `PyObject_RichCompare`, whose result is an arbitrary object --
+    /// [`MirExpr::ty`] answers [`Ty::Object`] -- and which can raise, so
+    /// `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for it. A scalar operand is boxed through the
+    /// `pycc_ext_obj_pack_*` helpers.
+    ObjCompare {
+        op: pycc_hir::CmpOpKind,
+        left: Box<MirExpr>,
+        right: Box<MirExpr>,
+    },
+    /// `isinstance(value, class)` where `value` is a CPython object (Part 1
+    /// of #1371): a run-time `PyObject_IsInstance`, which can raise (a
+    /// class argument that is not a class, or a raising
+    /// `__instancecheck__`). [`MirExpr::ty`] answers [`Ty::Bool`].
+    ObjIsInstance {
+        value: Box<MirExpr>,
+        class: ObjIsInstanceClass,
+    },
     /// `b[i]` where `b` is a `pycc build --ext` export's `memoryview`
     /// parameter (Part 2 of #1027): a bounds-checked native `float` element
     /// load out of the borrowed buffer.
@@ -941,6 +969,17 @@ impl MirExpr {
             // opaque by construction, exactly as `ObjMethodCall`'s is. See
             // the variant's own documentation.
             MirExpr::ObjSubscript { .. } => Ty::Object,
+            // Part 1 of #1371: identity is a pointer compare; a rich
+            // comparison answers CPython's own result object. See the
+            // variant's own documentation.
+            MirExpr::ObjCompare { op, .. } => {
+                if matches!(op, pycc_hir::CmpOpKind::Is | pycc_hir::CmpOpKind::IsNot) {
+                    Ty::Bool
+                } else {
+                    Ty::Object
+                }
+            }
+            MirExpr::ObjIsInstance { .. } => Ty::Bool,
             // Hardcoded for `ObjLen`'s reason, not `ObjSubscript`'s: the
             // element type is known, it is just not recoverable from the
             // base. A `memoryview` parameter is one-dimensional and `"d"`-
@@ -1160,6 +1199,16 @@ impl MirExpr {
             MirExpr::ObjSubscript { base, index } | MirExpr::BufferGet { base, index } => {
                 base.collect_named_expr_bindings(out);
                 index.collect_named_expr_bindings(out);
+            }
+            MirExpr::ObjCompare { left, right, .. } => {
+                left.collect_named_expr_bindings(out);
+                right.collect_named_expr_bindings(out);
+            }
+            MirExpr::ObjIsInstance { value, class } => {
+                value.collect_named_expr_bindings(out);
+                if let ObjIsInstanceClass::Object(class) = class {
+                    class.collect_named_expr_bindings(out);
+                }
             }
             MirExpr::ExceptionMessage(inner)
             | MirExpr::ExceptionTypeTest { obj: inner, .. }

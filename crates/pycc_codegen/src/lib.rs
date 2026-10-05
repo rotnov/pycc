@@ -52,6 +52,7 @@ mod ext;
 mod ext_thunk;
 mod foreign_attr;
 mod foreign_call;
+mod foreign_compare;
 mod foreign_fail;
 mod foreign_import;
 mod foreign_len;
@@ -97,9 +98,10 @@ use ext::{
     EXT_NAME_ERROR_SYMBOL, EXT_OBJ_CALL_BORROWED_SYMBOL, EXT_OBJ_CALL_SYMBOL,
     EXT_OBJ_ERROR_BRIDGE_SYMBOL, EXT_OBJ_FORMAT_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL,
     EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
-    EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
-    EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL,
-    EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
+    EXT_OBJ_ISINSTANCE_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_NONE_SYMBOL,
+    EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL,
+    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL, EXT_OBJ_TO_FLOAT_SYMBOL,
+    EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
     EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
@@ -3778,6 +3780,51 @@ fn emit_expr_unchecked<'ctx>(
             let index_scalar =
                 emit_expr(context, builder, module, rt, user_functions, locals, index);
             foreign_call::emit_subscript(context, builder, module, rt, base_scalar, index_scalar)
+        }
+        // Part 1 of #1371: a comparison or identity test with a CPython
+        // object operand. Left, then right -- CPython's own order -- with
+        // the `Compare` arm's #638 protection of an `int` temporary across
+        // the right operand's evaluation; a `None` literal operand of an
+        // identity test is not evaluated at all (`foreign_compare` names
+        // CPython's `None` instead). `foreign_compare` carries the rest.
+        MirExpr::ObjCompare { op, left, right } => {
+            let operand = |expr: &MirExpr| {
+                (!matches!(expr, MirExpr::NoneLiteral))
+                    .then(|| emit_expr(context, builder, module, rt, user_functions, locals, expr))
+            };
+            let l = operand(left);
+            let pending_l =
+                l.and_then(|l| push_pending_int_release_if_scalar_temporary(rt, left, &l));
+            let r = operand(right);
+            pop_pending_int_release(rt, pending_l);
+            let result = foreign_compare::emit_compare(context, builder, module, rt, *op, l, r);
+            for (expr, scalar) in [(left, l), (right, r)] {
+                if let Some(scalar) = scalar {
+                    release_scalar_if_int_temporary(context, builder, rt, expr, &scalar);
+                }
+            }
+            result
+        }
+        MirExpr::ObjIsInstance { value, class } => {
+            let value_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, value);
+            let class = match class {
+                pycc_mir::ObjIsInstanceClass::Object(class) => {
+                    foreign_compare::IsInstanceClass::Object(emit_expr(
+                        context,
+                        builder,
+                        module,
+                        rt,
+                        user_functions,
+                        locals,
+                        class,
+                    ))
+                }
+                pycc_mir::ObjIsInstanceClass::Builtin(builtin) => {
+                    foreign_compare::IsInstanceClass::Builtin(builtin.shim_code())
+                }
+            };
+            foreign_compare::emit_isinstance(context, builder, module, rt, value_scalar, class)
         }
         // Part 2 of #1027: `b[i]` on a `pycc build --ext` export's
         // `memoryview` parameter. Base then index, CPython's own order and

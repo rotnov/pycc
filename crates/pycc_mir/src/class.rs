@@ -243,6 +243,17 @@ pub(super) fn lower_isinstance(
     // name or tuple of class names.
     let obj = lower_expr(&args[0], scopes, classes, current_class);
     let obj_ty = obj.ty();
+    // Part 1 of #1371: a CPython object is tested at run time; the fold
+    // below reads only the static type and would answer `False`.
+    if obj_ty == Ty::Object {
+        return super::obj_compare::lower_object_isinstance(
+            obj,
+            &args[1],
+            scopes,
+            classes,
+            current_class,
+        );
+    }
     // Extract class names from the second argument.
     let class_names = extract_class_names(&args[1]).expect(
         "pycc_mir: internal error: isinstance's second argument was not validated by pycc_types",
