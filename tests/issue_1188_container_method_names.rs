@@ -1061,11 +1061,13 @@ print(x.%append%(4))
     );
 }
 
-/// A foreign CPython object stays on the container reading, so its
-/// diagnostic is the one it has with the gate off (#1095 owns routing these
-/// names to foreign dispatch).
+/// A foreign CPython object takes the method reading (#1095): the foreign
+/// import turns the receiver dispatch on by itself, so `gc.get(1, 2)` is
+/// the foreign method call whether or not a user class defines `get`.
+/// `tests/issue_1095_object_container_methods.rs` runs these names against
+/// CPython.
 #[test]
-fn a_foreign_object_receiver_keeps_its_diagnostic() {
+fn a_foreign_object_receiver_takes_the_method_reading() {
     let foreign = "import gc\nprint(gc.get(1, 2))\n";
     let gate_off = write_project("1188_foreign_off", &single(foreign), false);
     let gate_on = write_project(
@@ -1077,11 +1079,8 @@ fn a_foreign_object_receiver_keeps_its_diagnostic() {
     );
     let off = pycc_in(&gate_off, "check");
     let on = pycc_in(&gate_on, "check");
-    assert_ne!(off.code, 0);
-    assert_ne!(on.code, 0);
-    assert!(off.both().contains("error[I0404]"), "{}", off.both());
-    let first_line = |outcome: &Outcome| outcome.both().lines().next().map(str::to_string);
-    assert_eq!(first_line(&on), first_line(&off));
+    assert_eq!(off.code, 0, "{}", off.both());
+    assert_eq!(on.code, 0, "{}", on.both());
 }
 
 // -- `--ext` -------------------------------------------------------------------

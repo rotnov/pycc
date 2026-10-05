@@ -927,6 +927,15 @@ fn lower_top_level_item<'a>(
         ));
     }
     let imports_before_block = state.imports.len();
+    // Issue #1095: a foreign import nested in a module-level block binds an
+    // object receiver just as a top-level one does.
+    if block_imports
+        .bindings
+        .iter()
+        .any(|binding| matches!(binding, ImportBinding::Foreign { .. }))
+    {
+        state.signatures.admit_object_receivers();
+    }
     state.imports.extend(block_imports.bindings.iter().cloned());
     // #1213: a chained assignment expands into several statements, all
     // lowered before any is recorded, so an `Err` still records nothing.

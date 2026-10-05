@@ -131,3 +131,16 @@ fn a_native_module_without_a_foreign_import_is_unchanged() {
     );
     assert!(matches!(exprs[3], HirExpr::SetAdd { .. }), "{exprs:?}");
 }
+
+#[test]
+fn a_foreign_import_inside_a_module_level_block_turns_the_gate_on() {
+    let module = lower(
+        "try:\n    import gc\nexcept ImportError:\n    pass\ngc.get(1)\n",
+        false,
+    );
+    let exprs = top_level_exprs(&module);
+    assert!(matches!(
+        dispatched(exprs[0], "get"),
+        ContainerFallback::Refused(_)
+    ));
+}
