@@ -124,7 +124,13 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // argument that is not a class, and propagates a raising
         // `__instancecheck__`; `foreign_compare::emit_isinstance` owns the
         // `-1` check.
-        | MirExpr::ObjIsInstance { .. } => true,
+        | MirExpr::ObjIsInstance { .. }
+        // Part 2b of #1371: `PySequence_Contains` runs `__contains__` (or
+        // iteration), and `PyObject_GetItem` on a slice runs `__getitem__`;
+        // either may raise. `foreign_compare::emit_contains` owns the `-1`
+        // check and `foreign_call::emit_slice` the `NULL` check.
+        | MirExpr::ObjContains { .. }
+        | MirExpr::ObjSlice { .. } => true,
         // Part 1 of #1371: a rich comparison runs the operands' own
         // `__eq__`/`__lt__`/..., which may raise, and
         // `foreign_compare::emit_compare` owns the `NULL` check; an

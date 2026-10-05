@@ -541,6 +541,39 @@ pub enum MirExpr {
         left: Box<MirExpr>,
         right: Box<MirExpr>,
     },
+    /// `item in container` (`negate: false`) or `item not in container`
+    /// (`negate: true`) where `container` is a CPython object (Part 2b of
+    /// #1371; `pycc_types::foreign::compare::membership_ty` owns the
+    /// admitted shapes). CPython's `PySequence_Contains` -- which tries
+    /// `__contains__`, then iteration, then the old `__getitem__` protocol --
+    /// answers a C truth value, so [`MirExpr::ty`] answers [`Ty::Bool`]. It
+    /// can raise (a raising `__contains__`, or a container that supports
+    /// none of the three protocols), which is why
+    /// `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for this node. `item` is boxed through the
+    /// `pycc_ext_obj_pack_*` helpers; `item` is evaluated before
+    /// `container`, CPython's own order.
+    ObjContains {
+        negate: bool,
+        item: Box<MirExpr>,
+        container: Box<MirExpr>,
+    },
+    /// `base[start:stop:step]` where `base` is a CPython object (Part 2b of
+    /// #1371): CPython's `PyObject_GetItem` with a `slice` built by
+    /// `PySlice_New`, an absent bound passed as `None`. A node of its own
+    /// rather than a [`MirExpr::Slice`], whose `ty()` answers its base's
+    /// type and whose codegen arm handles only native sequences;
+    /// [`MirExpr::ty`] answers [`Ty::Object`]. It can raise (an unsliceable
+    /// object, or a raising `__getitem__`), so
+    /// `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for it. Only the *load* is modelled: `del o[a:b]` and
+    /// `o[a:b] = v` are still refused before MIR.
+    ObjSlice {
+        base: Box<MirExpr>,
+        start: Option<Box<MirExpr>>,
+        stop: Option<Box<MirExpr>>,
+        step: Option<Box<MirExpr>>,
+    },
     /// `isinstance(value, class)` where `value` is a CPython object (Part 1
     /// of #1371): a run-time `PyObject_IsInstance`, which can raise (a
     /// class argument that is not a class, or a raising
@@ -988,7 +1021,9 @@ impl MirExpr {
                     Ty::Object
                 }
             }
-            MirExpr::ObjIsInstance { .. } => Ty::Bool,
+            MirExpr::ObjIsInstance { .. } | MirExpr::ObjContains { .. } => Ty::Bool,
+            // Part 2b of #1371: CPython's own slice result, opaque.
+            MirExpr::ObjSlice { .. } => Ty::Object,
             // Hardcoded for `ObjLen`'s reason, not `ObjSubscript`'s: the
             // element type is known, it is just not recoverable from the
             // base. A `memoryview` parameter is one-dimensional and `"d"`-
@@ -1210,9 +1245,25 @@ impl MirExpr {
                 base.collect_named_expr_bindings(out);
                 index.collect_named_expr_bindings(out);
             }
-            MirExpr::ObjCompare { left, right, .. } => {
+            MirExpr::ObjCompare { left, right, .. }
+            | MirExpr::ObjContains {
+                item: left,
+                container: right,
+                ..
+            } => {
                 left.collect_named_expr_bindings(out);
                 right.collect_named_expr_bindings(out);
+            }
+            MirExpr::ObjSlice {
+                base,
+                start,
+                stop,
+                step,
+            } => {
+                base.collect_named_expr_bindings(out);
+                for bound in [start, stop, step].into_iter().flatten() {
+                    bound.collect_named_expr_bindings(out);
+                }
             }
             MirExpr::ObjIsInstance { value, class } => {
                 value.collect_named_expr_bindings(out);

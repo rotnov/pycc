@@ -1,6 +1,7 @@
 //! Emission for `MirExpr::ObjCompare` and `MirExpr::ObjIsInstance` (Part 1
 //! of #1371): comparisons, identity tests and `isinstance` with a CPython
-//! object operand.
+//! object operand; and for `MirExpr::ObjContains` (Part 2b of #1371), a
+//! membership test against a CPython object container.
 //!
 //! **Identity** (`is`/`is not`) is a pointer compare and emits no shim
 //! call except to name CPython's `None` ([`EXT_OBJ_NONE_SYMBOL`], a
@@ -21,6 +22,13 @@
 //!
 //! **`isinstance`** is `PyObject_IsInstance` behind
 //! [`EXT_OBJ_ISINSTANCE_SYMBOL`], whose `-1` takes the same failure edge.
+//!
+//! **Membership** (`in`/`not in`) is `PySequence_Contains` behind
+//! [`EXT_OBJ_CONTAINS_SYMBOL`]. The item is always packed -- an object item
+//! too, through `pycc_ext_obj_pack_object`'s new reference -- so the helper
+//! consumes it on every path under the packer contract, and the container
+//! is borrowed. Its `-1` takes the same single failure edge; `not in` is the
+//! helper's `1`/`0` answer flipped.
 
 use super::*;
 use crate::foreign_attr::expect_object_pointer;
@@ -41,6 +49,12 @@ fn rich_compare_selector(op: CmpOpKind) -> Option<u64> {
         CmpOpKind::Gt => Some(4),
         CmpOpKind::GtE => Some(5),
         CmpOpKind::Is | CmpOpKind::IsNot => None,
+        // Part 2b of #1371: membership is its own node, `ObjContains`. It
+        // must never join the `None` arm above, which means identity.
+        CmpOpKind::In | CmpOpKind::NotIn => panic!(
+            "pycc_codegen: internal error: a membership test reached `ObjCompare` -- \
+             pycc_mir lowers it to `ObjContains`"
+        ),
     }
 }
 
@@ -145,6 +159,59 @@ pub(super) fn emit_compare<'ctx>(
         "foreign_compare",
     );
     Scalar::Object(result)
+}
+
+/// Emits `item in container` (or `item not in container` when `negate`)
+/// once both operands are evaluated.
+pub(super) fn emit_contains<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    negate: bool,
+    item: Scalar<'ctx>,
+    container: Scalar<'ctx>,
+) -> Scalar<'ctx> {
+    let edge = ForeignFailEdge::for_current(builder);
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let i32_type = context.i32_type();
+    let container_ptr = expect_object_pointer(container);
+    let item_ptr = emit_pack(context, builder, module, item, "foreign_contains_item");
+    let contains = shim_fn(
+        module,
+        EXT_OBJ_CONTAINS_SYMBOL,
+        i32_type.fn_type(&[ptr.into(), ptr.into()], false),
+    );
+    let status = builder
+        .build_call(
+            contains,
+            &[container_ptr.into(), item_ptr.into()],
+            "foreign_contains",
+        )
+        .expect("build_call should not fail for pycc_ext_obj_contains")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_contains returns int")
+        .into_int_value();
+    route_negative(
+        context,
+        builder,
+        module,
+        rt,
+        edge,
+        status,
+        "foreign_contains",
+    );
+    let found = builder
+        .build_int_truncate(status, context.i8_type(), "foreign_contains_bool")
+        .expect("build_int_truncate should not fail");
+    let answer = builder
+        .build_xor(
+            found,
+            context.i8_type().const_int(u64::from(negate), false),
+            "foreign_contains_answer",
+        )
+        .expect("build_xor should not fail on an i8");
+    Scalar::Bool(answer)
 }
 
 /// The evaluated class operand of an `isinstance` test.

@@ -270,6 +270,27 @@ pub const EXT_OBJ_GETITEM_SYMBOL: &str = "pycc_ext_obj_getitem";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_RICHCOMPARE_SYMBOL: &str = "pycc_ext_obj_richcompare";
 
+/// The fixed C shim's membership helper (Part 2b of #1371): it takes a
+/// borrowed container and a *packed* item, and returns
+/// `PySequence_Contains(container, item)`'s `1`/`0`, or `-1` with the
+/// CPython exception already set. It consumes the item on every path, for
+/// the reason [`EXT_OBJ_GETITEM_SYMBOL`] records, so a failed packer's
+/// `NULL` item is tested there and needs no failure edge of its own.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_CONTAINS_SYMBOL: &str = "pycc_ext_obj_contains";
+
+/// The fixed C shim's slice-load helper (Part 2b of #1371): it takes a
+/// borrowed base, three *packed* bounds and a presence mask (bit 0 start,
+/// bit 1 stop, bit 2 step; an absent bound's pointer is ignored and passed
+/// to `PySlice_New` as `None`), and returns a *new* reference to
+/// `PyObject_GetItem(base, slice(start, stop, step))`, or `NULL` with the
+/// CPython exception already set. It consumes every present bound on every
+/// path, for the reason [`EXT_OBJ_GETITEM_SYMBOL`] records.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_GETSLICE_SYMBOL: &str = "pycc_ext_obj_getslice";
+
 /// The fixed C shim's `None` accessor (Part 1 of #1371): a *borrowed*
 /// pointer to CPython's immortal `None`, the right-hand side of `o is None`.
 ///

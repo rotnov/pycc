@@ -414,6 +414,11 @@ impl Verifier<'_> {
                 index: right,
             }
             | MirExpr::ObjCompare { left, right, .. }
+            | MirExpr::ObjContains {
+                item: left,
+                container: right,
+                ..
+            }
             | MirExpr::BufferGet {
                 base: left,
                 index: right,
@@ -451,6 +456,12 @@ impl Verifier<'_> {
                 }
             }
             MirExpr::Slice {
+                base,
+                start,
+                stop,
+                step,
+            }
+            | MirExpr::ObjSlice {
                 base,
                 start,
                 stop,
