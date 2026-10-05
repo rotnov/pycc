@@ -19,6 +19,7 @@ mod inherited_copies;
 mod module;
 mod monomorphize;
 mod narrow;
+mod object_none;
 mod redeclaration;
 mod return_coverage;
 mod set_element;
@@ -28,6 +29,7 @@ mod string_conversion;
 #[cfg(test)]
 mod tests;
 mod unop;
+mod unpack;
 
 use return_coverage::block_always_returns;
 
@@ -622,7 +624,9 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
                 collect_named_expr_names_in_expr(part, names);
             }
         }
-        HirExpr::UnaryOp { operand, .. } => collect_named_expr_names_in_expr(operand, names),
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
+            collect_named_expr_names_in_expr(operand, names)
+        }
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(inner) = part {
@@ -630,7 +634,10 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
                 }
             }
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 collect_named_expr_names_in_expr(e, names);
             }
@@ -1354,7 +1361,9 @@ fn collect_named_expr_bindings(
             }
             Ok(())
         }
-        HirExpr::UnaryOp { operand, .. } => collect_named_expr_bindings(env, local_names, operand),
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
+            collect_named_expr_bindings(env, local_names, operand)
+        }
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(inner) = part {
@@ -1363,7 +1372,10 @@ fn collect_named_expr_bindings(
             }
             Ok(())
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 collect_named_expr_bindings(env, local_names, e)?;
             }
@@ -2833,7 +2845,7 @@ fn check_stmt_in_function(
 ) -> Result<(), Diagnostic> {
     match stmt {
         HirStmt::Return(None) => {
-            if return_ty != Ty::None {
+            if return_ty != Ty::None && !object_none::admits_none_return(&return_ty, None) {
                 return Err(Diagnostic::error(
                     "T0022",
                     format!(
@@ -2844,6 +2856,10 @@ fn check_stmt_in_function(
                 )
                 .with_help(format!("return a `{}` value", return_ty.name())));
             }
+            Ok(())
+        }
+        HirStmt::Return(Some(expr)) if object_none::admits_none_return(&return_ty, Some(expr)) => {
+            // #1387: `return None` into an `object` slot; see `object_none`.
             Ok(())
         }
         HirStmt::Return(Some(expr)) => {
@@ -3633,7 +3649,8 @@ fn reject_generic_calls_in_block(
 }
 
 /// Pushes every expression position a comprehension's iterable can hold
-/// (`CompIter::Range`'s three bounds; `CompIter::Name` holds none).
+/// (`CompIter::Range`'s three bounds, `CompIter::Iterable`'s expression;
+/// `CompIter::Name` holds none).
 fn comp_iter_exprs<'a>(iter: &'a CompIter, exprs: &mut Vec<&'a HirExpr>) {
     match iter {
         CompIter::Range { start, stop, step } => {
@@ -3641,6 +3658,7 @@ fn comp_iter_exprs<'a>(iter: &'a CompIter, exprs: &mut Vec<&'a HirExpr>) {
             exprs.push(stop);
             exprs.push(step);
         }
+        CompIter::Iterable(iterable) => exprs.push(iterable),
         CompIter::Name(_) => {}
     }
 }
@@ -3783,7 +3801,7 @@ fn reject_generic_calls_in_expr(
             }
             Ok(())
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             reject_generic_calls_in_expr(module_env, own_name, operand)
         }
         HirExpr::CompareChain { first, links } => {
@@ -3813,6 +3831,7 @@ fn reject_generic_calls_in_expr(
             Ok(())
         }
         HirExpr::ListLiteral(elements)
+        | HirExpr::ObjectList(elements)
         | HirExpr::SetLiteral(elements)
         | HirExpr::TupleLiteral(elements) => {
             for element in elements {

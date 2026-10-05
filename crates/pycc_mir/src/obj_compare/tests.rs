@@ -375,6 +375,37 @@ fn named_expr_bindings_are_collected_from_membership_and_slice_operands() {
     assert_eq!(names, ["a", "b", "c", "d", "e", "f"]);
 }
 
+/// Part 2d of #1371: a list display the empty-container pre-pass resolved
+/// to an object slot lowers to its own object-valued node, elements in
+/// source order, and a walrus inside an element still binds its target.
+#[test]
+fn an_object_list_display_is_an_object_valued_obj_list() {
+    let lowered = lower_discarded(HirExpr::ObjectList(vec![
+        HirExpr::IntLiteral(1),
+        HirExpr::StringLiteral("a".to_string()),
+        numpy_attr("pi"),
+    ]));
+    let MirExpr::ObjList { elements } = &lowered else {
+        panic!("expected an `ObjList`: {lowered:?}");
+    };
+    assert_eq!(elements.len(), 3);
+    assert_eq!(elements[0], MirExpr::IntLiteral(1));
+    assert!(matches!(elements[2], MirExpr::ObjAttrGet { .. }));
+    assert_eq!(lowered.ty(), Ty::Object);
+    assert_eq!(
+        lower_discarded(HirExpr::ObjectList(Vec::new())).ty(),
+        Ty::Object
+    );
+
+    let mut out = Vec::new();
+    lower_discarded(HirExpr::ObjectList(vec![HirExpr::NamedExpr {
+        name: "n".to_string(),
+        value: Box::new(HirExpr::IntLiteral(3)),
+    }]))
+    .collect_named_expr_bindings(&mut out);
+    assert_eq!(out, [("n".to_string(), Ty::Int)]);
+}
+
 /// Part 2c of #1371: `del o[a:b:c]` lowers to one `ObjDelSlice`, in a
 /// module body and in a function body (which `set_frame_function` and the
 /// receiver verifier both walk).

@@ -69,6 +69,10 @@ fn a_nested_comprehension_renames_the_outer_variable_in_its_own_iterable() {
             "print(len([len([x for x in range(x)]) for x in range(4)]))\n",
             "0comp_42_x",
         ),
+        (
+            "print(len([len([y for y in x.keys()]) for x in o]))\n",
+            "0comp_42_x",
+        ),
     ] {
         let outer = inner_comprehension(source);
         assert_eq!(outer.var, outer_var, "{source}");
@@ -89,6 +93,15 @@ fn a_nested_comprehension_renames_the_outer_variable_in_its_own_iterable() {
             CompIter::Range { stop, .. } => {
                 assert_eq!(stop, &HirExpr::Name(outer_var.to_string()), "{source}")
             }
+            CompIter::Iterable(iterable) => assert_eq!(
+                **iterable,
+                HirExpr::MethodCall {
+                    base: Box::new(HirExpr::Name(outer_var.to_string())),
+                    method: "keys".to_string(),
+                    args: vec![],
+                },
+                "{source}"
+            ),
         }
         assert_eq!(
             inner.elt,
@@ -196,5 +209,30 @@ fn a_nested_dict_comprehension_renames_the_outer_variable_in_its_key_and_value()
     assert_eq!(
         inner.elt,
         CompElt::Set(HirExpr::Name(set_outer.var.clone()))
+    );
+}
+
+/// Part 2d of #1371: `HirExpr::ObjectList` is built only by `pycc_types`'
+/// empty-container pre-pass, after lowering, so no source reaches the
+/// rename with one. The arm still keeps the node and renames every
+/// element, so a future caller cannot silently lose a loop variable.
+#[test]
+fn renaming_an_object_list_renames_every_element() {
+    let renamed = rename_name_in_expr(
+        HirExpr::ObjectList(vec![
+            HirExpr::Name("i".to_string()),
+            HirExpr::IntLiteral(1),
+            HirExpr::Name("j".to_string()),
+        ]),
+        "i",
+        "k",
+    );
+    assert_eq!(
+        renamed,
+        HirExpr::ObjectList(vec![
+            HirExpr::Name("k".to_string()),
+            HirExpr::IntLiteral(1),
+            HirExpr::Name("j".to_string()),
+        ])
     );
 }

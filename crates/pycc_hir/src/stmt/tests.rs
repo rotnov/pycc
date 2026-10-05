@@ -207,3 +207,22 @@ fn lower_match_or_pattern_subpattern_error_propagates() {
     let err = crate::lower_checked(&module).unwrap_err();
     assert_eq!(err.code, "C0001");
 }
+
+/// Part 1 of #1255: `comp_assign_stmt` routes a `CompIter::Iterable`
+/// comprehension to a plain `Assign`, so no statement form carries one
+/// today; the walrus scan still walks the iterable expression, so a later
+/// change routing one through a statement form cannot let a walrus escape
+/// it. Pinned directly, since no source reaches the arm.
+#[test]
+fn the_walrus_scan_walks_an_iterable_comprehension_source() {
+    let walrus = HirExpr::NamedExpr {
+        name: "n".to_string(),
+        value: Box::new(HirExpr::IntLiteral(1)),
+    };
+    assert!(comp_iter_contains_named_expr(&CompIter::Iterable(
+        Box::new(walrus)
+    )));
+    assert!(!comp_iter_contains_named_expr(&CompIter::Iterable(
+        Box::new(HirExpr::IntLiteral(1))
+    )));
+}

@@ -1512,6 +1512,46 @@ one divergence: an `int` item or bound outside the inline range reaching
 membership or slice normally, until
 [#1040](https://github.com/rotnov/pycc/issues/1040) widens the packer.
 
+**A tuple-unpacking assignment is one more producer.** Part 1 of
+[#891](https://github.com/rotnov/pycc/issues/891) unpacks a CPython object
+into names (`a, b = o`, the rule in `docs/TYPE_SYSTEM.md`'s "Tuple-unpacking
+assignment" section) with `pycc_ext_obj_unpack(o, n)`, not to be confused with
+Part 4's `pycc_ext_obj_unpack_float_tuple` below. It borrows `o`. An exact
+`tuple` of `n` items is returned as a new reference to `o` itself; any other
+iterable is iterated with `PyObject_GetIter`/`PyIter_Next` into a fresh tuple
+of exactly `n` items, every temporary the iteration owns being released on
+every exit. A count other than `n` raises `ValueError` with CPython's own
+message ("not enough values to unpack (expected 3, got 2)", "too many values
+to unpack (expected 2)", with CPython 3.14's ", got N" suffix for an exact
+`list`, `tuple` or `dict`), and a non-iterable raises CPython's `TypeError`
+("cannot unpack non-iterable builtin_function_or_method object"). CPython
+names the type by its `tp_name`, which the Limited API does not expose: the
+shim rebuilds it as `module.name` for a static type (`datetime.date`, a bare
+name for a `builtins` type) and as `__name__` for a heap type. Two residual
+differences remain: a heap type built from a `PyType_Spec` with a dotted spec
+name prints without its module, and CPython's 200-character truncation of a
+longer name is not applied. A `NULL`
+result routes to the operation's failure edge -- the module-exec `-1` in a
+module body, so the remaining module-body statements never run, and the
+bridged pycc exception in a function body, which a compiled `try`/`except`
+catches -- before any target is bound. The returned tuple binds the unpacking
+temporary and is never released, and each target then reads it with
+`pycc_ext_obj_getitem`, whose new reference leaks on the same terms as any
+subscript load. `tests/issue_891_tuple_unpack.rs` pins the result inside a
+function on two distinct mortal elements over `N = 100` unpacks, where
+CPython's deltas are `1`, `1` and `0` for the succeeding rows (the live final
+binding):
+
+| Shape, run `N` times in a function body | element deltas | source delta |
+|---|---|---|
+| `e1, e2 = pr`, `pr` an exact 2-tuple | `N` each, one per target read | `N`, the returned tuple is `pr` itself |
+| `f1, f2 = ls`, `ls` a 2-item `list` | `2N` each, one per target read and one held by the leaked fresh tuple | `0` |
+| `g1, g2 = l3` caught as `ValueError`, `l3` a 3-item `list` | `0`: the failing exits release the iterator, the partial tuple and the extra item | `0` |
+
+When [#1092](https://github.com/rotnov/pycc/issues/1092) lands the element
+reads and the unpacked tuple stop leaking and the first two rows match
+CPython; the third already does.
+
 **A slice deletion produces nothing.** Part 2c of
 [#1371](https://github.com/rotnov/pycc/issues/1371) adds
 `pycc_ext_obj_delslice(o, start, stop, step, present)` for `del o[a:b:c]`.
@@ -1524,6 +1564,65 @@ deletion adds nothing to the leaked set. The hosted test runs it 200 times
 inside a function and pins `sys.getrefcount` of the list and of a large `int`
 bound unchanged afterwards (`tests/issue_1371_object_slice_del.rs`). It
 shares the packers' `OverflowError` divergence.
+
+**A comprehension over an object produces a collection, its iterator and its
+items.** Part 1 of [#1255](https://github.com/rotnov/pycc/issues/1255) lowers
+`[e for x in o if c]` and `{e for x in o if c}` over a CPython object `o` to
+the iteration halves `for` uses (`PyObject_GetIter`, then `PyIter_Next` per
+item) around two helpers. `pycc_ext_obj_new_collection(kind)` returns a new,
+empty `list` (`kind` 0) or `set` (`kind` 1), or `NULL` with `SystemError` for
+any other kind. `pycc_ext_obj_collect(collection, kind, item)` appends or adds
+the packed element with `PyList_Append` or `PySet_Add`, answers a C `int`
+(`-1` on failure), borrows the collection and **consumes the packed element on
+every path**, including the one where its packer already failed with `NULL`
+-- the key slot's rule once more. Every `NULL` or `-1` routes to the
+operation's failure edge, so an iterable that is not one, a raising
+`__iter__` or `__next__`, a raising filter or element, and `set.add` of an
+unhashable item each surface CPython's own exception. The iterator, each loop
+item and the result are new references leaked under the
+[#1092](https://github.com/rotnov/pycc/issues/1092) leak-only rule, and the
+loop variable reads the item borrowed. `tests/issue_1255_object_comprehension.rs`
+pins it against a mortal item at two trip counts `n`: a list comprehension of
+`n` items raises the item's count by `2n` (the leaked loop item plus the
+leaked list's own reference), a set comprehension of `n` identical items by
+`n + 1`, and the iterated list's count by `0`, since its only new referrer is
+the leaked list iterator, which CPython makes drop its sequence once
+exhausted. When #1092 lands the leaked references are released and the
+deltas become CPython's.
+
+**A list display bound to an object slot is one more producer.** Part 2d of
+[#1371](https://github.com/rotnov/pycc/issues/1371) builds `x: object = [a,
+b]` (and an empty `[]` assigned to a name bound to an object elsewhere, see
+`TYPE_SYSTEM.md` "Object slots") as a fresh CPython `list`. The elements are
+evaluated left to right, each packed by one of the five packers into an array
+hoisted into the entry block, and handed to
+`pycc_ext_obj_build_list(items, n)`. The helper **consumes every packed
+element on every path**: when a packer already failed with `NULL` it builds
+no list and releases the rest; when `PyList_New` fails it releases them all;
+otherwise each reference moves into the list through `PyList_SetItem` (the
+limited API has no `PyList_SET_ITEM`). The list is a new reference, leaked on
+the same terms as every other producer, so each successful display leaks the
+list and the one reference it holds per element. An element that raises
+before packing (`[o, 1 // z]`) leaves nothing to release. The hosted test
+`tests/issue_1371_object_list_display.rs` pins `sys.getrefcount` of a mortal
+element across 100 calls: `+2` per call for a discarded `[probe, probe]`,
+unchanged for a packer failure and for a raising element. The display shares
+the packers' divergence: an `int` element outside the inline range raises
+`OverflowError` where CPython would build the list, until
+[#1040](https://github.com/rotnov/pycc/issues/1040) widens the packer.
+
+**`and`/`or` boxes a selected native operand and leaks it.** Part 6 of
+[#1371](https://github.com/rotnov/pycc/issues/1371) types `n or o` and
+`o and n` (`n` an `int`, `float`, `bool` or `str`) as `object`
+(`docs/TYPE_SYSTEM.md`, "`and` and `or`"). An object operand passes through
+borrowed, with no reference-count traffic, and its truth test is
+`pycc_ext_obj_truthy`. The native operand is packed by the same packers as an
+argument, on the arm that selects it only; the packer's new reference is the
+node's result and is leaked once per evaluation, as every producer's is. A
+packer `NULL` -- the `OverflowError` for an `int` outside the inline range,
+until [#1040](https://github.com/rotnov/pycc/issues/1040) -- takes the node's
+foreign failure edge. The hosted test runs the object-operand shapes 200 times
+inside a function and pins `sys.getrefcount` of each object operand unchanged.
 
 `len`, a truth test, Part 4's four conversions and Part 4's tuple unpack are
 the operations that add nothing to that leaked set. `pycc_ext_obj_len` answers a `Py_ssize_t` and

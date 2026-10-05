@@ -606,14 +606,12 @@ fn assigning_to_an_attribute_target_propagates_an_unsupported_base_expression() 
 }
 
 #[test]
-fn assigning_to_a_tuple_unpacking_target_is_unsupported() {
-    // The remaining assignment-target shape this file still rejects
-    // after `Expr::Name`/`Expr::Subscript`/`Expr::Attribute` are all
-    // now recognized: multi-target unpacking (`a, b = ...`) has no HIR
-    // shape at all yet.
+fn a_starred_tuple_unpacking_target_is_unsupported() {
+    // Part 1 of #891 admits a flat tuple of bare names (see
+    // `stmt/unpack/tests.rs`); a starred element is left to a later part.
     assert_capability_error_message(
-        "a, b = 1, 2\n",
-        "only assigning to a bare name is supported so far",
+        "a, *b = 1, 2\n",
+        "a starred target (`*rest`) in a tuple-unpacking assignment is not supported yet",
     );
 }
 
@@ -3176,31 +3174,103 @@ fn a_comprehension_bare_name_iterable_sharing_the_loop_variables_own_source_name
     );
 }
 
+// Part 1 of #1255: an iterable that is neither a bare name nor a
+// `range(...)` call lowers to `CompIter::Iterable`; whether it is iterable
+// is `pycc_types`' decision (its `object_comprehension` tests pin the
+// refusal of every non-object type). The statement form becomes a plain
+// `Assign` of the expression form, so none of the native-container
+// `*CompAssign` passes sees it.
+fn comprehension_assign_value(source: &str) -> HirComprehension {
+    let module = pycc_parser_test_helper::parse(source);
+    let hir = lower_checked(&module).unwrap();
+    let HirItem::TopLevelStmt(HirStmt::Assign { target, value }) = &hir.items[0] else {
+        panic!("expected a plain assignment, got {:?}", hir.items[0]);
+    };
+    assert_eq!(target, "y");
+    let HirExpr::Comprehension(comp) = value else {
+        panic!("expected a comprehension value, got {value:?}");
+    };
+    (**comp).clone()
+}
+
 #[test]
-fn a_comprehension_iterating_a_list_literal_is_unsupported() {
-    // Neither a bare name nor a call -- exercises
-    // `lower_comprehension_iter`'s own "not Name, not Call" branch,
-    // which is not shared with `Stmt::For`'s separate (textually
-    // similar but distinct) iterable-shape checks.
-    assert_capability_error_message(
-        "y = [i for i in [1, 2]]\n",
-        "only `range(...)` or a bare-name iterable is supported so far in a comprehension",
+fn a_comprehension_iterating_a_list_literal_lowers_to_an_iterable_source() {
+    let comp = comprehension_assign_value("y = [i for i in [1, 2]]\n");
+    assert_eq!(
+        comp.iter,
+        CompIter::Iterable(Box::new(HirExpr::ListLiteral(vec![
+            HirExpr::IntLiteral(1),
+            HirExpr::IntLiteral(2),
+        ])))
+    );
+    assert_eq!(comp.elt, CompElt::List(HirExpr::Name(comp.var.clone())));
+}
+
+#[test]
+fn a_comprehension_iterating_a_method_call_lowers_to_an_iterable_source() {
+    let comp = comprehension_assign_value("y = {i for i in o.keys() if i}\n");
+    assert_eq!(
+        comp.iter,
+        CompIter::Iterable(Box::new(HirExpr::MethodCall {
+            base: Box::new(HirExpr::Name("o".to_string())),
+            method: "keys".to_string(),
+            args: vec![],
+        }))
+    );
+    assert_eq!(comp.elt, CompElt::Set(HirExpr::Name(comp.var.clone())));
+    assert_eq!(comp.cond, Some(HirExpr::Name(comp.var.clone())));
+}
+
+#[test]
+fn a_comprehension_iterating_a_non_range_call_lowers_to_an_iterable_source() {
+    let comp = comprehension_assign_value("y = [i for i in foo(3)]\n");
+    assert_eq!(
+        comp.iter,
+        CompIter::Iterable(Box::new(HirExpr::Call {
+            callee: "foo".to_string(),
+            args: vec![HirExpr::IntLiteral(3)],
+        }))
     );
 }
 
 #[test]
-fn a_comprehension_iterating_a_non_name_callee_call_is_unsupported() {
-    assert_capability_error_message(
-        "y = [i for i in f()()]\n",
-        "only calling `range(...)` is supported so far in a comprehension",
+fn a_dict_comprehension_over_an_iterable_also_lowers_to_an_assign() {
+    let comp = comprehension_assign_value("y = {i: 1 for i in o.keys()}\n");
+    assert!(matches!(comp.iter, CompIter::Iterable(_)));
+    assert!(matches!(comp.elt, CompElt::Dict { .. }));
+}
+
+#[test]
+fn an_iterable_source_keeps_the_loop_variables_source_name() {
+    // The outermost iterable evaluates in the enclosing scope, so a read
+    // of the loop variable's own source name there is not renamed.
+    let comp = comprehension_assign_value("y = [i for i in i.keys()]\n");
+    let CompIter::Iterable(iterable) = &comp.iter else {
+        panic!("expected an iterable source, got {:?}", comp.iter);
+    };
+    assert_eq!(
+        **iterable,
+        HirExpr::MethodCall {
+            base: Box::new(HirExpr::Name("i".to_string())),
+            method: "keys".to_string(),
+            args: vec![],
+        }
     );
 }
 
 #[test]
-fn a_comprehension_iterating_a_non_range_call_is_unsupported() {
+fn an_iterable_source_that_fails_to_lower_reports_its_own_error() {
     assert_capability_error_message(
-        "y = [i for i in foo(3)]\n",
-        "only iterating over `range(...)` is supported so far in a comprehension, got `foo`",
+        "y = [i for i in g()()]\n",
+        "only calling a bare name is supported so far, got a call whose callee is a call expression",
+    );
+}
+
+#[test]
+fn a_walrus_in_an_iterable_source_is_refused() {
+    assert_capability_error_message(
+        "y = [i for i in (o := p).keys()]\n",
+        "a walrus assignment (`:=`) inside a comprehension is not supported yet",
     );
 }
 
@@ -6132,6 +6202,7 @@ fn killed_names_finds_a_walrus_nested_inside_every_expression_kind() {
             HirExpr::ListLiteral(vec![walrus("list_elt")]),
             HirExpr::SetLiteral(vec![walrus("set_elt")]),
             HirExpr::TupleLiteral(vec![walrus("tuple_elt")]),
+            HirExpr::ObjectList(vec![walrus("object_list_elt")]),
             HirExpr::Subscript {
                 base: Box::new(walrus("subscript_base")),
                 index: Box::new(walrus("subscript_index")),
@@ -6198,6 +6269,7 @@ fn killed_names_finds_a_walrus_nested_inside_every_expression_kind() {
         "list_elt",
         "set_elt",
         "tuple_elt",
+        "object_list_elt",
         "subscript_base",
         "subscript_index",
         "slice_base",
@@ -6247,29 +6319,31 @@ fn a_bytes_annotation_names_its_kind() {
 }
 
 #[test]
-fn a_tuple_target_inside_a_chained_assignment_names_its_kind() {
-    // #1213: each piece of a chain goes through the single-target arm, so a
-    // tuple piece keeps that arm's refusal, spanned on the tuple itself.
+fn a_tuple_target_inside_a_chained_assignment_keeps_the_unpacking_refusals() {
+    // #1213: each piece of a chain is lowered on its own, so a tuple piece
+    // goes through the unpacking lowering (Part 1 of #891) and keeps its
+    // refusals, spanned on the refused element itself.
     assert_capability_error(
-        "a = b, c = t\n",
-        "only assigning to a bare name is supported so far, got a tuple",
-        Span::new(4, 8),
+        "a = b, c.d = t\n",
+        "only bare-name targets in a tuple-unpacking assignment are supported so far, \
+         got an attribute expression (`obj.attr`)",
+        Span::new(7, 10),
     );
 }
 
 #[test]
-fn a_tuple_assignment_target_names_its_kind() {
+fn a_nested_unpacking_target_names_its_kind() {
     assert_capability_error_message(
-        "a, b = 1, 2\n",
-        "only assigning to a bare name is supported so far, got a tuple",
+        "a, (b, c) = 1, (2, 3)\n",
+        "a nested target (`a, (b, c) = ...`) in a tuple-unpacking assignment is not supported yet",
     );
 }
 
 #[test]
-fn a_list_assignment_target_names_its_kind() {
+fn a_subscript_unpacking_target_names_its_kind() {
     assert_capability_error_message(
-        "[a, b] = [1, 2]\n",
-        "only assigning to a bare name is supported so far, got a list display (`[...]`)",
+        "[a, d[0]] = [1, 2]\n",
+        "only bare-name targets in a tuple-unpacking assignment are supported so far, got",
     );
 }
 
@@ -6318,14 +6392,6 @@ fn calling_the_result_of_a_call_names_the_callee_kind() {
     assert_capability_error_message(
         "def f() -> int:\n    return g()()\n",
         "only calling a bare name is supported so far, got a call whose callee is a call expression",
-    );
-}
-
-#[test]
-fn a_literal_comprehension_iterable_names_its_kind() {
-    assert_capability_error_message(
-        "xs = [k for k in [1, 2, 3]]\n",
-        "only `range(...)` or a bare-name iterable is supported so far in a comprehension, got a list display (`[...]`) as the iterable",
     );
 }
 
@@ -6426,13 +6492,13 @@ fn no_capability_message_renders_an_ast_debug_dump() {
     for source in [
         "import typing\ndef f(x: typing.Any) -> int:\n    return 1\n",
         "class C:\n    a = b = 1\n",
-        "a, b = 1, 2\n",
+        "a, o.x = 1, 2\n",
         "class C:\n    def __init__(self) -> None:\n        self.x: int = 1\n",
         "for a, b in pairs:\n    pass\n",
         "for x in [1]:\n    pass\n",
         "xs = [1, 2]\nfor k in xs[0]():\n    pass\n",
         "def f() -> int:\n    return g()()\n",
-        "xs = [k for k in [1]]\n",
+        "xs = [k for k in g()()]\n",
         "from typing import Protocol\nclass P(Protocol):\n    x = 1\n",
     ] {
         let module = pycc_parser_test_helper::parse(source);
