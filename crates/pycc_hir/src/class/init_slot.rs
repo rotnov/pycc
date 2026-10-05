@@ -250,7 +250,9 @@ fn receiver_attr(target: &Expr, receiver_name: &str) -> Option<String> {
 /// (int/float/bool/str), a PEP 695 type parameter, or -- since #1262 -- a
 /// `list[int]`/`dict[str, int]` container, which the slot stores as its
 /// pointer word, or -- since Part 1 of #1367 -- a class a foreign import
-/// binds (`Ty::Object`), stored as its `PyObject*` word. For an attribute a
+/// binds (`Ty::Object`), stored as its `PyObject*` word, or -- since #1389
+/// -- a class of this program (`Ty::Instance`), stored as its instance
+/// pointer word. For an attribute a
 /// class-body declaration types (#1266), this is only the shape gate, and
 /// since #1388 only where a type parameter is in scope: `declared_slot_ty`
 /// discards the type it returns in favor of the declared one, and admits
@@ -349,11 +351,16 @@ fn slot_ty_from_init_rhs(
                 // binds -- seeds a slot holding its `PyObject*`, the same
                 // pointer word; every `object` producer hands back a
                 // reference that is never released, so the store needs no
-                // refcount traffic either. Every other non-scalar type -- a
-                // `set[T]`, a by-value `tuple[...]`, an `Optional`, or a
-                // pycc class instance (including the receiver itself,
-                // `self.link = self`; #1389) -- has an ownership or carrier
-                // question of its own and stays refused.
+                // refcount traffic either. #1389: a `Ty::Instance`
+                // parameter -- an instance of a class of this program,
+                // including the receiver itself (`self.link = self`) --
+                // seeds a slot holding its instance pointer; `pycc_rt`
+                // never frees an instance, so the store needs no refcount
+                // traffic and a read aliases the stored instance, as in
+                // CPython. Every other non-scalar type -- a `set[T]`, a
+                // by-value `tuple[...]`, an `Optional`, or a protocol --
+                // has an ownership or carrier question of its own and stays
+                // refused.
                 //
                 // PEP 695 (#387): `Ty::Param` is also accepted — a generic
                 // class's `__init__` parameter typed `T` seeds a slot with
@@ -370,13 +377,15 @@ fn slot_ty_from_init_rhs(
                     | Ty::Param(_)
                     | Ty::List(_)
                     | Ty::Dict(..)
-                    | Ty::Object),
+                    | Ty::Object
+                    | Ty::Instance(_)),
                 ) => Ok(ty),
                 Some(other) => Err(unsupported(
                     format!(
                         "`{receiver_name}.<attr> = {}` cannot establish an attribute of type \
                          `{}` yet -- only a scalar (int/float/bool/str), `list[int]`, \
-                         `dict[str, int]` or foreign-imported class parameter is supported",
+                         `dict[str, int]`, class instance or foreign-imported class parameter \
+                         is supported",
                         name.id,
                         other.name()
                     ),
@@ -439,18 +448,25 @@ mod tests {
     }
 
     #[test]
-    fn an_init_attr_assigned_from_self_is_unsupported() {
-        // A class-instance-typed slot (here the receiver itself) is not
-        // admitted: `slot_ty_from_init_rhs` accepts only a scalar, a type
-        // parameter, or a `list[int]`/`dict[str, int]` parameter (#1262).
-        let message =
-            c0001_message("class C:\n    def __init__(self) -> None:\n        self.link = self\n");
-        assert!(
-            message.ends_with(
-                "yet -- only a scalar (int/float/bool/str), `list[int]`, `dict[str, int]` or \
-                 foreign-imported class parameter is supported"
-            ),
-            "{message}"
+    fn an_init_attr_assigned_from_self_establishes_an_instance_slot() {
+        // #1389: the receiver is a `Ty::Instance` parameter like any other.
+        let hir = lower_ok("class C:\n    def __init__(self) -> None:\n        self.link = self\n");
+        assert_eq!(
+            hir.class_defs[0].1.attrs,
+            vec![("link".to_string(), Ty::Instance(Box::new("C".to_string())))]
+        );
+    }
+
+    #[test]
+    fn an_init_attr_assigned_from_an_instance_param_establishes_an_instance_slot() {
+        // #1389: an instance of another class of this program.
+        let hir = lower_ok(
+            "class A:\n    def __init__(self) -> None:\n        self.n = 1\n\n\n\
+             class B:\n    def __init__(self, a: A) -> None:\n        self.a = a\n",
+        );
+        assert_eq!(
+            hir.class_defs[1].1.attrs,
+            vec![("a".to_string(), Ty::Instance(Box::new("A".to_string())))]
         );
     }
 
@@ -498,8 +514,8 @@ mod tests {
             );
             assert!(
                 message.contains(
-                    "only a scalar (int/float/bool/str), `list[int]`, `dict[str, int]` or \
-                     foreign-imported class parameter is supported"
+                    "only a scalar (int/float/bool/str), `list[int]`, `dict[str, int]`, class \
+                     instance or foreign-imported class parameter is supported"
                 ),
                 "{message}"
             );

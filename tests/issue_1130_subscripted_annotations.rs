@@ -410,7 +410,9 @@ fn the_class_body_positions_move_to_three_different_answers() {
     // annotation now lands where the equivalent *bare* `NDArray` annotation
     // already did. A diagnostic-code swap, not a behavior change. Since
     // #1266 the value-less class-body spelling is an instance attribute
-    // declaration, so its message is the declaration's own type refusal.
+    // declaration; since #1389 a class of this program is an admitted slot
+    // type, so the refusal is the declaration's never-assigned one (`D` has
+    // no `__init__`), not a type refusal.
     let text = assert_rejects(
         "1130_class_attribute",
         "class NDArray:\n    pass\n\n\nclass D:\n    x: NDArray[int]\n",
@@ -418,8 +420,8 @@ fn the_class_body_positions_move_to_three_different_answers() {
     );
     assert!(
         text.contains(
-            "instance attribute `x` declared in class `D` has type `NDArray`, which has no \
-             instance-slot representation"
+            "instance attribute `x` declared in class `D` is never assigned at the top level \
+             of `D.__init__`"
         ),
         "{text}"
     );
