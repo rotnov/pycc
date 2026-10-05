@@ -73,3 +73,58 @@ fn an_object_slice_with_an_unpackable_bound_is_refused() {
 fn a_native_base_keeps_its_t0033() {
     assert_refused("x = 1\ns = x[1:]\n", "T0033", "does not support slicing");
 }
+
+/// Part 2c of #1371: `del o[a:b:c]` on an object is admitted with every
+/// bound shape, in a module body and in a function body, including inside
+/// an unannotated helper (the constraint solver's arm) and a generic
+/// function (the monomorphizer's rewrite).
+#[test]
+fn an_object_slice_delete_is_admitted() {
+    for source in [
+        "del numpy.pi[:]\n",
+        "del numpy.pi[1:]\n",
+        "del numpy.pi[:-2]\n",
+        "del numpy.pi[::2]\n",
+        "del numpy.pi[True:'a':1.5]\n",
+        "del numpy.pi[numpy.e:]\n",
+        "o = numpy.pi\ndel o[1:], o[:1]\n",
+        "def f(size: int) -> None:\n    o = numpy.pi\n    del o[-size:]\n",
+        "def f(size: int) -> int:\n    o = numpy.pi\n    del o[-size:]\n    return size\n",
+        "def _h():\n    del numpy.pi[1:]\n\n\n_h()\n",
+        "def g[T](x: T) -> T:\n    del numpy.pi[1:]\n    return x\n\n\nn = g(1)\n",
+    ] {
+        if let Err(diagnostics) = check_foreign(source) {
+            panic!("must type-check: {source}\n{diagnostics:?}");
+        }
+    }
+}
+
+/// A native base keeps the `C0001` HIR used to report, now located at the
+/// slice target; an unpackable bound is the load's `I0404`.
+#[test]
+fn a_native_or_unpackable_slice_delete_is_refused() {
+    let source = "xs = [1, 2]\ndel xs[0:1]\n";
+    let diagnostics = check_foreign(source).expect_err(source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, "C0001");
+    assert!(
+        diagnostics[0].message.contains("a `del` of a slice"),
+        "{diagnostics:?}"
+    );
+    assert_eq!(diagnostics[0].span, Some(Span::new(16, 23)));
+    assert_refused(
+        "def f() -> None:\n    xs = [1]\n    del xs[1:]\n",
+        "C0001",
+        "a `del` of a slice",
+    );
+    assert_refused(
+        "xs = [1]\ndel numpy.pi[xs:]\n",
+        "I0404",
+        "slicing a CPython object with a `list[int]` bound",
+    );
+    assert_refused(
+        "del numpy.pi[:None]\n",
+        "I0404",
+        "slicing a CPython object with a `None` bound",
+    );
+}

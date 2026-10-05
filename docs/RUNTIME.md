@@ -1483,6 +1483,19 @@ one divergence: an `int` item or bound outside the inline range reaching
 membership or slice normally, until
 [#1040](https://github.com/rotnov/pycc/issues/1040) widens the packer.
 
+**A slice deletion produces nothing.** Part 2c of
+[#1371](https://github.com/rotnov/pycc/issues/1371) adds
+`pycc_ext_obj_delslice(o, start, stop, step, present)` for `del o[a:b:c]`.
+It builds the `slice` exactly as `pycc_ext_obj_getslice` does (the two share
+the static `pycc_ext_obj_slice_of`), calls `PyObject_DelItem`, and returns
+`0`, or `-1` with the exception set, which is routed to the statement's
+failure edge. The base is borrowed, each present bound is consumed on every
+path, and the `slice` is released before the helper returns, so the
+deletion adds nothing to the leaked set. The hosted test runs it 200 times
+inside a function and pins `sys.getrefcount` of the list and of a large `int`
+bound unchanged afterwards (`tests/issue_1371_object_slice_del.rs`). It
+shares the packers' `OverflowError` divergence.
+
 `len`, a truth test, Part 4's four conversions and Part 4's tuple unpack are
 the operations that add nothing to that leaked set. `pycc_ext_obj_len` answers a `Py_ssize_t` and
 `pycc_ext_obj_truthy` answers a C `int`; neither creates a reference and neither

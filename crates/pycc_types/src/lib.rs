@@ -764,9 +764,12 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
             // existing instance's attribute slot, never binds a new local
             // name.
             HirStmt::ExprStmt(expr) => collect_named_expr_names_in_expr(expr, names),
+            // A slice `del` (Part 2c of #1371) binds no name, and `pycc_hir`
+            // refuses a walrus in its operands.
             HirStmt::Return(_)
             | HirStmt::DictSet { .. }
             | HirStmt::AttrSet { .. }
+            | HirStmt::DeleteSlice { .. }
             | HirStmt::Raise { .. } => {}
             HirStmt::Match { cases, .. } => {
                 for case in cases {
@@ -2507,6 +2510,19 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
         } => check_try_star_stmt(env, &[], body, handlers, orelse, finalbody, None),
         HirStmt::Raise { exc, cause } => check_raise_stmt(env, &[], exc, cause),
         HirStmt::Delete { name } => del_stmt::check_delete(env, name),
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            span,
+        } => foreign::slice::check_delete_slice(
+            env,
+            &[],
+            base,
+            [start.as_deref(), stop.as_deref(), step.as_deref()],
+            *span,
+        ),
         HirStmt::ForeignImport { bindings, .. } => {
             foreign::bind_block_import(env, bindings);
             Ok(())
@@ -3389,6 +3405,19 @@ fn check_stmt_in_function(
         ),
         HirStmt::Raise { exc, cause } => check_raise_stmt(env, local_names, exc, cause),
         HirStmt::Delete { name } => del_stmt::check_delete(env, name),
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            span,
+        } => foreign::slice::check_delete_slice(
+            env,
+            local_names,
+            base,
+            [start.as_deref(), stop.as_deref(), step.as_deref()],
+            *span,
+        ),
         // `pycc_hir` never produces this node in a function body; binding
         // it here keeps the two statement checkers in step (#1291).
         HirStmt::ForeignImport { bindings, .. } => {
@@ -3617,6 +3646,16 @@ fn reject_generic_calls_in_stmt(
         HirStmt::AnnAssign { value, .. } => exprs.extend(value.iter()),
         HirStmt::Return(value) => exprs.extend(value.iter()),
         HirStmt::Delete { .. } | HirStmt::ForeignImport { .. } => {}
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            exprs.push(base);
+            exprs.extend([start, stop, step].into_iter().flatten().map(|b| &**b));
+        }
         HirStmt::If { test, body, orelse } => {
             exprs.push(test);
             blocks.push(body);

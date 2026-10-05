@@ -277,6 +277,15 @@ impl Verifier<'_> {
                 base: key, value, ..
             } => self.exprs([key, value]),
             MirStmt::BufferSet { base, index, value } => self.exprs([base, index, value]),
+            MirStmt::ObjDelSlice {
+                base,
+                start,
+                stop,
+                step,
+            } => {
+                self.expr(base);
+                self.exprs([start, stop, step].into_iter().flatten());
+            }
             MirStmt::ListCompAssign {
                 source, cond, elt, ..
             } => {

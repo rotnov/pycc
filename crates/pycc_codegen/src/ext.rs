@@ -291,6 +291,15 @@ pub const EXT_OBJ_CONTAINS_SYMBOL: &str = "pycc_ext_obj_contains";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_GETSLICE_SYMBOL: &str = "pycc_ext_obj_getslice";
 
+/// The fixed C shim's slice-deletion helper (Part 2c of #1371), the
+/// statement twin of [`EXT_OBJ_GETSLICE_SYMBOL`] with the same arguments
+/// and the same consumption of every present bound on every path. It
+/// performs `PyObject_DelItem(base, slice(start, stop, step))` and returns
+/// `0`, or `-1` with the CPython exception already set.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_DELSLICE_SYMBOL: &str = "pycc_ext_obj_delslice";
+
 /// The fixed C shim's `None` accessor (Part 1 of #1371): a *borrowed*
 /// pointer to CPython's immortal `None`, the right-hand side of `o is None`.
 ///
@@ -746,6 +755,7 @@ pub fn body_returns_buffer_slice(body: &[pycc_mir::MirStmt]) -> bool {
         | MirStmt::SetCompAssign { .. }
         | MirStmt::Return(_)
         | MirStmt::AttrSet { .. }
+        | MirStmt::ObjDelSlice { .. }
         | MirStmt::Raise { .. }
         | MirStmt::RaiseFrom { .. }
         | MirStmt::ForeignImport { .. }

@@ -711,12 +711,13 @@ pub(crate) fn lower_stmt(
         // `handlers`' own only expression-shaped content is each handler's
         // own `body: Vec<HirStmt>`, already independently checked (see this
         // block's own doc comment above).
-        // `del` never reaches here (`lower_stmt_expanded` lowers it) and
-        // holds no expression.
+        // `del` never reaches here (`lower_stmt_expanded` lowers it, and
+        // `stmt::del::lower_delete` refuses a walrus in a slice target).
         // A nested foreign import (#1291) holds only names.
         HirStmt::Try { .. }
         | HirStmt::TryStar { .. }
         | HirStmt::Delete { .. }
+        | HirStmt::DeleteSlice { .. }
         | HirStmt::ForeignImport { .. } => false,
         HirStmt::Raise { exc, cause } => {
             exc.as_ref().is_some_and(contains_named_expr)

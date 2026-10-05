@@ -76,7 +76,9 @@ pub(crate) fn lower_stmt_expanded(
             desugar_chain_assign(assign)?.iter().map(lower).collect()
         }
         // #1244: `del a, b` deletes each name in turn, and `del ()` none.
-        Stmt::Delete(del) => super::del::lower_delete(del),
+        Stmt::Delete(del) => super::del::lower_delete(del, &|expr| {
+            crate::expr::lower_expr(expr, in_function, class_name, imports, signatures)
+        }),
         _ => Ok(vec![lower(stmt)?]),
     }
 }

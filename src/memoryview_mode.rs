@@ -648,6 +648,7 @@ fn producer_bound_in<'a>(body: &'a [HirStmt], shadowed: &HashSet<&str>) -> Optio
         | HirStmt::DictSet { .. }
         | HirStmt::AttrSet { .. }
         | HirStmt::Delete { .. }
+        | HirStmt::DeleteSlice { .. }
         | HirStmt::ForeignImport { .. }
         | HirStmt::Raise { .. } => None,
     })

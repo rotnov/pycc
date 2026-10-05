@@ -233,6 +233,18 @@ impl<'a> Walker<'a> {
                 }
             }
             HirStmt::Delete { name } => self.name_use(name),
+            HirStmt::DeleteSlice {
+                base,
+                start,
+                stop,
+                step,
+                ..
+            } => {
+                self.expr(base);
+                for bound in [start, stop, step].into_iter().flatten() {
+                    self.expr(bound);
+                }
+            }
             HirStmt::ForeignImport { .. } => {}
         }
     }
