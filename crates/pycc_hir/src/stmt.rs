@@ -409,10 +409,16 @@ pub(crate) fn lower_stmt(
             if let Some(message) = return_context_violation(in_function, in_finally, except_star) {
                 return Err(context_invalid(message, pycc_ast::stmt_range(stmt)));
             }
+            // #1418: an `ext` module's admitted `return NotImplemented`.
             HirStmt::Return(
                 ret.value
                     .as_deref()
-                    .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
+                    .map(
+                        |e| match crate::not_implemented::lower_return_value(e, aliases) {
+                            Some(lowered) => Ok(lowered),
+                            None => lower_expr(e, in_function, class_name, imports, signatures),
+                        },
+                    )
                     .transpose()?,
             )
         }

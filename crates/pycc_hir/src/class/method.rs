@@ -254,6 +254,19 @@ pub(super) fn lower_method(
         }
         _ => body,
     };
+    // #1418 (D-258's #1418 amendment): a comparison method that returns
+    // `NotImplemented` returns a CPython object whatever its annotation
+    // says, as in CPython, so its return type is the object. The annotation
+    // is still lowered above, so a malformed one keeps its own diagnostic.
+    // Only an `ext` module's admitted `return NotImplemented` lowers to the
+    // node this looks for (`crate::not_implemented`).
+    let return_ty = if crate::not_implemented::is_comparison_dunder(method_name)
+        && crate::not_implemented::body_returns_not_implemented(&body)
+    {
+        Ty::Object
+    } else {
+        return_ty
+    };
     // #377/#436: compute the mangled name based on the method kind. A
     // regular method uses `<Class>.<name>`. A property getter uses the
     // same `<Class>.<name>`. A property setter uses

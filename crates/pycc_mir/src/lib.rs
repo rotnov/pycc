@@ -98,6 +98,12 @@ pub enum MirExpr {
     /// that target type is *not* simply "the slot's already-established
     /// type" -- see its own doc comment.
     NoneLiteral,
+    /// CPython's `NotImplemented` singleton, the value of an admitted
+    /// `return NotImplemented` in a comparison method of an `ext` module
+    /// (#1418, mirroring `HirExpr::NotImplemented`). Statically
+    /// `Ty::Object`; codegen loads it through the
+    /// `pycc_ext_obj_not_implemented` shim.
+    NotImplemented,
     /// Wraps a bare `inner`-typed value or a `NoneLiteral` so `.ty()`
     /// reports `Ty::Optional(inner)` regardless of the wrapped value's own
     /// static type (D-197, #763, Part 1 of #747). Exactly mirroring
@@ -882,6 +888,7 @@ impl MirExpr {
             MirExpr::BoolLiteral(_) => Ty::Bool,
             MirExpr::StringLiteral(_) | MirExpr::FString(_) => Ty::Str,
             MirExpr::NoneLiteral => Ty::None,
+            MirExpr::NotImplemented => Ty::Object,
             MirExpr::OptionalWrap(_, inner) => Ty::Optional(inner.clone()),
             MirExpr::OptionalUnwrap(_, inner) => (**inner).clone(),
             MirExpr::Name { ty, .. }
@@ -1096,6 +1103,7 @@ impl MirExpr {
             | MirExpr::EmptyList(_)
             | MirExpr::EmptyDict(_)
             | MirExpr::NoneLiteral
+            | MirExpr::NotImplemented
             | MirExpr::Name { .. }
             | MirExpr::NullInstance { .. } => {}
             MirExpr::ListPop { list, .. } => {

@@ -171,6 +171,7 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         | MirExpr::IntBoundary(_)
         | MirExpr::StringLiteral(_)
         | MirExpr::NoneLiteral
+        | MirExpr::NotImplemented
         | MirExpr::Name { .. }
         | MirExpr::Compare { .. }
         | MirExpr::FString(_)

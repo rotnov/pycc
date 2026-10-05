@@ -1987,6 +1987,18 @@ PyObject *pycc_ext_obj_none(void)
 }
 
 /*
+ * #1418: a *borrowed* pointer to CPython's `NotImplemented` singleton, the
+ * value of an admitted `return NotImplemented` in a comparison method
+ * (`EXT_OBJ_NOT_IMPLEMENTED_SYMBOL`). It is immortal on CPython 3.13+, and
+ * the return path packs it through `pycc_ext_pack_object`, which takes its
+ * own strong reference (`Py_NewRef`), so the borrow is safe either way.
+ */
+PyObject *pycc_ext_obj_not_implemented(void)
+{
+    return Py_NotImplemented;
+}
+
+/*
  * Part 1 of #1371: `isinstance(o, cls)` with an object `o`
  * (`EXT_OBJ_ISINSTANCE_SYMBOL`). Both operands are borrowed. A `NULL`
  * `cls` selects a builtin class by `builtin`: 0 `int`, 1 `str`, 2 `float`,

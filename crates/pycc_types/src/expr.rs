@@ -166,6 +166,8 @@ pub(crate) fn infer_expr_in(
         HirExpr::BoolLiteral(_) => Ok(Ty::Bool),
         HirExpr::StringLiteral(_) => Ok(Ty::Str),
         HirExpr::NoneLiteral => Ok(Ty::None),
+        // #1418: CPython's `NotImplemented` singleton is a CPython object.
+        HirExpr::NotImplemented => Ok(Ty::Object),
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(expr) = part {

@@ -363,6 +363,7 @@ impl Verifier<'_> {
             | MirExpr::BoolLiteral(_)
             | MirExpr::StringLiteral(_)
             | MirExpr::NoneLiteral
+            | MirExpr::NotImplemented
             | MirExpr::Name { .. }
             | MirExpr::EmptyList(_)
             | MirExpr::EmptyDict(_)

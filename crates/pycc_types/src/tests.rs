@@ -38,6 +38,7 @@ mod generic_monomorphization_arms;
 mod if_exp;
 mod import_alias;
 mod init_rank;
+mod not_implemented;
 mod optional_narrowing;
 mod pattern_matching;
 mod protocol_argument;

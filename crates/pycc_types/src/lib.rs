@@ -19,6 +19,7 @@ mod inherited_copies;
 mod module;
 mod monomorphize;
 mod narrow;
+mod not_implemented;
 mod redeclaration;
 mod return_coverage;
 mod set_element;
@@ -591,6 +592,7 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => {}
         HirExpr::ListPop { list } => {
@@ -1321,6 +1323,7 @@ fn collect_named_expr_bindings(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => Ok(()),
         HirExpr::ListPop { list } => match list.attr_expr() {
@@ -3904,6 +3907,7 @@ fn reject_generic_calls_in_expr(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => Ok(()),
         HirExpr::ListPop { list } => match list.attr_expr() {

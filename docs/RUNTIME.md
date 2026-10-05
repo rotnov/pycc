@@ -1442,7 +1442,11 @@ function body), so a raising `__eq__` or `__lt__` surfaces CPython's own
 exception. An identity test (`is`, `is not`) is a plain pointer comparison in
 compiled code with no failure edge; a `None` operand adds only the
 infallible `pycc_ext_obj_none` call, which returns the borrowed `Py_None`, so
-it creates no reference either. `pycc_ext_obj_isinstance(o, cls, builtin)` wraps `PyObject_IsInstance`
+it creates no reference either. The admitted `return NotImplemented` of a comparison method
+([#1418](https://github.com/rotnov/pycc/issues/1418)) is likewise one infallible call,
+`pycc_ext_obj_not_implemented`, which returns the borrowed `Py_NotImplemented`
+(immortal on CPython 3.13+); the method's object return packs it through
+`pycc_ext_pack_object`, which takes the new reference the caller owns. `pycc_ext_obj_isinstance(o, cls, builtin)` wraps `PyObject_IsInstance`
 and answers a C `int` (`-1` on failure); it borrows both operands, and when
 `cls` is `NULL` the `builtin` selector (`0`..`3` for `int`, `str`, `float`,
 `bool`) names CPython's own static type object instead, so it adds nothing to
