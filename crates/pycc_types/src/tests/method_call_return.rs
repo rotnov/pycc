@@ -168,3 +168,15 @@ fn an_agreeing_inherited_copy_is_admitted() {
          return self.n + 1\n\n\nprint(Derived(2)._twice())\n";
     assert_eq!(return_of(source, "Base._twice"), Ty::Int);
 }
+
+#[test]
+fn an_inherited_copy_returning_bool_under_an_int_origin_is_refused() {
+    refused(
+        "class Base:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\n    \
+         def val(self) -> int:\n        return self.n\n\n    def _get(self):\n        \
+         return self.val()\n\n\nclass Derived(Base):\n    def val(self) -> bool:\n        \
+         return True\n\n\nprint(Derived(2)._get() + 1)\n",
+        "T0022",
+        "expected `int`, found `bool` (inherited `Base._get` compiled for subclass `Derived`)",
+    );
+}

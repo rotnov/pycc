@@ -40,7 +40,9 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   check phase's `resolve_method_call` does: an annotated method contributes
   its declared return, an unannotated one its own inference variable. So
   `def __copy__(self): return self.copy()` infers `copy`'s return, and a
-  chain of unannotated helpers resolves in any source order. The receiver
+  chain of unannotated helpers resolves in any source order. The link runs
+  both ways: `def run(self) -> int: return self._take()` constrains an
+  unannotated `_take` to `int`, whose own body is then checked against it. The receiver
   must already be a concrete instance when the call is visited -- `self`, an
   annotated parameter, or a local bound from one; a receiver that is still
   an inference variable, a `@staticmethod`/`@classmethod` (their own
@@ -58,7 +60,9 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   subclass `Derived`)" rather than miscompiled. A copy whose return is an
   instance of a subclass of the origin's return class -- an inherited
   `return type(self)(...)` -- stays admitted, since the origin's type still
-  describes every value the copy returns.
+  describes every value the copy returns. Any other difference is refused,
+  `bool` under an `int` origin included: the two have different native
+  representations, so ordinary `bool`-as-`int` assignability does not apply.
 - The v0.1 solver links those variables through call arguments, local names,
   assignments, returns, `range` operands, and arithmetic expressions. The
   resulting helper signature is monomorphic within the module. Conflicting

@@ -249,8 +249,9 @@ fn copy_body(hir: &HirModule, body: &[HirStmt], copy: &PlannedCopy) -> Vec<HirSt
     }
 }
 
-/// #1420: refuses a copy whose resolved return is not assignable to its
-/// origin's -- the one way a copy's signature can drift from the origin's.
+/// #1420: refuses a copy whose resolved return differs from its origin's
+/// (see [`copy_return_agrees`]) -- the one way a copy's signature can drift
+/// from the origin's.
 ///
 /// A caller types `recv.m()` through the class tables, where copies never
 /// appear, so it sees the *origin's* return, while codegen dispatches to the
@@ -276,10 +277,7 @@ pub(crate) fn check_copy_return(env: &crate::Environment, name: &str) -> Result<
         .lookup_function(name)
         .zip(env.lookup_function(&copy.origin_name));
     let Some(((_, copy_return), (_, origin_return))) =
-        returns.filter(|((_, copy), (_, origin))| {
-            !crate::class::is_assignable_env(env, copy, origin)
-                && !is_subclass_instance(env, copy, origin)
-        })
+        returns.filter(|((_, copy), (_, origin))| !copy_return_agrees(env, copy, origin))
     else {
         return Ok(());
     };
@@ -302,18 +300,24 @@ pub(crate) fn check_copy_return(env: &crate::Environment, name: &str) -> Result<
     )))
 }
 
-/// Whether `narrow` is an instance of a class whose MRO contains the class
-/// `wide` is an instance of. pycc's assignability is invariant for user
-/// classes (return types are not covariant), but a copy answering
-/// `type(self)(...)` for its receiver legitimately narrows the origin's
-/// `Base` to the receiver's subclass, and the origin's type still describes
-/// every value the copy can return.
-fn is_subclass_instance(env: &crate::Environment, narrow: &Ty, wide: &Ty) -> bool {
-    let (Ty::Instance(sub), Ty::Instance(base)) = (narrow, wide) else {
-        return false;
-    };
-    env.lookup_class(sub)
-        .is_some_and(|def| def.mro.iter().any(|class| class == base.as_ref()))
+/// Whether a copy's return `narrow` may stand where callers expect the
+/// origin's `wide`: the same type, or an instance of a class whose MRO
+/// contains `wide`'s class. (No `Optional` arm: the solver joins no
+/// `T | None` return for an unannotated helper, so an inferred copy return
+/// is never one, and an annotated return is copied verbatim.) pycc's
+/// assignability is deliberately not used: it admits `bool` where `int` is
+/// expected, and a copy returning `bool` while callers read the origin's
+/// `int` is the same representation drift this check exists to refuse.
+/// A copy answering `type(self)(...)` legitimately narrows the origin's
+/// `Base` to the receiver's subclass, an instance pointer either way, and
+/// the origin's type still describes every value the copy returns.
+fn copy_return_agrees(env: &crate::Environment, narrow: &Ty, wide: &Ty) -> bool {
+    match (narrow, wide) {
+        (Ty::Instance(sub), Ty::Instance(base)) => env
+            .lookup_class(sub)
+            .is_some_and(|def| def.mro.iter().any(|class| class == base.as_ref())),
+        _ => narrow == wide,
+    }
 }
 
 #[cfg(test)]
