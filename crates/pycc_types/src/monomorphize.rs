@@ -654,7 +654,7 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             }
             infer_expr_in(env, local_names, expr)
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             // `let _ =` rather than `?`, for the same reason the
             // `isinstance` arm above uses it: only the rewriting side
             // effect matters here, and the `infer_expr_in` call on the
@@ -1316,7 +1316,7 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
                 collect_generic_class_instantiations_from_expr(arg, out);
             }
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             collect_generic_class_instantiations_from_expr(operand, out);
         }
         HirExpr::CompareChain { first, links } => {
@@ -2783,7 +2783,7 @@ fn rewrite_protocol_calls_in_expr(
                 seen,
             );
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             rewrite_protocol_calls_in_expr(
                 operand,
                 protocol_funcs,

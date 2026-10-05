@@ -2596,6 +2596,164 @@ int pycc_ext_obj_unpack_float_tuple(PyObject *o, long long arity, double *out)
 }
 
 /*
+ * The `tp_name` CPython's "cannot unpack non-iterable" message prints, as a
+ * new `str` reference, or NULL with an exception set. A static type's
+ * `tp_name` is "module.name", from which CPython derives both `__module__`
+ * and `__name__`, so it is rebuilt from them, a `builtins` type printing
+ * its bare name (`int`, `builtin_function_or_method`); a heap type created
+ * by a `class` statement has its `__name__` as `tp_name`. A heap type built
+ * from a `PyType_Spec` whose spec name is dotted prints `__name__` here and
+ * the dotted name in CPython: the Limited API cannot tell the two heap kinds
+ * apart.
+ */
+static PyObject *pycc_ext_obj_unpack_type_name(PyTypeObject *type)
+{
+    PyObject *name;
+    PyObject *module;
+    PyObject *dotted;
+
+    name = PyType_GetName(type);
+    if (name == NULL || (PyType_GetFlags(type) & Py_TPFLAGS_HEAPTYPE) != 0) {
+        return name;
+    }
+    module = PyType_GetModuleName(type);
+    if (module == NULL) {
+        Py_DECREF(name);
+        return NULL;
+    }
+    if (PyUnicode_CompareWithASCIIString(module, "builtins") == 0) {
+        Py_DECREF(module);
+        return name;
+    }
+    dotted = PyUnicode_FromFormat("%U.%U", module, name);
+    Py_DECREF(module);
+    Py_DECREF(name);
+    return dotted;
+}
+
+/*
+ * `t1, ..., tn = o` where `o` is a CPython object (Part 1 of #891,
+ * `EXT_OBJ_UNPACK_SYMBOL` in `crates/pycc_codegen/src/ext.rs`): a new
+ * reference to a `tuple` of exactly `n` items taken from `o`, or NULL with
+ * CPython's own exception set.
+ *
+ * It mirrors CPython's `unpack_iterable` (Python/ceval.c), which the
+ * Limited API does not export:
+ *
+ * - `iter(o)` failing with `TypeError` for an object that has neither
+ *   `__iter__` nor the sequence protocol is replaced by CPython's own
+ *   "cannot unpack non-iterable T object"; any other failure of `iter()`
+ *   (a raising `__iter__`, say) propagates unchanged. CPython prints the
+ *   type's `tp_name`, which the Limited API does not expose;
+ *   `pycc_ext_obj_unpack_type_name` rebuilds it (CPython's `%.200s`
+ *   truncation of a longer name is not mimicked);
+ * - fewer than `n` items is `ValueError` "not enough values to unpack
+ *   (expected n, got i)";
+ * - an `n + 1`-th item is `ValueError` "too many values to unpack
+ *   (expected n)". From CPython 3.14 the interpreter appends ", got K" when
+ *   `o` is an exact `list`, `tuple` or `dict`, whose size it can read
+ *   without consuming anything; this helper does the same when the running
+ *   interpreter is 3.14 or newer (`Py_Version`), so the message matches the
+ *   host's own byte for byte;
+ * - an exception raised by `__next__` propagates unchanged.
+ *
+ * # Ownership
+ *
+ * An exact `tuple` of exactly `n` items -- the common case, and lark's
+ * parse-table entries -- is returned itself with one new reference: a
+ * tuple is immutable, so the items read back from it are the ones
+ * iteration would have produced, and no allocation is made. Every other
+ * value is iterated into a fresh tuple. The iterator and every item
+ * fetched so far are released on each failing exit; on success the
+ * iterator is released and the items are owned by the returned tuple. The
+ * extra item fetched to detect "too many" is released at once. The
+ * returned reference joins the #1092 leak-only set like every other object
+ * result. `PyTuple_New` plus `PyTuple_SetItem` (which steals) build the
+ * fresh tuple, both in the Limited API.
+ *
+ * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents;
+ * `n` is guarded with it, codegen only ever emitting a positive arity.
+ */
+PyObject *pycc_ext_obj_unpack(PyObject *o, long long n)
+{
+    PyObject *iter;
+    PyObject *items;
+    PyObject *item;
+    PyObject *type_name;
+    Py_ssize_t index;
+    Py_ssize_t size;
+
+    if (o == NULL || n < 1) {
+        PyErr_SetString(PyExc_SystemError, "pycc_ext_obj_unpack called with an invalid argument");
+        return NULL;
+    }
+    if (PyTuple_CheckExact(o) && PyTuple_Size(o) == (Py_ssize_t)n) {
+        return Py_NewRef(o);
+    }
+    iter = PyObject_GetIter(o);
+    if (iter == NULL) {
+        if (PyErr_ExceptionMatches(PyExc_TypeError)
+            && PyType_GetSlot(Py_TYPE(o), Py_tp_iter) == NULL && !PySequence_Check(o)) {
+            type_name = pycc_ext_obj_unpack_type_name(Py_TYPE(o));
+            if (type_name != NULL) {
+                PyErr_Format(PyExc_TypeError, "cannot unpack non-iterable %U object", type_name);
+                Py_DECREF(type_name);
+            }
+        }
+        return NULL;
+    }
+    items = PyTuple_New((Py_ssize_t)n);
+    if (items == NULL) {
+        Py_DECREF(iter);
+        return NULL;
+    }
+    for (index = 0; index < (Py_ssize_t)n; index++) {
+        item = PyIter_Next(iter);
+        if (item == NULL) {
+            if (!PyErr_Occurred()) {
+                PyErr_Format(PyExc_ValueError,
+                             "not enough values to unpack (expected %zd, got %zd)",
+                             (Py_ssize_t)n, index);
+            }
+            Py_DECREF(items);
+            Py_DECREF(iter);
+            return NULL;
+        }
+        PyTuple_SetItem(items, index, item);
+    }
+    item = PyIter_Next(iter);
+    Py_DECREF(iter);
+    if (item != NULL) {
+        Py_DECREF(item);
+        size = -1;
+        if (Py_Version >= 0x030E0000) {
+            if (PyList_CheckExact(o)) {
+                size = PyList_Size(o);
+            } else if (PyTuple_CheckExact(o)) {
+                size = PyTuple_Size(o);
+            } else if (PyDict_CheckExact(o)) {
+                size = PyDict_Size(o);
+            }
+        }
+        if (size >= 0) {
+            PyErr_Format(PyExc_ValueError,
+                         "too many values to unpack (expected %zd, got %zd)", (Py_ssize_t)n,
+                         size);
+        } else {
+            PyErr_Format(PyExc_ValueError, "too many values to unpack (expected %zd)",
+                         (Py_ssize_t)n);
+        }
+        Py_DECREF(items);
+        return NULL;
+    }
+    if (PyErr_Occurred()) {
+        Py_DECREF(items);
+        return NULL;
+    }
+    return items;
+}
+
+/*
  * The host-side carrier for a compiled instance (#1145): one CPython object
  * per `mod.Class(...)`, holding nothing but the opaque `PyInstanceObj *`
  * that every compiled method of that class takes as its receiver.

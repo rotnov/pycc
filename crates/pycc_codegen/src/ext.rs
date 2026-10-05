@@ -475,6 +475,17 @@ pub const EXT_OBJ_FORMAT_SYMBOL: &str = "pycc_ext_obj_format";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL: &str = "pycc_ext_obj_unpack_float_tuple";
 
+/// The fixed C shim's tuple-unpacking helper (Part 1 of #891): it takes a
+/// borrowed `PyObject *` and the target count `n`, and returns a *new*
+/// reference to a `tuple` of exactly `n` items taken from the object by
+/// CPython's own unpack protocol, or `NULL` with CPython's own exception
+/// set -- `TypeError` for a non-iterable, `ValueError` for too many or too
+/// few values. The tuple is bound to the unpacking temporary and leaked on
+/// the #1092 leak-only rule, like every other object result.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_UNPACK_SYMBOL: &str = "pycc_ext_obj_unpack";
+
 /// The C-legal spelling of a possibly-dotted pycc name.
 ///
 /// A method reaches MIR under a dotted name (`Grid.scale.static`), and two

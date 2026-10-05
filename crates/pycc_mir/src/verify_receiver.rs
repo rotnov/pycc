@@ -394,6 +394,7 @@ impl Verifier<'_> {
             }
             | MirExpr::InstanceHash { operand: inner, .. }
             | MirExpr::ObjUnpackFloatTuple { base: inner, .. }
+            | MirExpr::ObjUnpack { value: inner, .. }
             | MirExpr::NamedExpr { value: inner, .. } => self.expr(inner),
             MirExpr::SetAdd { value, ops, .. } => {
                 if let Some(ops) = ops {

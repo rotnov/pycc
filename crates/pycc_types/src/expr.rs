@@ -283,6 +283,9 @@ pub(crate) fn infer_expr_in(
         HirExpr::IfExp { test, body, orelse } => {
             crate::if_exp::infer_if_exp(env, local_names, test, body, orelse)
         }
+        HirExpr::Unpack { value, arity } => {
+            crate::unpack::infer_unpack(env, local_names, value, *arity)
+        }
         HirExpr::BinOp { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;

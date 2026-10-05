@@ -606,14 +606,12 @@ fn assigning_to_an_attribute_target_propagates_an_unsupported_base_expression() 
 }
 
 #[test]
-fn assigning_to_a_tuple_unpacking_target_is_unsupported() {
-    // The remaining assignment-target shape this file still rejects
-    // after `Expr::Name`/`Expr::Subscript`/`Expr::Attribute` are all
-    // now recognized: multi-target unpacking (`a, b = ...`) has no HIR
-    // shape at all yet.
+fn a_starred_tuple_unpacking_target_is_unsupported() {
+    // Part 1 of #891 admits a flat tuple of bare names (see
+    // `stmt/unpack/tests.rs`); a starred element is left to a later part.
     assert_capability_error_message(
-        "a, b = 1, 2\n",
-        "only assigning to a bare name is supported so far",
+        "a, *b = 1, 2\n",
+        "a starred target (`*rest`) in a tuple-unpacking assignment is not supported yet",
     );
 }
 
@@ -6249,29 +6247,31 @@ fn a_bytes_annotation_names_its_kind() {
 }
 
 #[test]
-fn a_tuple_target_inside_a_chained_assignment_names_its_kind() {
-    // #1213: each piece of a chain goes through the single-target arm, so a
-    // tuple piece keeps that arm's refusal, spanned on the tuple itself.
+fn a_tuple_target_inside_a_chained_assignment_keeps_the_unpacking_refusals() {
+    // #1213: each piece of a chain is lowered on its own, so a tuple piece
+    // goes through the unpacking lowering (Part 1 of #891) and keeps its
+    // refusals, spanned on the refused element itself.
     assert_capability_error(
-        "a = b, c = t\n",
-        "only assigning to a bare name is supported so far, got a tuple",
-        Span::new(4, 8),
+        "a = b, c.d = t\n",
+        "only bare-name targets in a tuple-unpacking assignment are supported so far, \
+         got an attribute expression (`obj.attr`)",
+        Span::new(7, 10),
     );
 }
 
 #[test]
-fn a_tuple_assignment_target_names_its_kind() {
+fn a_nested_unpacking_target_names_its_kind() {
     assert_capability_error_message(
-        "a, b = 1, 2\n",
-        "only assigning to a bare name is supported so far, got a tuple",
+        "a, (b, c) = 1, (2, 3)\n",
+        "a nested target (`a, (b, c) = ...`) in a tuple-unpacking assignment is not supported yet",
     );
 }
 
 #[test]
-fn a_list_assignment_target_names_its_kind() {
+fn a_subscript_unpacking_target_names_its_kind() {
     assert_capability_error_message(
-        "[a, b] = [1, 2]\n",
-        "only assigning to a bare name is supported so far, got a list display (`[...]`)",
+        "[a, d[0]] = [1, 2]\n",
+        "only bare-name targets in a tuple-unpacking assignment are supported so far, got",
     );
 }
 
@@ -6428,7 +6428,7 @@ fn no_capability_message_renders_an_ast_debug_dump() {
     for source in [
         "import typing\ndef f(x: typing.Any) -> int:\n    return 1\n",
         "class C:\n    a = b = 1\n",
-        "a, b = 1, 2\n",
+        "a, o.x = 1, 2\n",
         "class C:\n    def __init__(self) -> None:\n        self.x: int = 1\n",
         "for a, b in pairs:\n    pass\n",
         "for x in [1]:\n    pass\n",

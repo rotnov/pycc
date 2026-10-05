@@ -99,6 +99,7 @@ mod exception;
 mod for_loop;
 mod match_stmt;
 mod type_checking;
+mod unpack;
 mod unsupported;
 
 #[cfg(test)]

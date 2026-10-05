@@ -473,6 +473,22 @@ pub enum HirExpr {
         body: Box<HirExpr>,
         orelse: Box<HirExpr>,
     },
+    /// The value of a tuple-unpacking assignment `t1, ..., tn = value`
+    /// (Part 1 of #891), checked to hold exactly `arity` items.
+    ///
+    /// Never written by a user: `crate::stmt::unpack` binds it to a
+    /// synthesized temporary and assigns each target from that temporary's
+    /// literal-index subscript, so every binding pass sees ordinary
+    /// `HirStmt::Assign`s. `pycc_types` admits a `tuple[...]` of exactly
+    /// `arity` elements (the node is that tuple itself) and a CPython
+    /// `object`, which CPython's unpack protocol turns into a fresh `tuple`
+    /// of exactly `arity` items at run time or raises `ValueError` /
+    /// `TypeError`. `docs/TYPE_SYSTEM.md`'s "Tuple-unpacking assignment"
+    /// section owns the rule.
+    Unpack {
+        value: Box<HirExpr>,
+        arity: usize,
+    },
     FString(Vec<FStringPart>),
     /// `[e1, e2, ...]`. Element homogeneity is `pycc_types`' job, not this
     /// lowering step's -- HIR only records the syntactic shape (D-105).
@@ -620,8 +636,8 @@ pub enum HirExpr {
     /// variant only records the syntactic shape.
     ///
     /// Only a parenthesized/bare tuple literal (`(1, 2)`, `1, 2`) lowers to
-    /// this form. Tuple-unpacking assignment (`a, b = t`) is a distinct,
-    /// deferred capability (D-116) with no HIR shape of its own yet.
+    /// this form. Tuple-unpacking assignment (`a, b = t`) is a distinct
+    /// shape: its value lowers to [`HirExpr::Unpack`] (Part 1 of #891).
     TupleLiteral(Vec<HirExpr>),
     /// `list.pop()` (PR-12, D-119): a hand-recognized special form, mirroring
     /// `ListAppend`'s own shape exactly (no general method-call dispatch).
