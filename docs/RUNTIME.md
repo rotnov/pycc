@@ -160,6 +160,11 @@ class's source name followed by each slot name, NUL-separated (a
 monomorphised generic class passes its generic class's name, and an enum
 member, which has no slots, passes `NULL`/`0`). The generated `--ext`
 `tp_init` passes the same descriptor (D-154's 2026-10-05 amendment).
+Since [#1389](https://github.com/rotnov/pycc/issues/1389) a slot may also
+hold an instance of a class of this program: the slot word is that
+`PyInstanceObj` pointer. `pycc_rt` never frees an instance, so the store does
+not release the previous word and the read takes no reference -- every read
+aliases the stored instance, as in CPython (`tests/issue_1389_instance_slots.rs`).
 
 **The `assert` statement ([#1369](https://github.com/rotnov/pycc/issues/1369)).**
 `assert test, msg` is lowered in HIR (`crates/pycc_hir/src/stmt/assert_stmt.rs`)
