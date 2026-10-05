@@ -76,8 +76,9 @@ fn a_native_base_keeps_its_t0033() {
 
 /// Part 2c of #1371: `del o[a:b:c]` on an object is admitted with every
 /// bound shape, in a module body and in a function body, including inside
-/// an unannotated helper (the constraint solver's arm) and a generic
-/// function (the monomorphizer's rewrite).
+/// an unannotated helper (the constraint solver's arm, which must also
+/// walk the operands so a helper called from one is inferred) and a
+/// generic function (the monomorphizer's rewrite).
 #[test]
 fn an_object_slice_delete_is_admitted() {
     for source in [
@@ -91,6 +92,9 @@ fn an_object_slice_delete_is_admitted() {
         "def f(size: int) -> None:\n    o = numpy.pi\n    del o[-size:]\n",
         "def f(size: int) -> int:\n    o = numpy.pi\n    del o[-size:]\n    return size\n",
         "def _h():\n    del numpy.pi[1:]\n\n\n_h()\n",
+        "def _f(x):\n    return x\n\n\ndel numpy.pi[_f(1):_f(2):_f(1)]\n",
+        "def _f(x):\n    return x\n\n\ndel _f(numpy.pi)[1:]\n",
+        "def _h(n):\n    del numpy.pi[n:]\n\n\n_h(1)\n",
         "def g[T](x: T) -> T:\n    del numpy.pi[1:]\n    return x\n\n\nn = g(1)\n",
     ] {
         if let Err(diagnostics) = check_foreign(source) {

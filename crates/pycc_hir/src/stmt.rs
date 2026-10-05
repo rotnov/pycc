@@ -726,13 +726,18 @@ pub(crate) fn lower_stmt(
     };
     if violates_walrus_placement {
         return Err(unsupported(
-            "a walrus assignment (`:=`) is only supported in an `if`/`while` \
-             condition or as a bare expression statement (#774)",
+            WALRUS_PLACEMENT_MESSAGE,
             pycc_ast::stmt_range(stmt),
         ));
     }
     Ok(lowered)
 }
+
+/// PEP 572 (#774): the one wording of the walrus-placement refusal, shared
+/// by `lower_stmt` and `del::lower_delete` (a walrus in a slice `del`
+/// target, Part 2c of #1371).
+pub(crate) const WALRUS_PLACEMENT_MESSAGE: &str = "a walrus assignment (`:=`) is only supported in an `if`/`while` \
+     condition or as a bare expression statement (#774)";
 
 /// PEP 572 (#774): `CompIter`'s own `contains_named_expr` counterpart --
 /// `CompIter::Range`'s `start`/`stop`/`step` are ordinary `HirExpr` fields

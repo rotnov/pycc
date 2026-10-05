@@ -95,8 +95,7 @@ fn lower_target(
             let mut operands = std::iter::once(&base).chain(start.iter().chain(&stop).chain(&step));
             if operands.any(|operand| crate::expr::contains_named_expr(operand)) {
                 return Err(unsupported(
-                    "a walrus assignment (`:=`) is only supported in an `if`/`while` \
-                     condition or as a bare expression statement (#774)",
+                    super::WALRUS_PLACEMENT_MESSAGE,
                     subscript.range,
                 ));
             }
