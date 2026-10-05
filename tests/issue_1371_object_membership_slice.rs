@@ -208,19 +208,14 @@ fn the_shapes_outside_part_2b_are_refused() {
             "I0404",
             "slicing a CPython object with a `None` bound",
         ),
-        // Only the slice load is admitted: a store and a `del` keep the
-        // HIR's own refusals.
+        // A slice store keeps the HIR's own refusal. A slice `del` was a
+        // row here until Part 2c of #1371 admitted it
+        // (`tests/issue_1371_object_slice_del.rs`).
         (
             "obj_slice_store",
             "callbacks[1:2] = 3\n",
             "C0001",
             "a slice (`a:b`)",
-        ),
-        (
-            "obj_slice_del",
-            "del callbacks[1:]\n",
-            "C0001",
-            "a `del` of a slice",
         ),
     ] {
         assert_one_error(tag, &format!("{HEAD}{tail}"), code, needle);

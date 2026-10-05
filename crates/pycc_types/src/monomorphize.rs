@@ -823,6 +823,12 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             }
             infer_expr_in(env, local_names, expr)
         }
+        HirExpr::ReceiverClassCall { args } => {
+            for arg in args.iter_mut() {
+                rewrite_generic_calls_in_expr(env, local_names, arg, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
         // Issue #1188: rewrite inside the wrapped method call exactly as the
         // `MethodCall` arm does, but infer the *whole* node, so the result
         // follows the receiver's reading -- inferring `call` alone would
@@ -1114,6 +1120,21 @@ fn rewrite_generic_calls_in_stmt(
             Ok(())
         }
         HirStmt::Delete { .. } | HirStmt::ForeignImport { .. } => Ok(()),
+        // Part 2c of #1371: a slice `del` reads its base and bounds, so a
+        // generic call in any of them is rewritten like any other read.
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            rewrite_generic_calls_in_expr(env, local_names, base, instantiations, seen)?;
+            for bound in [start, stop, step].into_iter().flatten() {
+                rewrite_generic_calls_in_expr(env, local_names, bound, instantiations, seen)?;
+            }
+            Ok(())
+        }
         HirStmt::Match { subject, cases } => {
             rewrite_generic_calls_in_expr(env, local_names, subject, instantiations, seen)?;
             for case in cases.iter_mut() {
@@ -1387,6 +1408,11 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
                 collect_generic_class_instantiations_from_expr(arg, out);
             }
         }
+        HirExpr::ReceiverClassCall { args } => {
+            for arg in args {
+                collect_generic_class_instantiations_from_expr(arg, out);
+            }
+        }
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             collect_generic_class_instantiations_from_expr(call, out);
         }
@@ -1519,6 +1545,18 @@ pub(crate) fn collect_generic_class_instantiations_from_stmt(
             }
         }
         HirStmt::Return(None) | HirStmt::Delete { .. } | HirStmt::ForeignImport { .. } => {}
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            collect_generic_class_instantiations_from_expr(base, out);
+            for bound in [start, stop, step].into_iter().flatten() {
+                collect_generic_class_instantiations_from_expr(bound, out);
+            }
+        }
         HirStmt::Return(Some(expr)) => collect_generic_class_instantiations_from_expr(expr, out),
         HirStmt::AttrSet { base, value, .. } => {
             collect_generic_class_instantiations_from_expr(base, out);
@@ -2553,6 +2591,27 @@ fn rewrite_protocol_calls_in_stmt(
                 seen,
             );
         }
+        // Part 2c of #1371: a slice `del` reads its base and bounds; an
+        // unrewritten protocol call there would dangle once the original
+        // function item is dropped.
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            for operand in std::iter::once(base).chain([start, stop, step].into_iter().flatten()) {
+                rewrite_protocol_calls_in_expr(
+                    operand,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
+            }
+        }
         // #1254: the loop variable is bound in a scoped clone of `env`
         // before `cond` and the elements are walked, so a protocol call
         // whose argument reads it resolves; before, `infer_expr_in` failed
@@ -2762,6 +2821,21 @@ fn rewrite_protocol_calls_in_expr(
             for part in [test, body, orelse] {
                 rewrite_protocol_calls_in_expr(
                     part,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
+            }
+        }
+        // #1411: without this arm the `_ => {}` catch-all below would leave
+        // a protocol-typed call in the constructor arguments of
+        // `type(self)(...)` unspecialized.
+        HirExpr::ReceiverClassCall { args } => {
+            for arg in args.iter_mut() {
+                rewrite_protocol_calls_in_expr(
+                    arg,
                     protocol_funcs,
                     env,
                     local_names,

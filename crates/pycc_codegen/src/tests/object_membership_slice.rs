@@ -1,6 +1,7 @@
 //! Part 2b of #1371: `MirExpr::ObjContains` (`foreign_compare.rs`) and
-//! `MirExpr::ObjSlice` (`foreign_call.rs`) emission, pinned on the LLVM IR
-//! of an `ext` object.
+//! `MirExpr::ObjSlice` (`foreign_slice.rs`) emission, and Part 2c's
+//! `MirStmt::ObjDelSlice` (`foreign_slice.rs`), pinned on the LLVM IR of an
+//! `ext` object.
 
 use super::*;
 use pycc_mir::CmpOpKind;
@@ -178,5 +179,93 @@ fn an_obj_compare_carrying_membership_is_an_internal_error() {
             right: Box::new(numpy_pi()),
         }],
         |_| {},
+    );
+}
+
+fn obj_del_slice(start: Option<MirExpr>, stop: Option<MirExpr>, step: Option<MirExpr>) -> MirStmt {
+    MirStmt::ObjDelSlice {
+        base: numpy_pi(),
+        start,
+        stop,
+        step,
+    }
+}
+
+/// Part 2c of #1371: each bound shape passes its own `present` mask to one
+/// `i32`-returning `pycc_ext_obj_delslice` call, with `ptr null` for an
+/// absent bound, and a negative status takes the failure edge.
+#[test]
+fn a_slice_delete_is_one_delslice_call_with_a_present_mask_per_bound_shape() {
+    compile_ext_items_checking_ir(
+        "obj_del_slice",
+        with_foreign_numpy(
+            [
+                obj_del_slice(None, None, None),
+                obj_del_slice(Some(MirExpr::IntLiteral(1)), None, None),
+                obj_del_slice(None, Some(MirExpr::IntLiteral(-2)), None),
+                obj_del_slice(
+                    Some(MirExpr::IntLiteral(1)),
+                    None,
+                    Some(MirExpr::IntLiteral(2)),
+                ),
+                obj_del_slice(
+                    Some(numpy_pi()),
+                    Some(MirExpr::StringLiteral("a".to_string())),
+                    Some(MirExpr::FloatLiteral(1.5)),
+                ),
+            ]
+            .into_iter()
+            .map(MirItem::TopLevelStmt)
+            .collect(),
+        ),
+        |ir| {
+            for present in [0, 1, 2, 5, 7] {
+                let needle = format!("i32 {present})");
+                assert!(
+                    ir.lines()
+                        .any(|line| line.contains("call i32 @pycc_ext_obj_delslice(")
+                            && line.contains(&needle)),
+                    "{needle}: {ir}"
+                );
+            }
+            assert!(
+                ir.lines()
+                    .any(|line| line.contains("@pycc_ext_obj_delslice(")
+                        && line.contains("ptr null, ptr null, ptr null, i32 0)")),
+                "{ir}"
+            );
+            assert!(ir.contains("foreign_del_slice_failed"), "{ir}");
+            assert!(!ir.contains("@pycc_ext_obj_getslice("), "{ir}");
+            assert!(!ir.contains("DecRef"), "{ir}");
+        },
+    );
+}
+
+/// In a function body the deletion bridges its failure, and `int`
+/// temporary bounds are protected across the later bounds and released
+/// afterwards.
+#[test]
+fn a_function_body_slice_delete_bridges_its_failure_with_int_temporaries() {
+    let sum = || MirExpr::BinOp {
+        op: pycc_mir::BinOpKind::Add,
+        left: Box::new(MirExpr::IntLiteral(1)),
+        right: Box::new(MirExpr::IntLiteral(2)),
+        ty: Ty::Int,
+    };
+    compile_ext_items_checking_ir(
+        "obj_del_slice_function",
+        with_foreign_numpy(vec![MirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                obj_del_slice(Some(sum()), None, Some(sum())),
+                MirStmt::Return(None),
+            ],
+        }]),
+        |ir| {
+            assert!(ir.contains("@pycc_ext_obj_delslice("), "{ir}");
+            assert!(ir.contains("@pycc_ext_obj_error_bridge("), "{ir}");
+        },
     );
 }

@@ -1953,8 +1953,20 @@ pub(crate) fn collect_expr_constraints(
         // An admitted container reading is collected exactly as the
         // container node it would have been (so a `ListPop` still yields its
         // element type); a refused one is collected as the method call.
+        // Issue #1095: so is an admitted one whose bare-name receiver is
+        // bound to a concrete `object` term, so `o.pop()` answers `object`
+        // on the `MethodCall` arm's own reasoning.
         HirExpr::ReceiverDispatchedCall { call, container } => {
             let reading = match container {
+                pycc_hir::ContainerFallback::Admitted
+                    if matches!(
+                        call.method_receiver(),
+                        Some((HirExpr::Name(name), _))
+                            if matches!(env.bindings.get(name), Some(Ok(Ty::Object)))
+                    ) =>
+                {
+                    None
+                }
                 pycc_hir::ContainerFallback::Admitted => call.container_form(),
                 pycc_hir::ContainerFallback::Refused(_) => None,
             };
@@ -1996,6 +2008,16 @@ pub(crate) fn collect_expr_constraints(
                 collect_expr_constraints(signatures, parents, concrete, deferred, env, arg)?;
             }
             Ok(object_lift::method_call_on_object(callee_term.as_ref()))
+        }
+        // #1411: `type(self)(args)` constructs the class `self` is typed
+        // as, so its term is `self`'s own; an unbound `self` (a
+        // `@classmethod` or `@staticmethod`) offers none and the check
+        // phase refuses the call (`class::receiver_class_call`).
+        HirExpr::ReceiverClassCall { args } => {
+            for arg in args {
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, arg)?;
+            }
+            Ok(env.bindings.get("self").cloned())
         }
         // #433: `Super` carries no sub-expressions to recurse into and
         // produces no unification term — it is a compile-time marker only
@@ -2239,7 +2261,8 @@ fn bind_named_expr_targets(
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, call)
         }
-        HirExpr::GenericClassInstantiate { args, .. } => {
+        // #1411: `type(self)(args)` walks its arguments the same way.
+        HirExpr::GenericClassInstantiate { args, .. } | HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 bind_named_expr_targets(signatures, parents, concrete, deferred, env, arg)?;
             }
@@ -2557,13 +2580,36 @@ pub(crate) fn collect_block_constraints(
             // separate, independently-testable follow-up if solver-scope
             // coverage of this gap is wanted later.
             // #1244: a `del` binds nothing to infer; the checker owns its
-            // binding-state rule.
-            // A nested foreign import (#1291) needs no constraint: its names
+            // binding-state rule. A nested foreign import (#1291) needs no constraint: its names
             // are seeded as `Ty::Object` globals position-blind, like a
             // top-level foreign import's (`constraints/signatures.rs`).
             HirStmt::AnnAssign { value: None, .. }
             | HirStmt::Delete { .. }
             | HirStmt::ForeignImport { .. } => {}
+            // Part 2c of #1371: a slice `del` binds nothing, but its base and
+            // bounds are ordinary reads -- a call to an unannotated helper
+            // in one still needs its call-site constraints. `pycc_hir`
+            // refuses a walrus in them, so there is nothing to pre-bind.
+            HirStmt::DeleteSlice {
+                base,
+                start,
+                stop,
+                step,
+                ..
+            } => {
+                for operand in std::iter::once(&**base)
+                    .chain([start, stop, step].into_iter().flatten().map(|b| &**b))
+                {
+                    collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.deferred,
+                        env,
+                        operand,
+                    )?;
+                }
+            }
             HirStmt::ExprStmt(expr) => {
                 // PEP 572 (#774), deep-review follow-up (round 4): bind
                 // before unifying -- see `bind_named_expr_targets`'s own
@@ -3474,6 +3520,7 @@ pub(crate) fn contains_return(body: &[HirStmt]) -> bool {
         | HirStmt::SetCompAssign { .. }
         | HirStmt::DictCompAssign { .. }
         | HirStmt::Delete { .. }
+        | HirStmt::DeleteSlice { .. }
         | HirStmt::ForeignImport { .. }
         | HirStmt::Raise { .. } => false,
         HirStmt::Try {
@@ -3524,7 +3571,8 @@ pub(crate) fn introduces_bindings(body: &[HirStmt]) -> bool {
             introduces_bindings(body)
         }
         HirStmt::Match { cases, .. } => cases.iter().any(|case| introduces_bindings(&case.body)),
-        HirStmt::Return(_) | HirStmt::ExprStmt(_) => false,
+        // A slice `del` (Part 2c of #1371) changes no binding.
+        HirStmt::Return(_) | HirStmt::ExprStmt(_) | HirStmt::DeleteSlice { .. } => false,
         HirStmt::Try {
             body,
             handlers,

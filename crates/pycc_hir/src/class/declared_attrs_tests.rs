@@ -443,6 +443,8 @@ fn value_less_class_var_and_final_are_not_declarations() {
         "Final",
         "Final[int]",
         "Annotated[Final[int], \"m\"]",
+        // Part 1 of #889: a quoted `Final` inside `Annotated` too.
+        "Annotated[\"Final[int]\", \"m\"]",
     ] {
         assert_eq!(c0001(&with_init(annotation)), no_value, "{annotation}");
     }

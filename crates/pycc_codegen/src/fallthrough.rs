@@ -76,6 +76,9 @@ pub(crate) fn block_always_terminates(body: &[MirStmt]) -> bool {
             // import either raises a pycc exception to the innermost target
             // (#1293) or returns from the entry point on its own edge.
             | MirStmt::ForeignImport { .. }
+            // Part 2c of #1371: a raising `__delitem__` leaves on the
+            // foreign-failure edge; the success path falls through.
+            | MirStmt::ObjDelSlice { .. }
             | MirStmt::AttrSet { .. } => false,
         };
         if terminates {

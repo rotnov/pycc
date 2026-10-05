@@ -194,6 +194,9 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
             callee: Box::new(recurse(*callee)),
             args: args.into_iter().map(recurse).collect(),
         },
+        HirExpr::ReceiverClassCall { args } => HirExpr::ReceiverClassCall {
+            args: args.into_iter().map(recurse).collect(),
+        },
         // #433: `Super` carries no names to rename — it is a compile-time
         // marker, not a value with sub-expressions.
         HirExpr::Super => expr,

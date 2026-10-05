@@ -51,7 +51,9 @@ pub(super) fn instance_declaration_name(ann: &StmtAnnAssign) -> Option<&str> {
     };
     let plain = ann.value.is_none()
         && super::attrs::strip_class_var(&ann.annotation).is_ok_and(|s| !s.is_class_var)
-        && !is_final_wrapper(&ann.annotation);
+        // Part 1 of #889: a `Final` quoted inside `Annotated[...]` is seen
+        // exactly where its unquoted spelling is.
+        && !is_final_wrapper(&pycc_ast::unquote_nested_string_annotations(&ann.annotation));
     plain.then_some(target.id.as_str())
 }
 

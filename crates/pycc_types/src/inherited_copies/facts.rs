@@ -5,7 +5,8 @@
 //! sub-statement is visited, including lambda-free nested shapes such as
 //! comprehensions and f-string interpolations, and a receiver use that is
 //! not recognised as an attribute base, a `super()` access, an
-//! `isinstance`/`issubclass` subject, or a `cls(...)` callee counts as a
+//! `isinstance`/`issubclass` subject, a `cls(...)` callee or a
+//! `type(self)(...)` construction counts as a
 //! *bare* use. Over-approximating can only add a copy (or turn an escape
 //! into an honest refusal), never lose one.
 
@@ -25,7 +26,8 @@ pub(crate) struct BodyFacts {
     pub(crate) super_refs: BTreeSet<String>,
     /// Classes named by `isinstance(self, T)` / `issubclass(cls, T)`.
     pub(crate) receiver_type_tests: BTreeSet<String>,
-    /// Whether the body constructs through its receiver (`cls(...)`).
+    /// Whether the body constructs through its receiver (`cls(...)` or
+    /// `type(self)(...)`).
     pub(crate) constructs_via_receiver: bool,
     /// Whether the receiver is used other than as an attribute base, a
     /// `super()` access, a type-test subject, or a constructor callee.
@@ -233,6 +235,18 @@ impl<'a> Walker<'a> {
                 }
             }
             HirStmt::Delete { name } => self.name_use(name),
+            HirStmt::DeleteSlice {
+                base,
+                start,
+                stop,
+                step,
+                ..
+            } => {
+                self.expr(base);
+                for bound in [start, stop, step].into_iter().flatten() {
+                    self.expr(bound);
+                }
+            }
             HirStmt::ForeignImport { .. } => {}
         }
     }
@@ -386,6 +400,19 @@ impl<'a> Walker<'a> {
             }
             HirExpr::ExprCall { callee, args } => {
                 self.expr(callee);
+                for arg in args {
+                    self.expr(arg);
+                }
+            }
+            // #1411: `type(self)(...)` constructs through the receiver
+            // exactly as `cls(...)` does, so a subclass needs its own copy.
+            // A body walked without a receiver (an item that is not an
+            // instance or class method, such as a `@staticmethod` whose
+            // `self` parameter is an ordinary one) gets no copy from it.
+            HirExpr::ReceiverClassCall { args } => {
+                if self.receiver.is_some() {
+                    self.facts.constructs_via_receiver = true;
+                }
                 for arg in args {
                     self.expr(arg);
                 }

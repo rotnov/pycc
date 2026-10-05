@@ -321,8 +321,11 @@ scan uses the AST crate's generic visitor, so every position a name can be
 spelled in counts: a base class, a `raise` operand, an `except` type, an
 annotation, an `isinstance`/`issubclass` argument, an attribute access, a
 comprehension, an f-string interpolation, a decorator, at any nesting depth.
-A string forward reference (`x: "ValueError"`) does not count, because
-annotation lowering does not resolve string annotations either.
+A string annotation counts wherever annotation lowering may resolve it
+(Part 1 of [#889](https://github.com/rotnov/pycc/issues/889)): at the top of
+an annotation (`x: "ValueError"`), or nested inside an annotation or a type
+alias value (`list["ValueError"]`). A string anywhere else
+(`x = "ValueError"`) does not count.
 
 *The module's own top level must bind none of the builtin exception names.* That gate is
 all-or-nothing: a module whose top level binds any of them (a `class`, `def`,
@@ -1491,6 +1494,19 @@ one divergence: an `int` item or bound outside the inline range reaching
 `pycc_ext_obj_pack_int` raises `OverflowError` where CPython would test
 membership or slice normally, until
 [#1040](https://github.com/rotnov/pycc/issues/1040) widens the packer.
+
+**A slice deletion produces nothing.** Part 2c of
+[#1371](https://github.com/rotnov/pycc/issues/1371) adds
+`pycc_ext_obj_delslice(o, start, stop, step, present)` for `del o[a:b:c]`.
+It builds the `slice` exactly as `pycc_ext_obj_getslice` does (the two share
+the static `pycc_ext_obj_slice_of`), calls `PyObject_DelItem`, and returns
+`0`, or `-1` with the exception set, which is routed to the statement's
+failure edge. The base is borrowed, each present bound is consumed on every
+path, and the `slice` is released before the helper returns, so the
+deletion adds nothing to the leaked set. The hosted test runs it 200 times
+inside a function and pins `sys.getrefcount` of the list and of a large `int`
+bound unchanged afterwards (`tests/issue_1371_object_slice_del.rs`). It
+shares the packers' `OverflowError` divergence.
 
 **A list display bound to an object slot is one more producer.** Part 2d of
 [#1371](https://github.com/rotnov/pycc/issues/1371) builds `x: object = [a,

@@ -128,7 +128,7 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // Part 2b of #1371: `PySequence_Contains` runs `__contains__` (or
         // iteration), and `PyObject_GetItem` on a slice runs `__getitem__`;
         // either may raise. `foreign_compare::emit_contains` owns the `-1`
-        // check and `foreign_call::emit_slice` the `NULL` check.
+        // check and `foreign_slice::emit_slice` the `NULL` check.
         | MirExpr::ObjContains { .. }
         | MirExpr::ObjSlice { .. }
         // Part 2d of #1371: boxing an element or allocating the CPython

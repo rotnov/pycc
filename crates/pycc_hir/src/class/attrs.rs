@@ -201,7 +201,14 @@ pub(super) fn lower_class_attr(
         expr: annotation,
         is_class_var,
     } = stripped;
-    let (annotation, is_final) = strip_final(annotation)?;
+    // Part 1 of #889: the two nesting checks match by shape, so they read a
+    // copy with every nested string annotation unquoted --
+    // `ClassVar["Final[int]"]` fails exactly as `ClassVar[Final[int]]` does.
+    // The type itself is still resolved from the original, so its spans stay
+    // on the literal.
+    let unquoted = pycc_ast::unquote_nested_string_annotations(annotation);
+    let (unquoted_inner, is_final) = strip_final(&unquoted)?;
+    let (annotation, _) = strip_final(annotation)?;
     if is_final && is_class_var {
         return Err(unsupported(
             format!(
@@ -212,7 +219,7 @@ pub(super) fn lower_class_attr(
             ann.range,
         ));
     }
-    if is_final && annotation.is_some_and(is_class_var_annotation) {
+    if is_final && unquoted_inner.is_some_and(is_class_var_annotation) {
         return Err(unsupported(
             format!(
                 "`Final[ClassVar[...]]` on the class-level attribute `{attr_name}` is not a \
@@ -943,8 +950,8 @@ mod tests {
     #[test]
     fn a_final_wrapping_an_unsupported_annotation_shape_propagates() {
         assert_collision(
-            "class C:\n    X: Final[\"int\"] = 1\n",
-            "got a string literal",
+            "class C:\n    X: Final[b\"int\"] = 1\n",
+            "got a bytes literal",
         );
     }
 

@@ -109,7 +109,10 @@ fn check_annotation(annotation: &Expr, shadowed: &dyn Fn(&str) -> bool) -> Resul
         matches!(expr, Expr::Name(name)
             if names.contains(&name.id.as_str()) && !shadowed(name.id.as_str()))
     };
-    let inner = match annotation {
+    // Part 1 of #889: a string nested in the annotation (`list["str"]`)
+    // matches exactly where its unquoted spelling does.
+    let unquoted = pycc_ast::unquote_nested_string_annotations(annotation);
+    let inner = match &unquoted {
         Expr::Subscript(sub) if is_name(&sub.value, &["ClassVar"]) => sub.slice.as_ref(),
         other => other,
     };

@@ -6238,10 +6238,13 @@ fn an_attribute_annotation_names_its_kind() {
 }
 
 #[test]
-fn a_string_annotation_names_its_kind() {
+fn a_bytes_annotation_names_its_kind() {
+    // A *string* annotation no longer reaches the catch-all: it resolves
+    // like its unquoted spelling (Part 1 of #889). A bytes literal still
+    // does.
     assert_capability_error_message(
-        "def f(x: \"int\") -> int:\n    return x\n",
-        "only a bare name type annotation is supported so far, got a string literal",
+        "def f(x: b\"int\") -> int:\n    return x\n",
+        "only a bare name type annotation is supported so far, got a bytes literal",
     );
 }
 

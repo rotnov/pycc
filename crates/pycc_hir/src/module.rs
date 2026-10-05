@@ -270,6 +270,8 @@ pub fn lower_module(
     // `Ty::Object` (see `func::EXT_MODULE_MARKER`). Recorded as imported, so
     // `strip_imported` keeps it out of `HirModule::type_aliases`.
     if resolved.ext_module() {
+        // Issue #1095: any receiver in such a module may be an object.
+        state.signatures.admit_object_receivers();
         state.imported_alias_indices.push(state.aliases.len());
         state
             .aliases
@@ -698,6 +700,11 @@ fn lower_top_level_item<'a>(
         // `HirModule::type_aliases`: the name neither re-exports nor leaks,
         // while a D-135 alias built from it is an ordinary alias of `object`.
         for binding in &lowered.bindings {
+            // Issue #1095: from here on a container-named method call may
+            // have an object receiver, so it keeps both readings.
+            if matches!(binding, ImportBinding::Foreign { .. }) {
+                state.signatures.admit_object_receivers();
+            }
             if let ImportBinding::Foreign { local_name, .. } = binding
                 && !state.aliases.iter().any(|(name, _)| name == local_name)
             {
@@ -920,6 +927,15 @@ fn lower_top_level_item<'a>(
         ));
     }
     let imports_before_block = state.imports.len();
+    // Issue #1095: a foreign import nested in a module-level block binds an
+    // object receiver just as a top-level one does.
+    if block_imports
+        .bindings
+        .iter()
+        .any(|binding| matches!(binding, ImportBinding::Foreign { .. }))
+    {
+        state.signatures.admit_object_receivers();
+    }
     state.imports.extend(block_imports.bindings.iter().cloned());
     // #1213: a chained assignment expands into several statements, all
     // lowered before any is recorded, so an `Err` still records nothing.

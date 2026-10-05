@@ -989,6 +989,13 @@ fn a_slots_annotation_outside_the_admitted_spellings_is_refused() {
         "List[str]",
         "str",
         "ClassVar[tuple[str, ...]]",
+        // Part 1 of #889: a quoted spelling, at the top or nested, is
+        // admitted exactly where the unquoted one is.
+        "\"tuple[str, ...]\"",
+        "list[\"str\"]",
+        "tuple[\"str\", ...]",
+        "ClassVar[\"list[str]\"]",
+        "ClassVar['list[\"str\"]']",
     ] {
         let source = format!(
             "from typing import ClassVar, List, Tuple\n\n\nclass C:\n    __slots__: {ann} = ('a',)\n"
@@ -1004,6 +1011,8 @@ fn a_slots_annotation_outside_the_admitted_spellings_is_refused() {
         "list[int]",
         "ClassVar[int]",
         "Sequence[str]",
+        "list[\"int\"]",
+        "ClassVar[\"int\"]",
     ] {
         let source = format!("class C:\n    __slots__: {ann} = ('a',)\n");
         assert_eq!(c0001(&source), refused, "{ann}");

@@ -53,6 +53,17 @@ fn a_bare_receiver_use_and_a_receiver_construction_are_recorded() {
 }
 
 #[test]
+fn a_type_self_construction_is_recorded_only_with_a_receiver() {
+    let source = "class A:\n    def __init__(self, n: int) -> None:\n        self.n = n\n    \
+                  def again(self) -> int:\n        return type(self)(self.n).n\n";
+    let (facts, _) = walk(source, "A.again", Some("self"));
+    assert!(facts.constructs_via_receiver);
+    assert_eq!(facts.self_refs, set(&["n"]));
+    let (facts, _) = walk(source, "A.again", None);
+    assert!(!facts.constructs_via_receiver);
+}
+
+#[test]
 fn a_type_test_on_another_subject_is_only_an_observer() {
     let source = "class A:\n    pass\nclass B(A):\n    pass\n\
                   def f(x: A) -> bool:\n    return isinstance(x, B)\n";
