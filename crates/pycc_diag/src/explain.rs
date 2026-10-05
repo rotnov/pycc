@@ -1472,13 +1472,11 @@ generic class instantiation and refused by that path's own diagnostic. Storing t
 subscript (`o[k] = v`) or a slice (`o[a:b] = v`, `del o[a:b]`) and \
 iterating a direct call's result (`for x in o(...):`) are still refused \
 too, but by their own pre-existing `C0001` diagnostics rather than by \
-this code. A method named `append`, `pop`, \
-`get` or `add` is also still refused: container lowering claims those four \
-spellings before the foreign path sees them, so they do not reach it even \
-with admitted arguments. Since #1263 container lowering admits an \
-attribute receiver for `append`, `pop` and `get`, so one of those called on \
-an attribute of the object (`o.attr.append(v)`) is refused by this code; \
-`add` is still refused by `C0001`. In a module body every supported \
+this code. Since #1095 a method named `append`, `pop`, `get` or `add` is \
+an ordinary method call on the object too, whatever its arity \
+(`o.get(k)`, `o.attr.append(v)`): container lowering claims those four \
+spellings, but in a module that can hold an object it keeps the method \
+reading beside its own, and an object receiver takes that one. In a module body every supported \
 operation is admitted only *below the import*. Since #1316 and Part 1 of #1333 each \
 one except the `for` loop is also admitted inside a function body, and a \
 function may bind the object to a local name, return it and pass it to \

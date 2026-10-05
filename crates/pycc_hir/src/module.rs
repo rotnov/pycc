@@ -270,6 +270,8 @@ pub fn lower_module(
     // `Ty::Object` (see `func::EXT_MODULE_MARKER`). Recorded as imported, so
     // `strip_imported` keeps it out of `HirModule::type_aliases`.
     if resolved.ext_module() {
+        // Issue #1095: any receiver in such a module may be an object.
+        state.signatures.admit_object_receivers();
         state.imported_alias_indices.push(state.aliases.len());
         state
             .aliases
@@ -698,6 +700,11 @@ fn lower_top_level_item<'a>(
         // `HirModule::type_aliases`: the name neither re-exports nor leaks,
         // while a D-135 alias built from it is an ordinary alias of `object`.
         for binding in &lowered.bindings {
+            // Issue #1095: from here on a container-named method call may
+            // have an object receiver, so it keeps both readings.
+            if matches!(binding, ImportBinding::Foreign { .. }) {
+                state.signatures.admit_object_receivers();
+            }
             if let ImportBinding::Foreign { local_name, .. } = binding
                 && !state.aliases.iter().any(|(name, _)| name == local_name)
             {

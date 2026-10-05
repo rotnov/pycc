@@ -6,8 +6,10 @@
 //! type exists. That is exact in a module that cannot see a user class with a
 //! method of one of those names, and such a module keeps lowering exactly as
 //! before. In a module that can (`SignatureTable::dispatches_on_receiver`),
-//! the same spelling may equally be a call to the user's method, so this
-//! module lowers *both* readings and records them in one
+//! the same spelling may equally be a call to the user's method -- or, in a
+//! module that can hold a CPython object (an `ext` module or one with a
+//! foreign import, issue #1095), a foreign method call on that object -- so
+//! this module lowers *both* readings and records them in one
 //! [`HirExpr::ReceiverDispatchedCall`]. `pycc_types` and `pycc_mir` then pick
 //! a reading from the receiver's static type, through the one shared rule in
 //! [`receiver_takes_method_path`].
@@ -22,15 +24,16 @@ use pycc_diag::Diagnostic;
 pub(crate) const RECEIVER_DISPATCHED_NAMES: [&str; 4] = ["append", "pop", "get", "add"];
 
 /// Issue #1188: the method reading of a [`HirExpr::ReceiverDispatchedCall`]
-/// wins exactly when its receiver's static type is a user class or a
-/// protocol. Every other receiver type -- a `list`, `dict` or `set`, a
-/// foreign `object`, a scalar -- takes the container reading, which is where
-/// its diagnostics have always come from.
+/// wins exactly when its receiver's static type is a user class, a
+/// protocol, or (issue #1095) a CPython object, whose method call is the
+/// foreign one (`pycc_ext_obj_call`) whatever the method's name. Every other
+/// receiver type -- a `list`, `dict` or `set`, a scalar -- takes the
+/// container reading, which is where its diagnostics have always come from.
 ///
 /// `pycc_types` and `pycc_mir` both call this, so the two phases cannot
 /// disagree about which reading a receiver of a given type takes.
 pub fn receiver_takes_method_path(receiver_ty: &Ty) -> bool {
-    matches!(receiver_ty, Ty::Instance(_) | Ty::Protocol(_))
+    matches!(receiver_ty, Ty::Instance(_) | Ty::Protocol(_) | Ty::Object)
 }
 
 impl HirExpr {
