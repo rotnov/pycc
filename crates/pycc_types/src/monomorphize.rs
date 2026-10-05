@@ -2777,10 +2777,9 @@ fn rewrite_protocol_calls_in_expr(
                 );
             }
         }
-        // Part 2a of #1371: like `IfExp` above, without this arm the
-        // `_ => {}` catch-all below would leave a protocol-typed call in the
-        // arguments of `table[k](args)` unspecialized.
-        // #1411: likewise for the constructor arguments of `type(self)(...)`.
+        // #1411: without this arm the `_ => {}` catch-all below would leave
+        // a protocol-typed call in the constructor arguments of
+        // `type(self)(...)` unspecialized.
         HirExpr::ReceiverClassCall { args } => {
             for arg in args.iter_mut() {
                 rewrite_protocol_calls_in_expr(
@@ -2793,6 +2792,9 @@ fn rewrite_protocol_calls_in_expr(
                 );
             }
         }
+        // Part 2a of #1371: like `IfExp` above, without this arm the
+        // `_ => {}` catch-all below would leave a protocol-typed call in the
+        // arguments of `table[k](args)` unspecialized.
         HirExpr::ExprCall { callee, args } => {
             for part in std::iter::once(callee.as_mut()).chain(args.iter_mut()) {
                 rewrite_protocol_calls_in_expr(
