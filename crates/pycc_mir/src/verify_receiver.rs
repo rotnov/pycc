@@ -503,6 +503,10 @@ impl Verifier<'_> {
                 self.expr(callee);
                 self.exprs(args);
             }
+            MirExpr::ObjKeywordCall(call) => {
+                self.expr(&call.call);
+                self.exprs(&call.values);
+            }
             MirExpr::Comprehension(comp) => {
                 self.source(&comp.source);
                 self.exprs(&comp.cond);

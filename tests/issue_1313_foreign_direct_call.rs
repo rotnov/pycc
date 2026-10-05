@@ -150,8 +150,10 @@ fn the_argument_shapes_outside_the_scalars_are_refused() {
         "passing a `list[int]` argument to a CPython object's call",
     );
     assert_one_error(
+        // A plain keyword argument is admitted since Part 8 of #1371;
+        // `**` unpacking is not.
         "obj_call_keyword",
-        "from itertools import product\nproduct(\"ab\", repeat=2)\n",
+        "from itertools import product\nd = {\"repeat\": 2}\nproduct(\"ab\", **d)\n",
         "C0001",
         "keyword call arguments are not supported yet",
     );

@@ -828,6 +828,30 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             }
             infer_expr_in(env, local_names, expr)
         }
+        // Part 8 of #1371: rewrite every operand of the positional half
+        // and every keyword value, but infer the *whole* node -- inferring
+        // the positional half alone would check a pycc callee's arity
+        // before the node's own keyword refusal.
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            let (callee, args) = match call.as_mut() {
+                HirExpr::Call { args, .. } => (None, args),
+                HirExpr::MethodCall { base, args, .. } => {
+                    let base = (!is_class_name_base(env, local_names, base.as_ref()))
+                        .then_some(base.as_mut());
+                    (base, args)
+                }
+                HirExpr::ExprCall { callee, args } => (Some(callee.as_mut()), args),
+                other => unreachable!("a keyword call never wraps {other:?}"),
+            };
+            for part in callee
+                .into_iter()
+                .chain(args.iter_mut())
+                .chain(keywords.iter_mut().map(|(_, value)| value))
+            {
+                rewrite_generic_calls_in_expr(env, local_names, part, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
         // Issue #1188: rewrite inside the wrapped method call exactly as the
         // `MethodCall` arm does, but infer the *whole* node, so the result
         // follows the receiver's reading -- inferring `call` alone would
@@ -1411,6 +1435,12 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
         }
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             collect_generic_class_instantiations_from_expr(call, out);
+        }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            collect_generic_class_instantiations_from_expr(call, out);
+            for (_, value) in keywords {
+                collect_generic_class_instantiations_from_expr(value, out);
+            }
         }
         // PEP 572 (#774): `target := value` — recurse into `value` only,
         // mirroring `AttrGet`'s own single-sub-expression shape just above.
@@ -2845,6 +2875,21 @@ fn rewrite_protocol_calls_in_expr(
         // arguments of `table[k](args)` unspecialized.
         HirExpr::ExprCall { callee, args } => {
             for part in std::iter::once(callee.as_mut()).chain(args.iter_mut()) {
+                rewrite_protocol_calls_in_expr(
+                    part,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
+            }
+        }
+        // Part 8 of #1371: the positional half and every keyword value.
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            for part in
+                std::iter::once(call.as_mut()).chain(keywords.iter_mut().map(|(_, value)| value))
+            {
                 rewrite_protocol_calls_in_expr(
                     part,
                     protocol_funcs,

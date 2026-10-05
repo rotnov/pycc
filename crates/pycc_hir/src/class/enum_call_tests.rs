@@ -150,12 +150,10 @@ fn a_call_to_a_redefined_enum_class_is_suppressed_with_the_duplicate() {
 
 #[test]
 fn a_keyword_call_keeps_exactly_the_keyword_diagnostic() {
-    let source = format!("{COLOR}c = Color(value=1)\n");
-    let diagnostics = lower_err(&source);
-    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-    assert_eq!(diagnostics[0].code, "C0001");
-    let message = &diagnostics[0].message;
-    assert!(message.contains("keyword call arguments"), "{message}");
+    // Since Part 8 of #1371 the keyword call lowers to a
+    // `HirExpr::KeywordCall` and `pycc_types` reports its one `C0001`, so
+    // the skipped scan leaves lowering with no diagnostic at all.
+    lower_ok(&format!("{COLOR}c = Color(value=1)\n"));
 }
 
 #[test]

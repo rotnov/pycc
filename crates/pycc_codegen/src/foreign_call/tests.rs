@@ -4,6 +4,7 @@
 use super::*;
 
 mod call_tests;
+mod keyword_tests;
 use crate::{CompileOptions, EXT_MODULE_EXEC_SYMBOL, compile_to_object_with_observer};
 use inkwell::values::AnyValue;
 use pycc_mir::{MirExpr, MirItem, MirModule, MirStmt, Ty};
@@ -581,13 +582,18 @@ fn an_unmarshallable_subscript_key_is_an_internal_error() {
 
 /// The defensive arm in [`packer_for`]: `pycc_types` refuses every
 /// argument type that has no packer, so reaching it is a front-end
-/// defect. Reached here by handing the node a `None` argument, which no
-/// type-checked program produces.
+/// defect. Reached here by handing the node a list argument, which no
+/// type-checked program produces (a `None` one is packed since Part 8 of
+/// #1371, `keyword_tests.rs`).
 #[test]
 #[should_panic(expected = "did not evaluate to a marshallable scalar")]
 fn an_unmarshallable_argument_is_an_internal_error() {
     entry_ir(
         "foreign_call_bad_arg",
-        call("gc", "disable", vec![MirExpr::NoneLiteral]),
+        call(
+            "gc",
+            "disable",
+            vec![MirExpr::ListLiteral(vec![MirExpr::IntLiteral(1)])],
+        ),
     );
 }

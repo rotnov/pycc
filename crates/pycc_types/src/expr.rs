@@ -1728,6 +1728,18 @@ pub(crate) fn infer_expr_in(
         HirExpr::ExprCall { callee, args } => {
             crate::foreign::subscript_call::infer_expr_call(env, local_names, callee, args)
         }
+        // Part 8 of #1371: a keyword call the binder could not bind.
+        HirExpr::KeywordCall {
+            call,
+            keywords,
+            span,
+        } => crate::foreign::keyword_call::infer_keyword_call(
+            env,
+            local_names,
+            call,
+            keywords,
+            *span,
+        ),
         HirExpr::ReceiverClassCall { args } => {
             class::infer_receiver_class_call(env, local_names, args)
         }

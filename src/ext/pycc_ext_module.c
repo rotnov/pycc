@@ -1846,6 +1846,77 @@ PyObject *pycc_ext_obj_call_borrowed(PyObject *callee, PyObject **args,
 }
 
 /*
+ * Part 8 of #1371: a call on a CPython object that passes keyword
+ * arguments -- `o.method(x, key=v)`, `f(a, b=c)`, `Cls(arg, flag=True)`
+ * (`EXT_OBJ_CALL_KW_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `args` holds `nargs + nkw` slots: the positional arguments, then the
+ * keyword values, each an owned reference from a `pycc_ext_obj_pack_*`
+ * helper. `names` holds the `nkw` keyword names as NUL-terminated UTF-8
+ * (compile-time constants; the parser already refused a repeated name).
+ * The names become the `kwnames` tuple of CPython's own vectorcall
+ * keyword protocol, which every callable honours -- a callable without a
+ * vectorcall slot gets the arguments re-packed into a `kwargs` dict by
+ * CPython itself -- so this is observably `PyObject_Call(callable, args,
+ * kwargs)` without building the dict here.
+ *
+ * Ownership is exactly `pycc_ext_obj_call`'s: `callable` and every
+ * `args[i]` are CONSUMED on every path, including a failed packer (a NULL
+ * slot, whose exception is propagated unchanged) and a failure to build
+ * `kwnames`. Returns a new reference (never released, #1092) or NULL with
+ * a Python exception set.
+ */
+PyObject *pycc_ext_obj_call_kw(PyObject *callable, PyObject **args,
+                               long long nargs, const char **names,
+                               long long nkw)
+{
+    PyObject *result = NULL;
+    PyObject *kwnames = NULL;
+    long long total = nargs + nkw;
+    long long i;
+    int packed = 1;
+
+    for (i = 0; i < total; i++) {
+        if (args[i] == NULL) {
+            packed = 0;
+        }
+    }
+    if (callable != NULL && packed) {
+        kwnames = PyTuple_New((Py_ssize_t)nkw);
+        for (i = 0; kwnames != NULL && i < nkw; i++) {
+            PyObject *name = PyUnicode_InternFromString(names[i]);
+            if (name == NULL || PyTuple_SetItem(kwnames, (Py_ssize_t)i, name) < 0) {
+                Py_CLEAR(kwnames);
+            }
+        }
+        if (kwnames != NULL) {
+            result = PyObject_Vectorcall(callable, args, (size_t)nargs, kwnames);
+        }
+    }
+    Py_XDECREF(kwnames);
+    Py_XDECREF(callable);
+    for (i = 0; i < total; i++) {
+        Py_XDECREF(args[i]);
+    }
+    return result;
+}
+
+/*
+ * Part 8 of #1371: `pycc_ext_obj_call_kw` with a BORROWED callable
+ * (`EXT_OBJ_CALL_KW_BORROWED_SYMBOL`), the keyword twin of
+ * `pycc_ext_obj_call_borrowed`: a module global such as a foreign class or
+ * function, or a `for` loop target. The extra reference taken here is the
+ * one `pycc_ext_obj_call_kw` releases. Every `args[i]` is consumed.
+ */
+PyObject *pycc_ext_obj_call_kw_borrowed(PyObject *callable, PyObject **args,
+                                        long long nargs, const char **names,
+                                        long long nkw)
+{
+    Py_XINCREF(callable);
+    return pycc_ext_obj_call_kw(callable, args, nargs, names, nkw);
+}
+
+/*
  * Part 3 of #1026 (PR 3a of #1082): `len(o)` on a CPython object value
  * (`EXT_OBJ_LEN_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *

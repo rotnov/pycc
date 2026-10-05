@@ -177,15 +177,16 @@ fn a_foreign_imported_name_is_not_class_like() {
     assert!(is_expr_call(expr), "{expr:?}");
 }
 
-/// Shapes the rule does not reach keep their own pre-Part-2a refusals: a
-/// keyword argument is rejected before any call-shape arm, and a call of a
-/// call result is not a subscript callee at all.
+/// A keyword argument keeps the subscript callee (since Part 8 of #1371 it
+/// is wrapped in a `HirExpr::KeywordCall` that `pycc_types` admits only on
+/// a CPython object), and a call of a call result is not a subscript callee
+/// at all.
 #[test]
 fn keyword_and_call_result_callees_stay_refused() {
-    assert_capability_error_message(
-        "t = {}\nt['a'](x=1)\n",
-        "keyword call arguments are not supported yet",
-    );
+    let HirExpr::KeywordCall { call, .. } = last_expr("t = {}\nt['a'](x=1)\n") else {
+        panic!("a keyword call of a subscript result is deferred to pycc_types");
+    };
+    assert!(is_expr_call(&call), "{call:?}");
     let module = pycc_parser_test_helper::parse("def g() -> int:\n    return 1\ng()()\n");
     let diagnostic = lower_checked(&module).expect_err("a call of a call result");
     assert_eq!(diagnostic.code, "C0001");

@@ -2000,6 +2000,19 @@ pub(crate) fn collect_expr_constraints(
             }
             Ok(object_lift::method_call_on_object(callee_term.as_ref()))
         }
+        // Part 8 of #1371: collected as its positional half, whose term it
+        // answers (an `object` callee answers `object` through that half's
+        // own arm), plus each keyword value. This solver never refuses the
+        // keywords; the check phase does, for every non-object callee
+        // (`foreign::keyword_call`).
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            let term =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, call)?;
+            for (_, value) in keywords {
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, value)?;
+            }
+            Ok(term)
+        }
         // #1411: `type(self)(args)` constructs the class `self` is typed
         // as, so its term is `self`'s own; an unbound `self` (a
         // `@classmethod` or `@staticmethod`) offers none and the check
@@ -2248,6 +2261,13 @@ fn bind_named_expr_targets(
         }
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, call)
+        }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, call)?;
+            for (_, value) in keywords {
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, value)?;
+            }
+            Ok(())
         }
         // #1411: `type(self)(args)` walks its arguments the same way.
         HirExpr::GenericClassInstantiate { args, .. } | HirExpr::ReceiverClassCall { args } => {

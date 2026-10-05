@@ -41,6 +41,7 @@ pub use exception::{
     builtin_exception_parent, except_handler_binding_type_name, is_builtin_exception_class,
     is_flat_builtin_exception_class,
 };
+pub use expr::object_keyword_call::KEYWORD_CALL_UNSUPPORTED;
 pub use expr::receiver_takes_method_path;
 pub(crate) use func::{
     annotation_to_ty, lower_arg_list, lower_function, lower_return_annotation, type_param_name,
@@ -750,6 +751,23 @@ pub enum HirExpr {
     ExprCall {
         callee: Box<HirExpr>,
         args: Vec<HirExpr>,
+    },
+    /// Part 8 of #1371: a call that passes keyword arguments and that
+    /// the keyword binder (`expr::keyword_bind`) cannot bind at lowering time, kept whole
+    /// because only the callee's static type decides whether pycc can
+    /// compile it (`expr::object_keyword_call` owns the lowering rule).
+    /// `call` is the positional part of the same call: a
+    /// [`HirExpr::Call`] of a bare name, a [`HirExpr::MethodCall`] or a
+    /// [`HirExpr::ExprCall`]. `keywords` holds each `name=value` pair in
+    /// source order, after every positional argument, which is CPython's
+    /// evaluation order. `pycc_types` admits the node only when the callee
+    /// is a CPython object (`Ty::Object`) and otherwise reports the
+    /// pre-Part-8 `C0001` "keyword call arguments are not supported yet" at
+    /// `span`, the whole call's source range.
+    KeywordCall {
+        call: Box<HirExpr>,
+        keywords: Vec<(String, HirExpr)>,
+        span: Span,
     },
     /// #1411: `type(self)(args)` inside an instance method -- a construction
     /// of the receiver's own class. The class is not carried here: it is the

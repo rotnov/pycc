@@ -282,8 +282,9 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
         "I0404",
         format!(
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
-             value and implements attribute access, positional \
-             scalar- or object-argument method calls and direct calls \
+             value and implements attribute access, scalar-, `None`- or \
+             object-argument method calls and direct calls with positional \
+             or keyword arguments \
              (including a call of a subscript result), `len`, truth \
              testing, a \
              scalar- or object-key subscript load, a slice load or deletion with scalar or object \
@@ -315,19 +316,23 @@ pub(crate) fn is_packable_operand(ty: &Ty) -> bool {
 }
 
 /// `Err(I0404)` unless every argument of a call on a CPython object is
-/// packable ([`is_packable_operand`]).
+/// packable ([`is_packable_operand`]) or `None`.
 ///
 /// The one statement of the argument rule every object-call shape shares: a
 /// method call (`o.method(args)`, PR 2b of #1081, `what` = `"method"`), a
 /// direct call of an `object`-typed name (`product(args)`, #1313, `what` =
 /// `"call"`) and a call of an `object`-typed subscript result
-/// (`table[k](args)`, Part 2a of #1371, also `"call"`). Anything else -- a
-/// container, an instance or `None` -- has no boundary representation yet
-/// and is refused here rather than reaching codegen, naming the first
-/// offending argument's type.
+/// (`table[k](args)`, Part 2a of #1371, also `"call"`), each with positional
+/// or, since Part 8 of #1371, keyword arguments. `None` is admitted here
+/// since Part 8 too, as an argument only: codegen passes CPython's own
+/// `Py_None` for it. Subscript keys and comparison operands keep the
+/// narrower [`is_packable_operand`] rule. Anything else -- a container or a
+/// pycc instance -- has no boundary representation yet and is refused here
+/// rather than reaching codegen, naming the first offending argument's
+/// type.
 pub(crate) fn check_object_call_args(arg_tys: &[Ty], what: &str) -> Result<(), Diagnostic> {
     for arg_ty in arg_tys {
-        if !is_packable_operand(arg_ty) {
+        if !is_packable_operand(arg_ty) && !matches!(arg_ty, Ty::None) {
             return Err(object_operation_unsupported(&format!(
                 "passing a `{}` argument to a CPython object's {what}",
                 arg_ty.name()
@@ -480,6 +485,7 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
 
 pub(crate) mod compare;
 pub(crate) mod for_loop;
+pub(crate) mod keyword_call;
 pub(crate) mod slice;
 pub(crate) mod subscript_call;
 
@@ -493,6 +499,8 @@ mod container_names_tests;
 mod function_local_tests;
 #[cfg(test)]
 mod in_function_tests;
+#[cfg(test)]
+mod keyword_call_tests;
 #[cfg(test)]
 mod subscript_call_tests;
 #[cfg(test)]

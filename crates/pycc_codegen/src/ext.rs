@@ -194,6 +194,29 @@ pub const EXT_OBJ_CALL_SYMBOL: &str = "pycc_ext_obj_call";
 /// Spelled once here for exactly the reason [`EXT_OBJ_IMPORT_SYMBOL`] is.
 pub const EXT_OBJ_CALL_BORROWED_SYMBOL: &str = "pycc_ext_obj_call_borrowed";
 
+/// The fixed C shim's keyword-call helper (Part 8 of #1371):
+/// `o.method(x, key=v)`, `f(a, b=c)` or `Cls(arg, flag=True)` on a CPython
+/// object. It takes the callable, an array of `nargs + nkw` *owned*
+/// argument references -- the positional arguments, then the keyword values
+/// -- the positional count `nargs`, an array of `nkw` NUL-terminated keyword
+/// names and `nkw` itself. It builds the `kwnames` tuple and calls
+/// `PyObject_Vectorcall`, which is CPython's own keyword-call protocol and
+/// observably equivalent to `PyObject_Call` with a `kwargs` dict.
+///
+/// Like [`EXT_OBJ_CALL_SYMBOL`] it **consumes** the callable (a bound
+/// method or another freshly produced reference) and every argument
+/// reference on every path. Returns a new reference or `NULL` with the
+/// CPython exception set. Spelled once here for exactly the reason
+/// [`EXT_OBJ_IMPORT_SYMBOL`] is.
+pub const EXT_OBJ_CALL_KW_SYMBOL: &str = "pycc_ext_obj_call_kw";
+
+/// [`EXT_OBJ_CALL_KW_SYMBOL`] with a *borrowed* callable (Part 8 of #1371),
+/// the keyword counterpart of [`EXT_OBJ_CALL_BORROWED_SYMBOL`]: the helper
+/// takes its own reference to the callable before delegating, so a module
+/// global such as a foreign class keeps its reference. The argument
+/// references are consumed exactly as for the consuming helper.
+pub const EXT_OBJ_CALL_KW_BORROWED_SYMBOL: &str = "pycc_ext_obj_call_kw_borrowed";
+
 /// The shim's `int` argument packer: a D-141 encoded int word in, a new
 /// `PyObject *` reference out, or `NULL` with an `OverflowError` set for a
 /// bigint (#1040). Borrows its argument -- see the C side's own comment.
@@ -301,7 +324,9 @@ pub const EXT_OBJ_GETSLICE_SYMBOL: &str = "pycc_ext_obj_getslice";
 pub const EXT_OBJ_DELSLICE_SYMBOL: &str = "pycc_ext_obj_delslice";
 
 /// The fixed C shim's `None` accessor (Part 1 of #1371): a *borrowed*
-/// pointer to CPython's immortal `None`, the right-hand side of `o is None`.
+/// pointer to CPython's immortal `None`, the right-hand side of `o is None`
+/// and, since Part 8 of #1371, the value a `None` call argument is packed
+/// from (`foreign_pack::none_pointer`).
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_NONE_SYMBOL: &str = "pycc_ext_obj_none";

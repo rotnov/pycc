@@ -680,6 +680,12 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             collect_named_expr_names_in_expr(call, names)
         }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            collect_named_expr_names_in_expr(call, names);
+            for (_, value) in keywords {
+                collect_named_expr_names_in_expr(value, names);
+            }
+        }
         HirExpr::GenericClassInstantiate { args, .. } => {
             for arg in args {
                 collect_named_expr_names_in_expr(arg, names);
@@ -1416,6 +1422,13 @@ fn collect_named_expr_bindings(
         }
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             collect_named_expr_bindings(env, local_names, call)
+        }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            collect_named_expr_bindings(env, local_names, call)?;
+            for (_, value) in keywords {
+                collect_named_expr_bindings(env, local_names, value)?;
+            }
+            Ok(())
         }
         HirExpr::GenericClassInstantiate { args, .. } => {
             for arg in args {
@@ -3867,6 +3880,13 @@ fn reject_generic_calls_in_expr(
         }
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             reject_generic_calls_in_expr(module_env, own_name, call)
+        }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            reject_generic_calls_in_expr(module_env, own_name, call)?;
+            for (_, value) in keywords {
+                reject_generic_calls_in_expr(module_env, own_name, value)?;
+            }
+            Ok(())
         }
         // PEP 695 (#387): `C[type_arg](args)` — recurse into args only.
         // `class` is a bare name (not an expression), and `type_arg` is a
