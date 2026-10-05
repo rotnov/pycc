@@ -340,17 +340,19 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             // per slot (D-154). A container-typed field (`list[T]`,
             // `dict[K, V]`, `set[T]`) is not admitted as a dataclass field,
             // and there is no slot representation at all for a by-value
-            // `tuple[...]`, `None`, or a class instance
-            // (`Ty::Instance`, including a self-referential field like
-            // `next: Node` or `next: Self`, which `annotation_to_ty`
-            // resolves to `Ty::Instance` -- see its self-referential class
-            // name and `Self` arms). Rejecting here, structurally, keeps
-            // every field type this PR's own `pycc_codegen`/`pycc_rt` slices
-            // actually implement. A hand-written `__init__` may seed a
-            // `list[int]`/`dict[str, int]` slot from a parameter (#1262,
-            // `init_slot::slot_ty_from_init_rhs`); a container dataclass
-            // field is a separate follow-up (synthesized `__eq__`/`__repr__`
-            // over containers), so it stays refused here.
+            // `tuple[...]` or `None`. A class instance (`Ty::Instance`,
+            // including a self-referential field like `next: Node` or
+            // `next: Self`, which `annotation_to_ty` resolves to
+            // `Ty::Instance` -- see its self-referential class name and
+            // `Self` arms) has a pointer-word slot since #1389, but the
+            // dataclass's synthesized `__eq__`/`__repr__` do not cover it.
+            // Rejecting here, structurally, keeps every field type the
+            // synthesized methods actually implement. A hand-written
+            // `__init__` may seed a `list[int]`/`dict[str, int]` (#1262) or
+            // class-instance (#1389) slot from a parameter
+            // (`init_slot::slot_ty_from_init_rhs`); a container or instance
+            // dataclass field is a separate follow-up (synthesized
+            // `__eq__`/`__repr__` over those types), so it stays refused here.
             if !is_scalar_slot_type(&field_ty) {
                 return Err(unsupported(
                     format!(
@@ -358,8 +360,9 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
                          slot type -- only `int`, `float`, `bool`, `str`, or a generic type \
                          parameter is supported as a dataclass field in this version (the \
                          instance attribute-slot storage is a single word per slot; a \
-                         container-typed dataclass field is not supported yet, and a tuple, \
-                         `None`, or class instance has no slot representation)",
+                         container-typed or class-instance dataclass field is not supported \
+                         yet, since the synthesized `__eq__`/`__repr__` do not cover it, and \
+                         a tuple or `None` has no slot representation)",
                         field_ty.name()
                     ),
                     ann.range,
