@@ -397,6 +397,23 @@ fn contains_named_expr_finds_a_top_level_walrus() {
     assert!(super::contains_named_expr(&expr));
 }
 
+/// Part 2d of #1371: a walrus inside an object-slot list display is found
+/// like one inside any other display; one without a walrus is not.
+#[test]
+fn contains_named_expr_walks_an_object_list_display() {
+    let walrus = HirExpr::ObjectList(vec![
+        HirExpr::IntLiteral(0),
+        HirExpr::NamedExpr {
+            name: "y".to_string(),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        },
+    ]);
+    assert!(super::contains_named_expr(&walrus));
+    assert!(!super::contains_named_expr(&HirExpr::ObjectList(vec![
+        HirExpr::IntLiteral(0)
+    ])));
+}
+
 // Issue #618: an out-of-range `int` literal in a runtime int-boundary
 // position (D-141) is rejected at compile time with a spanned T0051
 // diagnostic, restoring `pycc check` as the catch point D-178 (#148)

@@ -291,6 +291,25 @@ pub const EXT_OBJ_CONTAINS_SYMBOL: &str = "pycc_ext_obj_contains";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_GETSLICE_SYMBOL: &str = "pycc_ext_obj_getslice";
 
+/// The fixed C shim's list-display helper (Part 2d of #1371): it takes an
+/// array of `n` *packed* elements and returns a *new* reference to a fresh
+/// CPython `list` holding them in order, or `NULL` with the CPython
+/// exception already set. It consumes every element on every path -- a
+/// `NULL` element (a failed packer) and a failed `PyList_New` included --
+/// for the reason [`EXT_OBJ_GETITEM_SYMBOL`] records.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_BUILD_LIST_SYMBOL: &str = "pycc_ext_obj_build_list";
+
+/// The fixed C shim's slice-deletion helper (Part 2c of #1371), the
+/// statement twin of [`EXT_OBJ_GETSLICE_SYMBOL`] with the same arguments
+/// and the same consumption of every present bound on every path. It
+/// performs `PyObject_DelItem(base, slice(start, stop, step))` and returns
+/// `0`, or `-1` with the CPython exception already set.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_DELSLICE_SYMBOL: &str = "pycc_ext_obj_delslice";
+
 /// The fixed C shim's `None` accessor (Part 1 of #1371): a *borrowed*
 /// pointer to CPython's immortal `None`, the right-hand side of `o is None`.
 ///
@@ -455,6 +474,17 @@ pub const EXT_OBJ_FORMAT_SYMBOL: &str = "pycc_ext_obj_format";
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL: &str = "pycc_ext_obj_unpack_float_tuple";
+
+/// The fixed C shim's tuple-unpacking helper (Part 1 of #891): it takes a
+/// borrowed `PyObject *` and the target count `n`, and returns a *new*
+/// reference to a `tuple` of exactly `n` items taken from the object by
+/// CPython's own unpack protocol, or `NULL` with CPython's own exception
+/// set -- `TypeError` for a non-iterable, `ValueError` for too many or too
+/// few values. The tuple is bound to the unpacking temporary and leaked on
+/// the #1092 leak-only rule, like every other object result.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_UNPACK_SYMBOL: &str = "pycc_ext_obj_unpack";
 
 /// The C-legal spelling of a possibly-dotted pycc name.
 ///
@@ -746,6 +776,7 @@ pub fn body_returns_buffer_slice(body: &[pycc_mir::MirStmt]) -> bool {
         | MirStmt::SetCompAssign { .. }
         | MirStmt::Return(_)
         | MirStmt::AttrSet { .. }
+        | MirStmt::ObjDelSlice { .. }
         | MirStmt::Raise { .. }
         | MirStmt::RaiseFrom { .. }
         | MirStmt::ForeignImport { .. }

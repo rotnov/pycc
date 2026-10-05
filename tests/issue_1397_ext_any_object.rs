@@ -90,23 +90,31 @@ fn a_subscripted_any_or_object_is_t0044() {
     );
 }
 
-/// Deferred, D-258 rule 4's literal half: a list literal assigned into an
-/// object slot does not build a CPython list yet. An empty one keeps the
-/// no-element-type `T0003`, and a non-empty one is a native `list[object]`
-/// the D-105 gate refuses with `T0034`.
+/// D-258 rule 4's literal half after Part 2d of #1371, which builds a list
+/// display bound to an object slot as a CPython `list`
+/// (`tests/issue_1371_object_list_display.rs`): what stays refused is a dict
+/// display into the slot (`T0003`), a list element no packer boxes
+/// (`I0404`), and an unannotated empty `[]` with no object evidence
+/// (`T0003`).
 #[test]
-fn a_list_literal_into_an_object_slot_is_still_refused() {
+fn the_literals_part_2d_leaves_refused_into_an_object_slot() {
     assert_ext_error(
-        "1397_empty_list",
-        "def f(x: object) -> int:\n    xs: object = []\n    return 1\n",
+        "1397_empty_dict",
+        "def f(x: object) -> int:\n    d: object = {}\n    return 1\n",
         "T0003",
-        "an empty list literal has no inferable element type for `xs`",
+        "an empty dict literal",
     );
     assert_ext_error(
-        "1397_list_of_object",
-        &format!("{ANY}def f(x: Any) -> Any:\n    y: object = [x]\n    return y\n"),
-        "T0034",
-        "list[object] is not compiled yet (D-105)",
+        "1397_list_of_none",
+        &format!("{ANY}def f(x: Any) -> Any:\n    y: object = [x, None]\n    return y\n"),
+        "I0404",
+        "a `None` element in a list display bound to a CPython object",
+    );
+    assert_ext_error(
+        "1397_empty_list_no_evidence",
+        "def f(x: object) -> int:\n    xs = []\n    return len(xs)\n",
+        "T0003",
+        "an empty list literal has no inferable element type for `xs`",
     );
 }
 

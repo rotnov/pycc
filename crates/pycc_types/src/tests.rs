@@ -14869,6 +14869,7 @@ fn the_generic_recursion_gate_finds_a_self_call_in_every_expression_position() {
         HirExpr::ListLiteral(vec![self_call()]),
         HirExpr::SetLiteral(vec![self_call()]),
         HirExpr::TupleLiteral(vec![self_call()]),
+        HirExpr::ObjectList(vec![self_call()]),
         HirExpr::DictLiteral(vec![(self_call(), benign())]),
         HirExpr::DictLiteral(vec![(benign(), self_call())]),
         HirExpr::Subscript {
@@ -19650,6 +19651,37 @@ fn walrus_nested_inside_a_list_literal_element_on_the_solver_path_propagates_a_f
 }
 
 #[test]
+fn walrus_nested_inside_an_object_list_element_on_the_solver_path_propagates_a_forward_reference_error()
+ {
+    // Part 2d of #1371: the same shared element-loop arm, entered through
+    // its `ObjectList` alternative (an object-slot list display).
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment::empty(&["m"]);
+    let body = vec![HirStmt::ExprStmt(HirExpr::ObjectList(vec![
+        HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        },
+    ]))];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
 fn walrus_nested_inside_a_subscript_base_on_the_solver_path_propagates_a_forward_reference_error() {
     // Exercises `Subscript`'s own `bind_named_expr_targets(base)?` call
     // (source line 1020). The index is a harmless literal that is never
@@ -21924,6 +21956,51 @@ fn a_walrus_inside_a_tuple_literal_test_in_a_function_body_is_a_local_name() {
         class_defs: Vec::new(),
     };
     assert!(check(&hir).is_ok(), "{:?}", check(&hir));
+}
+
+/// Part 2d of #1371: the same walk through an object-slot list display's
+/// `|`-alternative. Only the empty-container pre-pass builds one from
+/// source, never in a test position, so the fixture is hand-built.
+#[test]
+fn a_walrus_inside_an_object_list_test_in_a_function_body_is_a_local_name() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::If {
+                    test: HirExpr::ObjectList(vec![HirExpr::NamedExpr {
+                        name: "d".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(1)),
+                    }]),
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("d".to_string())))],
+                    orelse: vec![],
+                },
+                HirStmt::Return(Some(HirExpr::IntLiteral(0))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_ok(), "{:?}", check(&hir));
+}
+
+/// Part 2d of #1371: `rewrite_generic_calls_in_expr` walks an object-slot
+/// list display's elements and types the display as the object.
+#[test]
+fn rewrite_generic_calls_in_expr_walks_an_object_list_display() {
+    let mut env = Environment::new();
+    let mut expr = HirExpr::ObjectList(vec![HirExpr::IntLiteral(1)]);
+    let mut instantiations = Vec::new();
+    let mut seen = HashSet::new();
+    let ty =
+        rewrite_generic_calls_in_expr(&mut env, &[], &mut expr, &mut instantiations, &mut seen)
+            .unwrap();
+    assert_eq!(ty, Ty::Object);
+    assert!(instantiations.is_empty());
 }
 
 // -- #911 (Part 1 of #885): class-level attributes at the checking seam ----

@@ -270,6 +270,8 @@ pub fn lower_module(
     // `Ty::Object` (see `func::EXT_MODULE_MARKER`). Recorded as imported, so
     // `strip_imported` keeps it out of `HirModule::type_aliases`.
     if resolved.ext_module() {
+        // Issue #1095: any receiver in such a module may be an object.
+        state.signatures.admit_object_receivers();
         state.imported_alias_indices.push(state.aliases.len());
         state
             .aliases
@@ -698,6 +700,11 @@ fn lower_top_level_item<'a>(
         // `HirModule::type_aliases`: the name neither re-exports nor leaks,
         // while a D-135 alias built from it is an ordinary alias of `object`.
         for binding in &lowered.bindings {
+            // Issue #1095: from here on a container-named method call may
+            // have an object receiver, so it keeps both readings.
+            if matches!(binding, ImportBinding::Foreign { .. }) {
+                state.signatures.admit_object_receivers();
+            }
             if let ImportBinding::Foreign { local_name, .. } = binding
                 && !state.aliases.iter().any(|(name, _)| name == local_name)
             {
@@ -920,6 +927,15 @@ fn lower_top_level_item<'a>(
         ));
     }
     let imports_before_block = state.imports.len();
+    // Issue #1095: a foreign import nested in a module-level block binds an
+    // object receiver just as a top-level one does.
+    if block_imports
+        .bindings
+        .iter()
+        .any(|binding| matches!(binding, ImportBinding::Foreign { .. }))
+    {
+        state.signatures.admit_object_receivers();
+    }
     state.imports.extend(block_imports.bindings.iter().cloned());
     // #1213: a chained assignment expands into several statements, all
     // lowered before any is recorded, so an `Err` still records nothing.
@@ -944,7 +960,8 @@ fn lower_top_level_item<'a>(
         block_imports.substitute(error)
     })?;
     // A synthesized name -- a chained-assignment temporary (`0chain_<offset>`,
-    // #1213) or a comprehension loop variable (`0comp_<offset>_<name>`,
+    // #1213), a tuple-unpacking temporary (`0unpack_<offset>`, Part 1 of
+    // #891) or a comprehension loop variable (`0comp_<offset>_<name>`,
     // D-117, #1237) -- is not a definition the source wrote, so it never
     // takes part in `program::link`'s cross-module collision check -- the
     // same reason the `__name__` seed is not recorded (see `lower_module`).
@@ -962,8 +979,8 @@ fn lower_top_level_item<'a>(
 }
 
 /// Whether `name` was synthesized by lowering rather than written in the
-/// source. Every synthesized name -- #1213's `0chain_<offset>` and D-117's
-/// `0comp_<offset>_<name>` -- starts with an ASCII digit, which no Python
+/// source. Every synthesized name -- #1213's `0chain_<offset>`, #891's
+/// `0unpack_<offset>` and D-117's `0comp_<offset>_<name>` -- starts with an ASCII digit, which no Python
 /// identifier can, so the test cannot match a source name.
 pub(crate) fn is_synthesized_name(name: &str) -> bool {
     name.as_bytes().first().is_some_and(u8::is_ascii_digit)

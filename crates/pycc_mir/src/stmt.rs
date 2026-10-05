@@ -973,6 +973,29 @@ pub(super) fn lower_stmt(
         // demoted the name's binding state, and under D-124's leak-only
         // model there is no reference to release, so nothing runs.
         HirStmt::Delete { .. } => MirStmt::NoOp,
+        // Part 2c of #1371: `pycc_types` admits a slice `del` only on a
+        // CPython object base, so this is always the object deletion;
+        // codegen's `expect_object_pointer` panics on any other base.
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            let base = lower_expr(base, scopes, classes, current_class);
+            let lower_bound = |bound: &Option<Box<pycc_hir::HirExpr>>| {
+                bound
+                    .as_deref()
+                    .map(|bound| lower_expr(bound, scopes, classes, current_class))
+            };
+            MirStmt::ObjDelSlice {
+                base,
+                start: lower_bound(start),
+                stop: lower_bound(stop),
+                step: lower_bound(step),
+            }
+        }
         HirStmt::ForeignImport { bindings, .. } => MirStmt::ForeignImport {
             bindings: bindings.clone(),
         },

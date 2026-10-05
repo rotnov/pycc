@@ -277,6 +277,15 @@ impl Verifier<'_> {
                 base: key, value, ..
             } => self.exprs([key, value]),
             MirStmt::BufferSet { base, index, value } => self.exprs([base, index, value]),
+            MirStmt::ObjDelSlice {
+                base,
+                start,
+                stop,
+                step,
+            } => {
+                self.expr(base);
+                self.exprs([start, stop, step].into_iter().flatten());
+            }
             MirStmt::ListCompAssign {
                 source, cond, elt, ..
             } => {
@@ -385,6 +394,7 @@ impl Verifier<'_> {
             }
             | MirExpr::InstanceHash { operand: inner, .. }
             | MirExpr::ObjUnpackFloatTuple { base: inner, .. }
+            | MirExpr::ObjUnpack { value: inner, .. }
             | MirExpr::NamedExpr { value: inner, .. } => self.expr(inner),
             MirExpr::SetAdd { value, ops, .. } => {
                 if let Some(ops) = ops {
@@ -443,7 +453,9 @@ impl Verifier<'_> {
                     }
                 }
             }
-            MirExpr::ListLiteral(items) | MirExpr::TupleLiteral(items) => self.exprs(items),
+            MirExpr::ListLiteral(items)
+            | MirExpr::ObjList { elements: items }
+            | MirExpr::TupleLiteral(items) => self.exprs(items),
             MirExpr::SetLiteral { elements, ops } => {
                 if let (Some(ops), Some(first)) = (ops, elements.first()) {
                     self.check_set_ops(ops, &first.ty());

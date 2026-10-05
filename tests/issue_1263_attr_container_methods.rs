@@ -221,22 +221,57 @@ fn an_unsupported_receiver_is_refused() {
     );
 }
 
-/// An attribute of a CPython module is a foreign object, so a container
-/// method on it is the foreign-object refusal, not a container call.
+/// An attribute of a CPython module is a foreign object. Since #1095 a
+/// container method on it is the foreign method call: the module's own
+/// foreign import keeps the method reading, and the object receiver takes
+/// it.
 #[test]
-fn a_foreign_attribute_receiver_is_refused() {
+fn a_foreign_attribute_receiver_is_the_foreign_method_call() {
     for (category, source) in [
         ("e2e_1263_gc", "import gc\ngc.garbage.append(1)\n"),
         ("e2e_1263_argv", "import sys\nsys.argv.append(\"x\")\n"),
     ] {
-        let text = check_fails(category, source);
-        assert!(
-            text.contains(
-                "error[I0404]: calling `.append()` on a CPython object's attribute is not \
-                 supported yet"
-            ),
-            "{source}: {text}"
-        );
+        let dir = ScratchDir::new(category).expect("scratch");
+        std::fs::write(dir.join("a.py"), source).expect("write the subject");
+        let output = pycc()
+            .arg("check")
+            .arg(dir.join("a.py"))
+            .output()
+            .expect("pycc should spawn");
+        assert!(output.status.success(), "{source}: {}", rendered(&output));
+    }
+}
+
+/// A module that binds no foreign import of its own keeps the container
+/// reading, so an object it imports from a sibling project module reaches
+/// the container node: a container method on it, or on an attribute of it,
+/// is still the foreign-object refusal, not a container call (the
+/// cross-module case #1095 leaves out).
+#[test]
+fn an_imported_object_s_attribute_receiver_is_refused() {
+    for (category, source, needle) in [
+        (
+            "e2e_1263_cross_module_attr",
+            "from dep import g\n\ng.garbage.append(1)\n",
+            "error[I0404]: calling `.append()` on a CPython object's attribute is not supported yet",
+        ),
+        (
+            "e2e_1263_cross_module_name",
+            "from dep import g\n\ng.append(1)\n",
+            "error[I0404]: using `g`, which is bound to a CPython object",
+        ),
+    ] {
+        let dir = ScratchDir::new(category).expect("scratch");
+        std::fs::write(dir.join("dep.py"), "import gc\n\ng = gc\n").expect("write the dependency");
+        std::fs::write(dir.join("a.py"), source).expect("write the subject");
+        let output = pycc()
+            .arg("check")
+            .arg(dir.join("a.py"))
+            .output()
+            .expect("pycc should spawn");
+        assert!(!output.status.success(), "{source}");
+        let text = rendered(&output);
+        assert!(text.contains(needle), "{source}: {text}");
     }
 }
 

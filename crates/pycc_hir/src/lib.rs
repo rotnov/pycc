@@ -473,6 +473,22 @@ pub enum HirExpr {
         body: Box<HirExpr>,
         orelse: Box<HirExpr>,
     },
+    /// The value of a tuple-unpacking assignment `t1, ..., tn = value`
+    /// (Part 1 of #891), checked to hold exactly `arity` items.
+    ///
+    /// Never written by a user: `crate::stmt::unpack` binds it to a
+    /// synthesized temporary and assigns each target from that temporary's
+    /// literal-index subscript, so every binding pass sees ordinary
+    /// `HirStmt::Assign`s. `pycc_types` admits a `tuple[...]` of exactly
+    /// `arity` elements (the node is that tuple itself) and a CPython
+    /// `object`, which CPython's unpack protocol turns into a fresh `tuple`
+    /// of exactly `arity` items at run time or raises `ValueError` /
+    /// `TypeError`. `docs/TYPE_SYSTEM.md`'s "Tuple-unpacking assignment"
+    /// section owns the rule.
+    Unpack {
+        value: Box<HirExpr>,
+        arity: usize,
+    },
     FString(Vec<FStringPart>),
     /// `[e1, e2, ...]`. Element homogeneity is `pycc_types`' job, not this
     /// lowering step's -- HIR only records the syntactic shape (D-105).
@@ -498,6 +514,19 @@ pub enum HirExpr {
     /// literal is empty (`MirExpr::ty()`); carrying the resolved type on the
     /// node itself is what lets a resolved `[]` survive into MIR and codegen.
     EmptyList(Ty),
+    /// A list display `[e1, e2, ...]`, empty or not, assigned to a name
+    /// whose type is the opaque CPython object (Part 2d of #1371, D-258
+    /// rule 4): it builds a fresh CPython `list`, each element packed into a
+    /// `PyObject *`, and its own type is `Ty::Object`.
+    ///
+    /// **Construction invariant:** like [`HirExpr::EmptyList`], `lower_expr`
+    /// never builds this variant. Its only construction site is
+    /// `pycc_types::empty_container::resolve_empty_containers`, which
+    /// rewrites a `ListLiteral` into it before either checker walks the
+    /// module, so `pycc check` and `pycc build` consume the same node. Each
+    /// element must have a packable type (`int`, `float`, `bool`, `str` or
+    /// `object`); `pycc_types` refuses anything else with `I0404`.
+    ObjectList(Vec<HirExpr>),
     /// `base[index]`, a read (Load position). `Stmt::Assign`'s own target
     /// handling below special-cases an `Expr::Subscript` target on a bare
     /// name into a dedicated `HirStmt::DictSet` node instead of ever
@@ -607,8 +636,8 @@ pub enum HirExpr {
     /// variant only records the syntactic shape.
     ///
     /// Only a parenthesized/bare tuple literal (`(1, 2)`, `1, 2`) lowers to
-    /// this form. Tuple-unpacking assignment (`a, b = t`) is a distinct,
-    /// deferred capability (D-116) with no HIR shape of its own yet.
+    /// this form. Tuple-unpacking assignment (`a, b = t`) is a distinct
+    /// shape: its value lowers to [`HirExpr::Unpack`] (Part 1 of #891).
     TupleLiteral(Vec<HirExpr>),
     /// `list.pop()` (PR-12, D-119): a hand-recognized special form, mirroring
     /// `ListAppend`'s own shape exactly (no general method-call dispatch).
@@ -1109,6 +1138,24 @@ pub enum HirStmt {
     /// statement of the rule.
     Delete {
         name: String,
+    },
+    /// `del base[start:stop:step]`, any bound omitted (Part 2c of #1371),
+    /// one per slice target of a `del` statement, in the statement's
+    /// left-to-right target order. Unlike [`HirStmt::Delete`] it unbinds no
+    /// name: it *reads* `base` and every present bound, and at run time asks
+    /// the base to delete the slice. `pycc_hir` cannot see types, so every
+    /// slice target lowers here; `pycc_types` admits only a CPython-object
+    /// base (`PyObject_DelItem` with a `slice` key, `foreign::slice`) and
+    /// refuses every other base with this node's `span` -- the slice
+    /// target's own range -- so the native refusal stays located.
+    /// `docs/TYPE_SYSTEM.md`'s "`del` statement" section is the canonical
+    /// statement of the rule.
+    DeleteSlice {
+        base: Box<HirExpr>,
+        start: Option<Box<HirExpr>>,
+        stop: Option<Box<HirExpr>>,
+        step: Option<Box<HirExpr>>,
+        span: Span,
     },
     /// A CPython-backed `import X` or `import X as Y` nested in a
     /// module-level `if`/`try` block (Part 1 of #1282, #1291). Each

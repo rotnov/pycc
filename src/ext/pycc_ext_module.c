@@ -2050,26 +2050,26 @@ int pycc_ext_obj_contains(PyObject *container, PyObject *item)
 }
 
 /*
- * Part 2b of #1371: `o[start:stop:step]` with a CPython object `o`
- * (`EXT_OBJ_GETSLICE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ * Parts 2b and 2c of #1371: builds the `slice` object for `o[start:stop:step]`
+ * and `del o[start:stop:step]`, the shared half of `pycc_ext_obj_getslice`
+ * and `pycc_ext_obj_delslice`.
  *
  * `present` says which bounds the source spelled (bit 0 start, bit 1 stop,
- * bit 2 step). A present bound is a packed value, consumed on every path --
- * a `NULL` one included, which is a failed packer whose exception is
+ * bit 2 step). A present bound is a packed value, consumed here on every
+ * path -- a `NULL` one included, which is a failed packer whose exception is
  * already set (an `int` bound outside the packer's range raises
  * `OverflowError` there, #1040) -- and an absent bound's pointer is ignored
  * and handed to `PySlice_New` as `NULL`, which it reads as `None`, the
- * value CPython's own `o[:b]` builds. The base is borrowed. The `slice`
- * object is released after the load; the result is a *new* reference that
- * is deliberately never released, on the leak-only rule `docs/RUNTIME.md`
- * records, or `NULL` with the exception set.
+ * value CPython's own `o[:b]` builds. A `NULL` base is defence in depth for
+ * the reason `pycc_ext_obj_getitem` records. Returns a new reference to the
+ * slice, or `NULL` with the exception set (or, for a `NULL` base, with
+ * whatever exception produced it).
  */
-PyObject *pycc_ext_obj_getslice(PyObject *o, PyObject *start, PyObject *stop, PyObject *step,
-                                int present)
+static PyObject *pycc_ext_obj_slice_of(PyObject *o, PyObject *start, PyObject *stop,
+                                       PyObject *step, int present)
 {
     PyObject *bounds[3];
-    PyObject *slice;
-    PyObject *result = NULL;
+    PyObject *slice = NULL;
     int failed = (o == NULL);
     int i;
 
@@ -2083,15 +2083,109 @@ PyObject *pycc_ext_obj_getslice(PyObject *o, PyObject *start, PyObject *stop, Py
     }
     if (!failed) {
         slice = PySlice_New(bounds[0], bounds[1], bounds[2]);
-        if (slice != NULL) {
-            result = PyObject_GetItem(o, slice);
-            Py_DECREF(slice);
-        }
     }
     for (i = 0; i < 3; i++) {
         Py_XDECREF(bounds[i]);
     }
+    return slice;
+}
+
+/*
+ * Part 2b of #1371: `o[start:stop:step]` with a CPython object `o`
+ * (`EXT_OBJ_GETSLICE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * The bounds follow `pycc_ext_obj_slice_of`'s contract, and the base is
+ * borrowed. The `slice` object is released after the load. The result is a
+ * *new* reference that is deliberately never released, on the leak-only
+ * rule `docs/RUNTIME.md` records, or `NULL` with the exception set.
+ */
+PyObject *pycc_ext_obj_getslice(PyObject *o, PyObject *start, PyObject *stop, PyObject *step,
+                                int present)
+{
+    PyObject *slice = pycc_ext_obj_slice_of(o, start, stop, step, present);
+    PyObject *result;
+
+    if (slice == NULL) {
+        return NULL;
+    }
+    result = PyObject_GetItem(o, slice);
+    Py_DECREF(slice);
     return result;
+}
+
+/*
+ * Part 2d of #1371: a list display bound to an object slot, `x: object =
+ * [a, b]` (`EXT_OBJ_BUILD_LIST_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `items` holds `n` *packed* elements, in source order, each a new
+ * reference a `pycc_ext_obj_pack_*` helper produced. Every one is consumed
+ * on every path, exactly as `pycc_ext_obj_call` consumes its arguments: a
+ * `NULL` element is a packer that already set the exception, so the list is
+ * never built and the rest are released; a failed `PyList_New` releases
+ * them all. Otherwise each reference moves into the fresh list through
+ * `PyList_SetItem`, which steals it -- the limited API (abi3) has no
+ * `PyList_SET_ITEM`. The index is always in range of a list just built
+ * with `n` slots, so it cannot fail; the check is defence in depth and
+ * releases what has not moved yet. The result is a *new* reference that
+ * is deliberately never released, on the leak-only rule `docs/RUNTIME.md`
+ * records, or `NULL` with the exception set.
+ */
+PyObject *pycc_ext_obj_build_list(PyObject **items, long long n)
+{
+    PyObject *list = NULL;
+    int failed = 0;
+    long long i;
+
+    for (i = 0; i < n; i++) {
+        if (items[i] == NULL) {
+            failed = 1;
+        }
+    }
+    if (!failed) {
+        list = PyList_New((Py_ssize_t)n);
+    }
+    if (list == NULL) {
+        for (i = 0; i < n; i++) {
+            Py_XDECREF(items[i]);
+        }
+        return NULL;
+    }
+    for (i = 0; i < n; i++) {
+        if (PyList_SetItem(list, (Py_ssize_t)i, items[i]) < 0) {
+            for (i = i + 1; i < n; i++) {
+                Py_DECREF(items[i]);
+            }
+            Py_DECREF(list);
+            return NULL;
+        }
+    }
+    return list;
+}
+
+/*
+ * Part 2c of #1371: `del o[start:stop:step]` with a CPython object `o`
+ * (`EXT_OBJ_DELSLICE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`), the
+ * statement twin of `pycc_ext_obj_getslice`.
+ *
+ * The bounds follow `pycc_ext_obj_slice_of`'s contract, and the base is
+ * borrowed. `PyObject_DelItem` runs the base's own `__delitem__` with the
+ * `slice`, which is released afterwards; nothing else outlives the call.
+ * Returns `0`, or `-1` with the exception set: a `tuple` raises
+ * `TypeError`, and a `dict` raises `KeyError` for the (hashable since
+ * 3.12) slice key, exactly as CPython's own `del` does.
+ */
+int pycc_ext_obj_delslice(PyObject *o, PyObject *start, PyObject *stop, PyObject *step,
+                          int present)
+{
+    PyObject *slice = pycc_ext_obj_slice_of(o, start, stop, step, present);
+    int status;
+
+    if (slice == NULL) {
+        return -1;
+    }
+    status = PyObject_DelItem(o, slice);
+    Py_DECREF(slice);
+    return status;
 }
 
 /*
@@ -2499,6 +2593,164 @@ int pycc_ext_obj_unpack_float_tuple(PyObject *o, long long arity, double *out)
         out[index] = value;
     }
     return 0;
+}
+
+/*
+ * The `tp_name` CPython's "cannot unpack non-iterable" message prints, as a
+ * new `str` reference, or NULL with an exception set. A static type's
+ * `tp_name` is "module.name", from which CPython derives both `__module__`
+ * and `__name__`, so it is rebuilt from them, a `builtins` type printing
+ * its bare name (`int`, `builtin_function_or_method`); a heap type created
+ * by a `class` statement has its `__name__` as `tp_name`. A heap type built
+ * from a `PyType_Spec` whose spec name is dotted prints `__name__` here and
+ * the dotted name in CPython: the Limited API cannot tell the two heap kinds
+ * apart.
+ */
+static PyObject *pycc_ext_obj_unpack_type_name(PyTypeObject *type)
+{
+    PyObject *name;
+    PyObject *module;
+    PyObject *dotted;
+
+    name = PyType_GetName(type);
+    if (name == NULL || (PyType_GetFlags(type) & Py_TPFLAGS_HEAPTYPE) != 0) {
+        return name;
+    }
+    module = PyType_GetModuleName(type);
+    if (module == NULL) {
+        Py_DECREF(name);
+        return NULL;
+    }
+    if (PyUnicode_CompareWithASCIIString(module, "builtins") == 0) {
+        Py_DECREF(module);
+        return name;
+    }
+    dotted = PyUnicode_FromFormat("%U.%U", module, name);
+    Py_DECREF(module);
+    Py_DECREF(name);
+    return dotted;
+}
+
+/*
+ * `t1, ..., tn = o` where `o` is a CPython object (Part 1 of #891,
+ * `EXT_OBJ_UNPACK_SYMBOL` in `crates/pycc_codegen/src/ext.rs`): a new
+ * reference to a `tuple` of exactly `n` items taken from `o`, or NULL with
+ * CPython's own exception set.
+ *
+ * It mirrors CPython's `unpack_iterable` (Python/ceval.c), which the
+ * Limited API does not export:
+ *
+ * - `iter(o)` failing with `TypeError` for an object that has neither
+ *   `__iter__` nor the sequence protocol is replaced by CPython's own
+ *   "cannot unpack non-iterable T object"; any other failure of `iter()`
+ *   (a raising `__iter__`, say) propagates unchanged. CPython prints the
+ *   type's `tp_name`, which the Limited API does not expose;
+ *   `pycc_ext_obj_unpack_type_name` rebuilds it (CPython's `%.200s`
+ *   truncation of a longer name is not mimicked);
+ * - fewer than `n` items is `ValueError` "not enough values to unpack
+ *   (expected n, got i)";
+ * - an `n + 1`-th item is `ValueError` "too many values to unpack
+ *   (expected n)". From CPython 3.14 the interpreter appends ", got K" when
+ *   `o` is an exact `list`, `tuple` or `dict`, whose size it can read
+ *   without consuming anything; this helper does the same when the running
+ *   interpreter is 3.14 or newer (`Py_Version`), so the message matches the
+ *   host's own byte for byte;
+ * - an exception raised by `__next__` propagates unchanged.
+ *
+ * # Ownership
+ *
+ * An exact `tuple` of exactly `n` items -- the common case, and lark's
+ * parse-table entries -- is returned itself with one new reference: a
+ * tuple is immutable, so the items read back from it are the ones
+ * iteration would have produced, and no allocation is made. Every other
+ * value is iterated into a fresh tuple. The iterator and every item
+ * fetched so far are released on each failing exit; on success the
+ * iterator is released and the items are owned by the returned tuple. The
+ * extra item fetched to detect "too many" is released at once. The
+ * returned reference joins the #1092 leak-only set like every other object
+ * result. `PyTuple_New` plus `PyTuple_SetItem` (which steals) build the
+ * fresh tuple, both in the Limited API.
+ *
+ * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents;
+ * `n` is guarded with it, codegen only ever emitting a positive arity.
+ */
+PyObject *pycc_ext_obj_unpack(PyObject *o, long long n)
+{
+    PyObject *iter;
+    PyObject *items;
+    PyObject *item;
+    PyObject *type_name;
+    Py_ssize_t index;
+    Py_ssize_t size;
+
+    if (o == NULL || n < 1) {
+        PyErr_SetString(PyExc_SystemError, "pycc_ext_obj_unpack called with an invalid argument");
+        return NULL;
+    }
+    if (PyTuple_CheckExact(o) && PyTuple_Size(o) == (Py_ssize_t)n) {
+        return Py_NewRef(o);
+    }
+    iter = PyObject_GetIter(o);
+    if (iter == NULL) {
+        if (PyErr_ExceptionMatches(PyExc_TypeError)
+            && PyType_GetSlot(Py_TYPE(o), Py_tp_iter) == NULL && !PySequence_Check(o)) {
+            type_name = pycc_ext_obj_unpack_type_name(Py_TYPE(o));
+            if (type_name != NULL) {
+                PyErr_Format(PyExc_TypeError, "cannot unpack non-iterable %U object", type_name);
+                Py_DECREF(type_name);
+            }
+        }
+        return NULL;
+    }
+    items = PyTuple_New((Py_ssize_t)n);
+    if (items == NULL) {
+        Py_DECREF(iter);
+        return NULL;
+    }
+    for (index = 0; index < (Py_ssize_t)n; index++) {
+        item = PyIter_Next(iter);
+        if (item == NULL) {
+            if (!PyErr_Occurred()) {
+                PyErr_Format(PyExc_ValueError,
+                             "not enough values to unpack (expected %zd, got %zd)",
+                             (Py_ssize_t)n, index);
+            }
+            Py_DECREF(items);
+            Py_DECREF(iter);
+            return NULL;
+        }
+        PyTuple_SetItem(items, index, item);
+    }
+    item = PyIter_Next(iter);
+    Py_DECREF(iter);
+    if (item != NULL) {
+        Py_DECREF(item);
+        size = -1;
+        if (Py_Version >= 0x030E0000) {
+            if (PyList_CheckExact(o)) {
+                size = PyList_Size(o);
+            } else if (PyTuple_CheckExact(o)) {
+                size = PyTuple_Size(o);
+            } else if (PyDict_CheckExact(o)) {
+                size = PyDict_Size(o);
+            }
+        }
+        if (size >= 0) {
+            PyErr_Format(PyExc_ValueError,
+                         "too many values to unpack (expected %zd, got %zd)", (Py_ssize_t)n,
+                         size);
+        } else {
+            PyErr_Format(PyExc_ValueError, "too many values to unpack (expected %zd)",
+                         (Py_ssize_t)n);
+        }
+        Py_DECREF(items);
+        return NULL;
+    }
+    if (PyErr_Occurred()) {
+        Py_DECREF(items);
+        return NULL;
+    }
+    return items;
 }
 
 /*

@@ -39,9 +39,15 @@ mod object_binding;
 // Part 1 of #1333: passing a CPython object to a pycc function.
 mod object_argument;
 mod object_compare;
+// Part 2d of #1371: a list display built as a CPython `list`.
+mod object_list_display;
 // Part 2b of #1371: membership in, and slices of, a CPython object.
 mod object_membership_slice;
 mod object_return;
+// Part 1 of #891: the run-time unpack of a CPython object.
+mod object_unpack;
+// Part 6 of #1371: `and`/`or` with a CPython object operand.
+mod object_bool_op;
 
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s
