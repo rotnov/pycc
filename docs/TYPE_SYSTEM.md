@@ -49,7 +49,10 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   tables), a protocol, `super()`, and a method whose return mentions a type
   parameter answer nothing, leaving the prior `T0021`. The call only links
   two solver terms, so recursion (`return self._f()` inside `_f`) and
-  mutual recursion terminate with that `T0021` instead of looping.
+  mutual recursion never loop. A recursive call adds no information of its
+  own: a helper constrained only by its own recursion stays `T0021`, and one
+  with another constraining return (a base case such as `if n == 0: return
+  1`) resolves from that return.
 - **An inherited copy must agree with its origin's return.** A D-254
   receiver-exact copy of an inherited method is solved per receiver class,
   while a caller types `recv.m()` through the origin's signature. With

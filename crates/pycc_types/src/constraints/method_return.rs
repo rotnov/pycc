@@ -10,8 +10,11 @@
 //! declared return and an unannotated one its own inference variable.
 //! Nothing here walks the callee's body: the call only links two terms in
 //! the union-find, so recursion (`return self.f()` inside `f`) and mutual
-//! recursion cannot loop. They leave the return variable unresolved, and
-//! signature materialization reports the usual `T0021`.
+//! recursion cannot loop. A recursive call adds no information of its own:
+//! a helper constrained only by its own recursion leaves the return
+//! variable unresolved, and signature materialization reports the usual
+//! `T0021`, while one with another constraining return (a base case such
+//! as `if n == 0: return 1`) resolves from that return.
 //!
 //! The receiver term must already be a concrete `Ok(Ty::Instance(_))` --
 //! `self`, an annotated parameter, or a local bound from one. A solver

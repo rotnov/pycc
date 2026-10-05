@@ -92,6 +92,17 @@ fn self_recursion_is_refused_without_hanging() {
 }
 
 #[test]
+fn recursion_with_a_base_case_resolves_from_the_base_case() {
+    // The recursive call adds nothing of its own; the base-case return
+    // constrains the helper.
+    let source = format!(
+        "{CLASS}\n    def _f(self, n: int):\n        if n == 0:\n            return 1\n        \
+         return self._f(n - 1)\n"
+    );
+    assert_eq!(return_of(&source, "C._f"), Ty::Int);
+}
+
+#[test]
 fn mutual_recursion_is_refused_without_hanging() {
     let source = format!(
         "{CLASS}\n    def _a(self):\n        return self._b()\n\n    def _b(self):\n        return self._a()\n"
