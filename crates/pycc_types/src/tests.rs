@@ -14868,6 +14868,7 @@ fn the_generic_recursion_gate_finds_a_self_call_in_every_expression_position() {
         HirExpr::ListLiteral(vec![self_call()]),
         HirExpr::SetLiteral(vec![self_call()]),
         HirExpr::TupleLiteral(vec![self_call()]),
+        HirExpr::ObjectList(vec![self_call()]),
         HirExpr::DictLiteral(vec![(self_call(), benign())]),
         HirExpr::DictLiteral(vec![(benign(), self_call())]),
         HirExpr::Subscript {
@@ -21923,6 +21924,51 @@ fn a_walrus_inside_a_tuple_literal_test_in_a_function_body_is_a_local_name() {
         class_defs: Vec::new(),
     };
     assert!(check(&hir).is_ok(), "{:?}", check(&hir));
+}
+
+/// Part 2d of #1371: the same walk through an object-slot list display's
+/// `|`-alternative. Only the empty-container pre-pass builds one from
+/// source, never in a test position, so the fixture is hand-built.
+#[test]
+fn a_walrus_inside_an_object_list_test_in_a_function_body_is_a_local_name() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::If {
+                    test: HirExpr::ObjectList(vec![HirExpr::NamedExpr {
+                        name: "d".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(1)),
+                    }]),
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("d".to_string())))],
+                    orelse: vec![],
+                },
+                HirStmt::Return(Some(HirExpr::IntLiteral(0))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_ok(), "{:?}", check(&hir));
+}
+
+/// Part 2d of #1371: `rewrite_generic_calls_in_expr` walks an object-slot
+/// list display's elements and types the display as the object.
+#[test]
+fn rewrite_generic_calls_in_expr_walks_an_object_list_display() {
+    let mut env = Environment::new();
+    let mut expr = HirExpr::ObjectList(vec![HirExpr::IntLiteral(1)]);
+    let mut instantiations = Vec::new();
+    let mut seen = HashSet::new();
+    let ty =
+        rewrite_generic_calls_in_expr(&mut env, &[], &mut expr, &mut instantiations, &mut seen)
+            .unwrap();
+    assert_eq!(ty, Ty::Object);
+    assert!(instantiations.is_empty());
 }
 
 // -- #911 (Part 1 of #885): class-level attributes at the checking seam ----
