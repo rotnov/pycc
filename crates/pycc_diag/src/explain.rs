@@ -1469,10 +1469,12 @@ other type in an object or of an `object` item in a native container \
 (membership between two native values keeps its `C0001`). A subscript call whose base is a bare name and whose key is \
 `int`, `float`, `bool` or `str` (`handlers[int](x)`) is still read as a \
 generic class instantiation and refused by that path's own diagnostic. Storing through a \
-subscript (`o[k] = v`) or a slice (`o[a:b] = v`, `del o[a:b]`) and \
+subscript (`o[k] = v`) or a slice (`o[a:b] = v`) and \
 iterating a direct call's result (`for x in o(...):`) are still refused \
 too, but by their own pre-existing `C0001` diagnostics rather than by \
-this code. Since #1095 a method named `append`, `pop`, `get` or `add` is \
+this code; deleting a slice of an object (`del o[a:b]`) is admitted \
+since Part 2c of #1371, with the same bound rule as a slice load. Since \
+#1095 a method named `append`, `pop`, `get` or `add` is \
 an ordinary method call on the object too, whatever its arity \
 (`o.get(k)`, `o.attr.append(v)`): container lowering claims those four \
 spellings, but in a module that can hold an object it keeps the method \

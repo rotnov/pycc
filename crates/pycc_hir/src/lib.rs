@@ -1110,6 +1110,24 @@ pub enum HirStmt {
     Delete {
         name: String,
     },
+    /// `del base[start:stop:step]`, any bound omitted (Part 2c of #1371),
+    /// one per slice target of a `del` statement, in the statement's
+    /// left-to-right target order. Unlike [`HirStmt::Delete`] it unbinds no
+    /// name: it *reads* `base` and every present bound, and at run time asks
+    /// the base to delete the slice. `pycc_hir` cannot see types, so every
+    /// slice target lowers here; `pycc_types` admits only a CPython-object
+    /// base (`PyObject_DelItem` with a `slice` key, `foreign::slice`) and
+    /// refuses every other base with this node's `span` -- the slice
+    /// target's own range -- so the native refusal stays located.
+    /// `docs/TYPE_SYSTEM.md`'s "`del` statement" section is the canonical
+    /// statement of the rule.
+    DeleteSlice {
+        base: Box<HirExpr>,
+        start: Option<Box<HirExpr>>,
+        stop: Option<Box<HirExpr>>,
+        step: Option<Box<HirExpr>>,
+        span: Span,
+    },
     /// A CPython-backed `import X` or `import X as Y` nested in a
     /// module-level `if`/`try` block (Part 1 of #1282, #1291). Each
     /// `(local_name, module_path)` pair, in alias order, binds `local_name`

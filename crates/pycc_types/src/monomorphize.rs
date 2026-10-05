@@ -1119,6 +1119,21 @@ fn rewrite_generic_calls_in_stmt(
             Ok(())
         }
         HirStmt::Delete { .. } | HirStmt::ForeignImport { .. } => Ok(()),
+        // Part 2c of #1371: a slice `del` reads its base and bounds, so a
+        // generic call in any of them is rewritten like any other read.
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            rewrite_generic_calls_in_expr(env, local_names, base, instantiations, seen)?;
+            for bound in [start, stop, step].into_iter().flatten() {
+                rewrite_generic_calls_in_expr(env, local_names, bound, instantiations, seen)?;
+            }
+            Ok(())
+        }
         HirStmt::Match { subject, cases } => {
             rewrite_generic_calls_in_expr(env, local_names, subject, instantiations, seen)?;
             for case in cases.iter_mut() {
@@ -1526,6 +1541,18 @@ pub(crate) fn collect_generic_class_instantiations_from_stmt(
             }
         }
         HirStmt::Return(None) | HirStmt::Delete { .. } | HirStmt::ForeignImport { .. } => {}
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            collect_generic_class_instantiations_from_expr(base, out);
+            for bound in [start, stop, step].into_iter().flatten() {
+                collect_generic_class_instantiations_from_expr(bound, out);
+            }
+        }
         HirStmt::Return(Some(expr)) => collect_generic_class_instantiations_from_expr(expr, out),
         HirStmt::AttrSet { base, value, .. } => {
             collect_generic_class_instantiations_from_expr(base, out);
@@ -2559,6 +2586,27 @@ fn rewrite_protocol_calls_in_stmt(
                 specializations,
                 seen,
             );
+        }
+        // Part 2c of #1371: a slice `del` reads its base and bounds; an
+        // unrewritten protocol call there would dangle once the original
+        // function item is dropped.
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            for operand in std::iter::once(base).chain([start, stop, step].into_iter().flatten()) {
+                rewrite_protocol_calls_in_expr(
+                    operand,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
+            }
         }
         // #1254: the loop variable is bound in a scoped clone of `env`
         // before `cond` and the elements are walked, so a protocol call

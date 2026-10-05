@@ -286,7 +286,7 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              scalar- or object-argument method calls and direct calls \
              (including a call of a subscript result), `len`, truth \
              testing, a \
-             scalar- or object-key subscript load, a slice load with scalar or object \
+             scalar- or object-key subscript load, a slice load or deletion with scalar or object \
              bounds, a rich comparison with an object or \
              scalar operand, an identity test against an object or `None`, \
              a membership test of a scalar or object item in an object, \
