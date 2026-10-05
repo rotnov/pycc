@@ -217,9 +217,10 @@ pub struct HirClassDef {
     /// `__init__`, `@staticmethod` or `@classmethod` -- that declares at
     /// least one, keyed by the same mangled name `methods`,
     /// `static_methods` and `class_methods` hold. `defaults` is parallel to
-    /// that `HirItem::Function`'s full `params` (receiver included, always
-    /// `None`, except for a `@staticmethod`, which has no receiver), each entry the lowered literal
-    /// `func::params::check_default` admitted.
+    /// that `HirItem::Function`'s full `params` (a regular method or
+    /// `@classmethod` leads with a `None` for its receiver; a
+    /// `@staticmethod` has no receiver entry), each other entry the lowered
+    /// literal `func::params::check_default` admitted, or `None`.
     ///
     /// **Consumer.** Only the `--ext` host boundary reads it: the generated
     /// `METH_FASTCALL` wrapper and `Py_tp_init` supply a default for an

@@ -286,11 +286,7 @@ pub(super) fn lower_method(
 /// parameter list (receiver included), and the item's mangled name paired
 /// with -- parallel to that list -- each parameter's lowered default value,
 /// or an empty vector when no parameter has one (the method part of #1140).
-pub(super) type LoweredMethod = (
-    HirItem,
-    Vec<(String, Ty)>,
-    (String, Vec<Option<HirExpr>>),
-);
+pub(super) type LoweredMethod = (HirItem, Vec<(String, Ty)>, (String, Vec<Option<HirExpr>>));
 
 #[cfg(test)]
 #[path = "method_tests.rs"]
