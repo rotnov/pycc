@@ -97,7 +97,10 @@ pub(super) fn bare_container_example(name: &str) -> Option<&'static str> {
 /// matching only the outermost expression would drop the advice in exactly
 /// the positions that can act on it.
 pub(crate) fn with_bare_container_advice(error: Diagnostic, annotation: &Expr) -> Diagnostic {
-    let stripped = strip_transparent_wrappers(annotation);
+    // Part 1 of #889: a quoted wrapped name (`Final["list"]`) gets the
+    // advice its unquoted spelling gets; its nodes carry the literal's span.
+    let unquoted = pycc_ast::unquote_nested_string_annotations(annotation);
+    let stripped = strip_transparent_wrappers(&unquoted);
     let Expr::Name(name) = stripped else {
         return error;
     };
@@ -119,7 +122,8 @@ pub(crate) fn with_bare_container_advice(error: Diagnostic, annotation: &Expr) -
 /// #1266): a bare `set`/`tuple` there keeps `error`, so the
 /// advice never names a form the position refuses too.
 pub(crate) fn with_bare_list_or_dict_advice(error: Diagnostic, annotation: &Expr) -> Diagnostic {
-    match strip_transparent_wrappers(annotation) {
+    let unquoted = pycc_ast::unquote_nested_string_annotations(annotation);
+    match strip_transparent_wrappers(&unquoted) {
         Expr::Name(name) if matches!(name.id.as_str(), "list" | "dict" | "List" | "Dict") => {
             with_bare_container_advice(error, annotation)
         }

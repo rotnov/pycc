@@ -106,6 +106,11 @@ fn the_bare_container_advice_survives_transparent_wrappers() {
         // Wrappers nest, so the peel is recursive.
         "from typing import Annotated, Final\n\nxs: Final[Annotated[list, \"m\"]] = []\n",
         "from typing import Final\n\ndef f(xs: Final[list]) -> None:\n    return\n",
+        // Part 1 of #889: a quoted wrapped name gets the same advice, through
+        // both the general and the list-or-dict (class declaration) paths.
+        "from typing import Final\n\nxs: Final[\"list\"] = []\n",
+        "from typing import Annotated\n\nxs: Annotated[\"list\", \"meta\"] = []\n",
+        "from typing import Annotated\n\n\nclass C:\n    xs: Annotated[\"list\", \"m\"]\n",
     ] {
         assert_capability_error_message(source, ADVICE);
     }
