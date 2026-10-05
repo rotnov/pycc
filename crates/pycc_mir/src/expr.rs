@@ -541,6 +541,13 @@ pub(super) fn lower_expr(
         HirExpr::Compare { op, left, right } => {
             let left_lowered = lower_expr(left, scopes, classes, current_class);
             let right_lowered = lower_expr(right, scopes, classes, current_class);
+            // Part 1 of #1371: an object operand takes CPython's own
+            // comparison, never the native one below.
+            let (left_lowered, right_lowered) =
+                match super::obj_compare::lower_object_compare(*op, left_lowered, right_lowered) {
+                    Ok(object_compare) => return object_compare,
+                    Err(operands) => *operands,
+                };
             // #378 (PR-18): `==`/`!=` between same-class dataclass instances
             // is rewritten to a `MirExpr::Call` to the class's
             // compiler-synthesized `__eq__` method. `!=` is lowered as

@@ -1005,6 +1005,14 @@ pub(crate) fn check_isinstance(
     }
     // Infer the object's type normally.
     let obj_ty = infer_expr_in(env, local_names, &args[0])?;
+    // Part 1 of #1371: an object first argument is a run-time
+    // `PyObject_IsInstance`, never the compile-time fold below, whose
+    // catch-all would answer a constant `False` where CPython answers
+    // `True` and drop the operand's side effect (see
+    // `foreign::compare::check_object_isinstance`).
+    if obj_ty == Ty::Object {
+        return crate::foreign::compare::check_object_isinstance(env, local_names, &args[1]);
+    }
     // Extract class names from the second argument (do NOT infer it as a
     // regular expression — class names are not value bindings).
     let class_names = extract_class_names(&args[1]).map_err(|_| {
@@ -1041,23 +1049,7 @@ pub(crate) fn check_isinstance(
     // is computed by `eval_isinstance_single` at MIR lowering time.
     // (We could compute it here too, but the type checker's job is just
     // validation — the MIR computes the constant.)
-    // Part 2 of #1026 (#1081): `isinstance(numpy.pi, float)` stays refused,
-    // and this is the one hole where admitting it would be *wrong* rather
-    // than merely unimplemented. `pycc_mir`'s lowering reads only the
-    // argument's `.ty()`, discards the lowered expression, and folds the
-    // answer through `eval_isinstance_single`, whose catch-all is `false` --
-    // so an object first argument would compile to a constant `False` where
-    // CPython answers `True`, *and* would drop the attribute load's side
-    // effect. This extends the `C0001` decision two dozen lines above, which
-    // already refuses a `HirExpr::Call` first argument because "side effects
-    // would be lost"; that guard matches on the expression shape and so does
-    // not catch `AttrGet`. Keyed on the type here, which catches both
-    // producer shapes.
-    // The guard above is also what now *reads* `obj_ty`; the explicit
-    // `let _ = obj_ty;` discard that used to sit here existed only to say
-    // "validated, but the MIR is what computes the result", and an unread
-    // binding is no longer what it would be describing.
-    crate::foreign::reject_object_operand(&obj_ty, "testing a CPython object with `isinstance`")?;
+    // An object first argument returned above, before this fold.
     Ok(Ty::Bool)
 }
 

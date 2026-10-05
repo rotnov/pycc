@@ -57,7 +57,7 @@ use inkwell::values::BasicValueEnum;
 /// `foreign_attr.rs`'s `obj_getattr_fn` generalized over the parameter
 /// list, because this module declares five symbols rather than one and a
 /// second `add_function` of any one name is an LLVM module-verifier error.
-fn shim_fn<'ctx>(
+pub(super) fn shim_fn<'ctx>(
     module: &inkwell::module::Module<'ctx>,
     symbol: &str,
     fn_type: inkwell::types::FunctionType<'ctx>,
@@ -77,7 +77,7 @@ fn shim_fn<'ctx>(
 /// argument in the first case, a key in the second). Any other `Scalar` is
 /// a front-end defect: the checker refuses a container, an instance,
 /// `None`, and a second `Ty::Object` before lowering ever runs.
-fn packer_for<'ctx>(scalar: Scalar<'ctx>) -> (&'static str, BasicValueEnum<'ctx>) {
+pub(super) fn packer_for<'ctx>(scalar: Scalar<'ctx>) -> (&'static str, BasicValueEnum<'ctx>) {
     match scalar {
         Scalar::Int(value) => (EXT_OBJ_PACK_INT_SYMBOL, value.into()),
         Scalar::Float(value) => (EXT_OBJ_PACK_FLOAT_SYMBOL, value.into()),

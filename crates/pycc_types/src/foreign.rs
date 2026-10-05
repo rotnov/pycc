@@ -278,10 +278,12 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
         "I0404",
         format!(
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
-             value, and #1026 implements attribute access, positional \
+             value and implements attribute access, positional \
              scalar-argument method calls and direct calls, `len`, truth \
              testing, a \
-             scalar-key subscript load, `for` iteration, binding the \
+             scalar-key subscript load, a rich comparison with an object or \
+             scalar operand, an identity test against an object or `None`, \
+             `isinstance` against a foreign class or `int`/`float`/`bool`/`str`, `for` iteration, binding the \
              value to a name, returning it from and passing it to a pycc \
              function, printing it and f-string \
              interpolation, the `float`, \
@@ -457,6 +459,7 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
     }
 }
 
+pub(crate) mod compare;
 pub(crate) mod for_loop;
 
 #[cfg(test)]
