@@ -2076,6 +2076,11 @@ pub(crate) fn collect_expr_constraints(
                     signatures, parents, concrete, deferred, &scoped, sub,
                 )?;
             }
+            // Part 1 of #1255: a comprehension over a CPython object
+            // produces a CPython object, whatever its element.
+            if let CompIter::Iterable(_) = comp.iter {
+                return Ok(Some(Ok(Ty::Object)));
+            }
             // A set comprehension's container term is chosen by
             // [`set_comp::set_comp_container`] (#1343, #1344), which owns the
             // rule. The element is the last body expression (`body_exprs`
@@ -2337,6 +2342,13 @@ fn bind_comp_loop_var(
                 let term = fresh_term(parents, concrete);
                 env.bindings.insert(var.to_string(), term);
             }
+        }
+        // Part 1 of #1255: the iterable's own constraints are collected
+        // against the enclosing bindings; its loop variable is a CPython
+        // object, which the check phase verifies.
+        CompIter::Iterable(iterable) => {
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, iterable)?;
+            env.bindings.insert(var.to_string(), Ok(Ty::Object));
         }
     }
     Ok(())

@@ -89,6 +89,7 @@ impl<'a> Walker<'a> {
                 self.expr(stop);
                 self.expr(step);
             }
+            CompIter::Iterable(iterable) => self.expr(iterable),
             CompIter::Name(name) => self.name_use(name),
         }
     }

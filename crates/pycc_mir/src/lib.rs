@@ -849,8 +849,14 @@ pub enum MirCompElt {
 
 impl MirComprehension {
     /// The produced container type, derived from the element types exactly
-    /// as the statement form's binding of `target` is.
+    /// as the statement form's binding of `target` is. A comprehension over
+    /// a CPython object ([`CompSource::Object`], Part 1 of #1255) produces a
+    /// CPython `list` or `set`, which is the opaque [`Ty::Object`] whatever
+    /// its elements are.
     pub fn ty(&self) -> Ty {
+        if let CompSource::Object(_) = self.source {
+            return Ty::Object;
+        }
         match &self.elt {
             MirCompElt::List(elt) => Ty::List(Box::new(elt.ty())),
             MirCompElt::Set(elt, _) => Ty::Set(Box::new(elt.ty())),
@@ -1637,6 +1643,13 @@ pub enum CompSource {
     List(String),
     Dict(String),
     Set(String),
+    /// A CPython object iterated through the iterator protocol (Part 1 of
+    /// #1255): the iterable expression, evaluated once in the enclosing
+    /// scope. Its loop variable is a CPython object, and the comprehension
+    /// produces a CPython `list` or `set` ([`MirComprehension::ty`]). Only
+    /// the expression form carries it: `pycc_hir` lowers the statement form
+    /// of such a comprehension to a plain assignment.
+    Object(MirExpr),
 }
 
 #[derive(Debug, PartialEq)]
@@ -2326,6 +2339,15 @@ pub(crate) fn resolve_comp_source(
                 other.name()
             ),
         },
+        // Part 1 of #1255: `pycc_types` proved the iterable a CPython
+        // object, so the loop variable is one too. The iterable is lowered
+        // before `var` is bound, so it reads only the enclosing bindings.
+        CompIter::Iterable(iterable) => {
+            let iterable = lower_expr(iterable, scopes, classes, current_class);
+            bind_variable(scopes, var.to_string(), Ty::Object);
+            kill_narrowing(scopes, var);
+            (CompSource::Object(iterable), Ty::Object)
+        }
     }
 }
 

@@ -2258,6 +2258,67 @@ long long pycc_ext_obj_iter_next(PyObject *it, PyObject **out)
 }
 
 /*
+ * Part 1 of #1255: the empty result of a list or set comprehension over a
+ * CPython object (`EXT_OBJ_NEW_COLLECTION_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`). `kind` is `ObjCollectionKind`'s code
+ * there: `0` builds a `list`, `1` a `set`; any other code is a code
+ * generator defect and raises `SystemError` rather than guessing.
+ *
+ * The result is a *new* reference -- the comprehension's value -- that is
+ * deliberately never released, on the leak-only rule `docs/RUNTIME.md`
+ * records, or `NULL` with the exception set.
+ */
+PyObject *pycc_ext_obj_new_collection(long long kind)
+{
+    if (kind == 0) {
+        return PyList_New(0);
+    }
+    if (kind == 1) {
+        return PySet_New(NULL);
+    }
+    PyErr_SetString(PyExc_SystemError,
+                    "pycc_ext_obj_new_collection called with an unknown kind");
+    return NULL;
+}
+
+/*
+ * Part 1 of #1255: one element step of a list or set comprehension over a
+ * CPython object (`EXT_OBJ_COLLECT_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`). `collection` is borrowed and was built
+ * by `pycc_ext_obj_new_collection` with the same `kind`.
+ *
+ * `item` is a *packed* element, a new reference a `pycc_ext_obj_pack_*`
+ * helper produced, and it is consumed on every path, exactly as
+ * `pycc_ext_obj_call` consumes its arguments. A `NULL` item is a packer that
+ * already set the exception, so it is reported as a failure without a new
+ * one. `PyList_Append` and `PySet_Add` take their own reference, so the
+ * packed one is released after either; `PySet_Add` raises `TypeError` for an
+ * unhashable item, which is exactly what CPython's own set comprehension
+ * raises.
+ *
+ * Returns `0`, or `-1` with the exception set. A `NULL` collection or an
+ * unknown kind is a code generator defect and raises `SystemError`, as the
+ * other NULL guards in this file do.
+ */
+int pycc_ext_obj_collect(PyObject *collection, long long kind, PyObject *item)
+{
+    int status;
+
+    if (item == NULL) {
+        return -1;
+    }
+    if (collection == NULL || (kind != 0 && kind != 1)) {
+        Py_DECREF(item);
+        PyErr_SetString(PyExc_SystemError,
+                        "pycc_ext_obj_collect called with an invalid collection");
+        return -1;
+    }
+    status = kind == 0 ? PyList_Append(collection, item) : PySet_Add(collection, item);
+    Py_DECREF(item);
+    return status < 0 ? -1 : 0;
+}
+
+/*
  * Part 4 of #1026 (PR 4a of #1083): `float(o)` on a CPython object value
  * (`EXT_OBJ_TO_FLOAT_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *

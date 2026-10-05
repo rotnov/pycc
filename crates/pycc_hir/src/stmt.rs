@@ -753,6 +753,7 @@ fn comp_iter_contains_named_expr(iter: &CompIter) -> bool {
         CompIter::Range { start, stop, step } => {
             contains_named_expr(start) || contains_named_expr(stop) || contains_named_expr(step)
         }
+        CompIter::Iterable(iterable) => contains_named_expr(iterable),
         CompIter::Name(_) => false,
     }
 }

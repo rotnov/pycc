@@ -360,6 +360,52 @@ pub const EXT_OBJ_GET_ITER_SYMBOL: &str = "pycc_ext_obj_get_iter";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_ITER_NEXT_SYMBOL: &str = "pycc_ext_obj_iter_next";
 
+/// The fixed C shim's collection constructor (Part 1 of #1255): given a
+/// [`ObjCollectionKind`] code it returns a *new* reference to an empty
+/// CPython `list` (`0`) or `set` (`1`), or `NULL` with the CPython
+/// exception already set. A list or set comprehension over a CPython object
+/// builds its result in it; the reference is the comprehension's value and
+/// is deliberately never released (#1092).
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_NEW_COLLECTION_SYMBOL: &str = "pycc_ext_obj_new_collection";
+
+/// The fixed C shim's collection insert (Part 1 of #1255): given a borrowed
+/// collection from [`EXT_OBJ_NEW_COLLECTION_SYMBOL`], the same kind code and
+/// a *packed* item, it appends the item to the list or adds it to the set
+/// and returns `0`, or returns `-1` with the CPython exception already set
+/// (an unhashable set item raises `TypeError` there).
+///
+/// **Ownership.** The item is a new reference a `pycc_ext_obj_pack_*`
+/// helper produced, and it is consumed on every path, exactly as
+/// `pycc_ext_obj_call` consumes its arguments: a `NULL` item is a packer
+/// that already set the exception, and is reported as a failure.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_COLLECT_SYMBOL: &str = "pycc_ext_obj_collect";
+
+/// Which CPython collection a comprehension over an object builds (Part 1
+/// of #1255): the code [`EXT_OBJ_NEW_COLLECTION_SYMBOL`] and
+/// [`EXT_OBJ_COLLECT_SYMBOL`] take. Spelled once here so the two helpers'
+/// shared numbering cannot drift between their callers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjCollectionKind {
+    /// A `list`, from `[elt for x in <object>]`.
+    List,
+    /// A `set`, from `{elt for x in <object>}`.
+    Set,
+}
+
+impl ObjCollectionKind {
+    /// The kind code the shim helpers switch on.
+    pub fn shim_code(self) -> u64 {
+        match self {
+            ObjCollectionKind::List => 0,
+            ObjCollectionKind::Set => 1,
+        }
+    }
+}
+
 /// The fixed C shim's `float(o)` conversion helper (Part 4 of #1026, PR 4a
 /// of #1083): it takes a borrowed `PyObject *` and a `double *`
 /// out-parameter, writes the converted value and returns `0`, or returns
