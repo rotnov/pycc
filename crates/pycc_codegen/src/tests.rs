@@ -39,6 +39,8 @@ mod object_binding;
 // Part 1 of #1333: passing a CPython object to a pycc function.
 mod object_argument;
 mod object_compare;
+// Part 2b of #1371: membership in, and slices of, a CPython object.
+mod object_membership_slice;
 
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s
@@ -13048,6 +13050,7 @@ fn enum_member_singleton_init_emits_and_runs() {
         type_param: None,
         is_enum: false,
         implicit_object_init: false,
+        method_defaults: Vec::new(),
         enum_members: vec![
             ("RED".to_string(), pycc_mir::EnumMemberValue::Int(1)),
             ("GREEN".to_string(), pycc_mir::EnumMemberValue::Int(2)),
@@ -13110,6 +13113,7 @@ fn str_valued_enum_member_singleton_init_emits_and_runs() {
         type_param: None,
         is_enum: false,
         implicit_object_init: false,
+        method_defaults: Vec::new(),
         enum_members: vec![
             (
                 "AXIAL".to_string(),
@@ -13231,6 +13235,7 @@ fn abstract_method_body_with_non_none_return_emits_default_value() {
                 class_methods: Vec::new(),
                 is_enum: false,
                 implicit_object_init: false,
+                method_defaults: Vec::new(),
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),

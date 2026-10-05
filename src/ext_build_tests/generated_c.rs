@@ -80,6 +80,7 @@ fn a_nullary_export_declares_a_void_parameter_list_and_checks_its_arity() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "answer".to_string(),
             class: None,
             method: None,
@@ -110,6 +111,7 @@ fn a_unary_export_uses_the_singular_arity_message_and_unpacks_one_argument() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "square".to_string(),
             class: None,
             method: None,
@@ -143,6 +145,7 @@ fn a_binary_export_unpacks_each_argument_at_its_own_index() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "add".to_string(),
             class: None,
             method: None,
@@ -179,6 +182,7 @@ fn every_wrapper_checks_the_runtime_exception_flag_before_packing_a_result() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "risky".to_string(),
             class: None,
             method: None,
@@ -206,6 +210,7 @@ fn a_float_export_carries_a_double_through_every_slot_of_the_wrapper() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "scale".to_string(),
             class: None,
             method: None,
@@ -239,6 +244,7 @@ fn a_bool_export_uses_a_one_byte_c_type_to_match_the_compiled_i8_slot() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "negate".to_string(),
             class: None,
             method: None,
@@ -271,6 +277,7 @@ fn a_none_returning_export_casts_to_void_and_declares_no_result_at_all() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "sink".to_string(),
             class: None,
             method: None,
@@ -297,6 +304,7 @@ fn a_mixed_signature_gives_each_slot_its_own_c_type_and_unpack_helper() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "mix".to_string(),
             class: None,
             method: None,
@@ -337,6 +345,7 @@ fn a_none_returning_wrapper_checks_the_exception_flag_before_returning_none() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "risky".to_string(),
             class: None,
             method: None,
@@ -369,6 +378,7 @@ fn a_str_export_carries_an_opaque_pointer_in_both_positions() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "shout".to_string(),
             class: None,
             method: None,
@@ -403,6 +413,7 @@ fn a_str_unpack_failure_releases_every_str_argument_already_taken() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "join".to_string(),
             class: None,
             method: None,
@@ -676,6 +687,7 @@ fn a_tuple_parameter_is_checked_once_then_unpacked_element_by_element() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "total".to_string(),
             class: None,
             method: None,
@@ -732,6 +744,7 @@ fn a_tuple_return_arrives_through_out_pointers_and_is_packed_afterwards() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "split".to_string(),
             class: None,
             method: None,
@@ -805,6 +818,7 @@ fn a_tuple_return_retains_each_int_element_before_packing_it() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "split".to_string(),
             class: None,
             method: None,
@@ -839,6 +853,7 @@ fn a_one_element_tuple_keeps_its_tuple_shape_in_both_directions() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "wrap".to_string(),
             class: None,
             method: None,
@@ -865,6 +880,7 @@ fn several_tuple_parameters_keep_one_local_namespace_each() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "dot".to_string(),
             class: None,
             method: None,
@@ -916,6 +932,7 @@ fn an_earlier_str_argument_is_released_when_a_later_tuple_is_refused() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "tag".to_string(),
             class: None,
             method: None,
@@ -951,6 +968,7 @@ fn a_nullary_export_returning_a_tuple_declares_only_its_out_pointers() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "origin".to_string(),
             class: None,
             method: None,
@@ -997,6 +1015,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "pair".to_string(),
             class: None,
             method: None,
@@ -1026,6 +1045,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
     let scalar = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "square".to_string(),
             class: None,
             method: None,
@@ -1049,6 +1069,7 @@ fn a_tuple_carrying_export_returning_none_assigns_nothing_and_fabricates_none() 
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "record".to_string(),
             class: None,
             method: None,
@@ -1332,6 +1353,7 @@ fn memoryview_inc(name: &str, count: usize, return_ty: Ty) -> String {
     inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: name.to_string(),
             class: None,
             method: None,
@@ -1358,6 +1380,7 @@ fn only_a_buffer_parameter_its_body_stores_into_is_acquired_writable() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "mix".to_string(),
             class: None,
             method: None,
@@ -1391,6 +1414,7 @@ fn a_constructor_buffer_parameter_its_body_stores_into_is_acquired_writable() {
         &[],
         &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
         &[ExtCtor {
+            defaults: Vec::new(),
             class: "Grid".to_string(),
             name: "Grid.__init__".to_string(),
             params: vec![Ty::MemoryView],
@@ -1517,6 +1541,7 @@ fn a_mixed_str_and_memoryview_signature_owes_each_slot_its_own_cleanup() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "label".to_string(),
             class: None,
             method: None,
@@ -1558,6 +1583,7 @@ fn an_export_with_no_memoryview_parameter_emits_no_release_at_all() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "greet".to_string(),
             class: None,
             method: None,
@@ -1584,6 +1610,7 @@ fn an_export_with_no_memoryview_parameter_emits_no_release_at_all() {
 /// An exported `@staticmethod`, receiver-free.
 fn static_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> ExtExport {
     ExtExport {
+        defaults: Vec::new(),
         name: format!("{class}.{method}.static"),
         class: Some(class.to_string()),
         method: Some(method.to_string()),
@@ -1599,6 +1626,7 @@ fn static_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> E
 /// never crosses the boundary.
 fn class_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> ExtExport {
     ExtExport {
+        defaults: Vec::new(),
         name: format!("{class}.{method}.classmethod"),
         class: Some(class.to_string()),
         method: Some(method.to_string()),
@@ -1684,6 +1712,7 @@ fn an_exported_method_is_never_a_flat_module_level_entry() {
         "m",
         &[
             ExtExport {
+                defaults: Vec::new(),
                 name: "plain".to_string(),
                 class: None,
                 method: None,
@@ -1870,6 +1899,7 @@ fn a_tuple_carrying_exported_class_method_goes_through_its_thunk() {
 /// as `collect_exports` hands it over.
 fn instance_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> ExtExport {
     ExtExport {
+        defaults: Vec::new(),
         name: format!("{class}.{method}"),
         class: Some(class.to_string()),
         method: Some(method.to_string()),
@@ -1883,6 +1913,7 @@ fn instance_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) ->
 
 fn grid_ctor(params: Vec<Ty>, slot_names: &[&str]) -> ExtCtor {
     ExtCtor {
+        defaults: Vec::new(),
         class: "Grid".to_string(),
         name: "Grid.__init__".to_string(),
         param_writable: vec![false; params.len()],
@@ -2414,6 +2445,7 @@ fn a_caller_owned_buffer_returning_method_uses_the_declared_parameter_index() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "Grid.row".to_string(),
             class: Some("Grid".to_string()),
             method: Some("row".to_string()),
@@ -2448,6 +2480,7 @@ fn a_buffer_returning_method_packs_through_the_same_arm() {
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: "Grid.make".to_string(),
             class: Some("Grid".to_string()),
             method: Some("make".to_string()),
@@ -2474,6 +2507,7 @@ fn memoryview_slice_inc(name: &str, count: usize) -> String {
     inc_no_classes(
         "m",
         &[ExtExport {
+            defaults: Vec::new(),
             name: name.to_string(),
             class: None,
             method: None,

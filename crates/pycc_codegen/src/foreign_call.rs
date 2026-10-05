@@ -1,7 +1,8 @@
 //! Emission for `MirExpr::ObjMethodCall` (Part 2 of #1026, PR 2b of #1081),
 //! `MirExpr::ObjCall` (#1313, through the same argument marshalling; a
 //! computed callee since Part 2a of #1371, see [`callee_is_produced`]),
-//! `MirExpr::ObjSubscript` (Part 3 of #1026, PR 3b of #1082) and
+//! `MirExpr::ObjSubscript` (Part 3 of #1026, PR 3b of #1082),
+//! `MirExpr::ObjSlice` (Part 2b of #1371, see [`emit_slice`]) and
 //! `MirStmt::ForObject` (PR 3c of #1082).
 //!
 //! They share this module because they share the *packer contract*: each
@@ -503,6 +504,65 @@ pub(super) fn emit_subscript<'ctx>(
         result,
         "foreign_subscript",
     );
+    Scalar::Object(result)
+}
+
+/// Emits one `o[start:stop:step]` load (Part 2b of #1371), yielding the
+/// result as an opaque [`Scalar::Object`]; `None` is an absent bound.
+///
+/// The same packer contract as [`emit_subscript`]: every present bound is
+/// packed and handed to `pycc_ext_obj_getslice`, which consumes it on every
+/// path -- a failed packer's `NULL` included -- so the operation keeps
+/// exactly one failure edge, on a `NULL` result. An absent bound is passed
+/// as a null pointer with its presence bit clear, and the helper hands
+/// `PySlice_New` CPython's `None` for it. The result is a new reference,
+/// leaked on the same leak-only rule.
+pub(super) fn emit_slice<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    base: Scalar<'ctx>,
+    bounds: [Option<Scalar<'ctx>>; 3],
+) -> Scalar<'ctx> {
+    let edge = ForeignFailEdge::for_current(builder);
+    let base_ptr = expect_object_pointer(base);
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let i32_type = context.i32_type();
+    let mut present = 0u64;
+    let mut args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = vec![base_ptr.into()];
+    for (bit, bound) in bounds.into_iter().enumerate() {
+        let pointer = match bound {
+            Some(scalar) => {
+                present |= 1 << bit;
+                emit_pack(context, builder, module, scalar, "foreign_slice_bound")
+            }
+            None => ptr.const_null(),
+        };
+        args.push(pointer.into());
+    }
+    args.push(i32_type.const_int(present, false).into());
+    let getslice = shim_fn(
+        module,
+        EXT_OBJ_GETSLICE_SYMBOL,
+        ptr.fn_type(
+            &[
+                ptr.into(),
+                ptr.into(),
+                ptr.into(),
+                ptr.into(),
+                i32_type.into(),
+            ],
+            false,
+        ),
+    );
+    let result = builder
+        .build_call(getslice, &args, "foreign_slice")
+        .expect("build_call should not fail for pycc_ext_obj_getslice")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_getslice returns PyObject *")
+        .into_pointer_value();
+    route_null(context, builder, module, rt, edge, result, "foreign_slice");
     Scalar::Object(result)
 }
 

@@ -482,6 +482,11 @@ pub(crate) struct ExtExport {
     /// as a plain type list. `false` for every non-buffer parameter, where
     /// it is inert.
     pub(crate) param_writable: Vec<bool>,
+    /// Each carried parameter's default value, parallel to
+    /// [`ExtExport::params`], or empty when the export declares none (the
+    /// method part of #1140; see `defaults`). Non-empty only for a method:
+    /// a module-level export keeps the exact arity check (#1194).
+    pub(crate) defaults: Vec<Option<pycc_hir::HirExpr>>,
     /// The declared return type, which picks the cast's return type and the
     /// egress: a `pycc_ext_pack_*` call, or `Py_RETURN_NONE` for `-> None`.
     pub(crate) return_ty: Ty,
@@ -725,6 +730,7 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
             returns_buffer_slice: carried_params.iter().any(|(param_name, ty)| {
                 *ty == Ty::MemoryView && pycc_hir::body_returns_slice_of(body, param_name)
             }),
+            defaults: defaults::carried_defaults(module, name, receiver != ExtReceiver::None),
             return_ty: return_ty.clone(),
         };
         // A module may rebind a public name -- two `def`s, a `def` over an
@@ -1055,6 +1061,7 @@ fn ctor_descriptor(module: &HirModule, class: &str) -> Option<ExtCtor> {
                 *ty == Ty::MemoryView && pycc_hir::body_stores_into(body, param_name)
             })
             .collect(),
+        defaults: defaults::carried_defaults(module, name, true),
         slot_names: instance_slot_names(module, class_def),
     })
 }
@@ -1136,6 +1143,11 @@ pub(crate) struct ExtCtor {
     /// the flag has to be computed here too, or `Py_tp_init` would acquire
     /// read-only for a constructor body the checker admits a store in.
     pub(crate) param_writable: Vec<bool>,
+    /// Each carried parameter's default value, parallel to
+    /// [`ExtCtor::params`] and meaning exactly what [`ExtExport::defaults`]
+    /// means. Read through [`ExtCtor::name`], so an inherited constructor
+    /// carries the defaults of the `__init__` it runs.
+    pub(crate) defaults: Vec<Option<pycc_hir::HirExpr>>,
     /// The slot names, in slot order, whose count `pycc_rt_instance_new` is
     /// called with and which, after [`ExtCtor::class`], make up the layout
     /// descriptor it is passed (#1388).
@@ -1471,6 +1483,7 @@ fn namespace_owner<'a>(module: &HirModule, mro: &'a [String], method: &str) -> O
 }
 
 mod carrier;
+mod defaults;
 pub(crate) use carrier::*;
 mod export_name;
 mod inherited;

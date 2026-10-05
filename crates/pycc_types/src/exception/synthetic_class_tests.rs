@@ -129,6 +129,7 @@ fn rebinding_a_synthetic_name_with_a_user_definition_clears_the_marking() {
             type_param: None,
             is_enum: false,
             implicit_object_init: false,
+            method_defaults: Vec::new(),
             enum_members: Vec::new(),
             is_dataclass: false,
             dataclass_fields: Vec::new(),

@@ -288,6 +288,7 @@ fn raising_a_user_exception_class_panics_if_the_synthetic_init_is_somehow_unregi
             class_methods: Vec::new(),
             is_enum: false,
             implicit_object_init: false,
+            method_defaults: Vec::new(),
             enum_members: Vec::new(),
             is_dataclass: false,
             dataclass_fields: Vec::new(),

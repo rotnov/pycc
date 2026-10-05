@@ -302,3 +302,60 @@ fn a_single_identity_with_a_literal_operand_keeps_its_c0001() {
         }
     }
 }
+
+/// Part 2b of #1371: a single `in`/`not in` whose container may be a
+/// CPython object lowers -- `pycc_types` decides -- and a literal *item*
+/// does not stop it (`"k" in callbacks`).
+#[test]
+fn a_single_membership_test_against_a_possible_object_lowers() {
+    for (source_op, op) in [("in", CmpOpKind::In), ("not in", CmpOpKind::NotIn)] {
+        for (item_src, item) in [
+            ("a", name("a")),
+            ("'k'", HirExpr::StringLiteral("k".to_string())),
+        ] {
+            let value = returned(&format!(
+                "def f(a: int, b: int) -> bool:\n    return {item_src} {source_op} b\n"
+            ));
+            assert_eq!(
+                value,
+                HirExpr::Compare {
+                    op,
+                    left: Box::new(item),
+                    right: Box::new(name("b")),
+                }
+            );
+        }
+    }
+}
+
+/// A literal, display or comprehension container always builds a native
+/// value, so it keeps the located HIR rejection.
+#[test]
+fn a_membership_test_against_a_native_display_keeps_its_c0001() {
+    for container in [
+        "1",
+        "'s'",
+        "[1]",
+        "(1,)",
+        "{1}",
+        "{1: 2}",
+        "[x for x in a]",
+        "{x for x in a}",
+        "{x: x for x in a}",
+        "f'{a}'",
+    ] {
+        for (source_op, needle) in [("in", "In"), ("not in", "NotIn")] {
+            let source =
+                format!("def f(a: list[int]) -> bool:\n    return 1 {source_op} {container}\n");
+            let error = lowering_error(&source);
+            assert_eq!(error.code, "C0001", "{source}");
+            assert!(
+                error
+                    .message
+                    .ends_with(&format!("comparison operator not supported yet: {needle}")),
+                "{source}: {}",
+                error.message
+            );
+        }
+    }
+}

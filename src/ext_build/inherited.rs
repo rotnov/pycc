@@ -11,7 +11,8 @@
 //! exact miscompile the copies exist to remove.
 //!
 //! Three questions are answered here, each the ext-side twin of a
-//! `pycc_mir` routing site:
+//! `pycc_mir` routing site (plus [`source_item`], which names the source a
+//! copy inherits its default values from):
 //!
 //! - which exported item a published class's method table binds for a
 //!   member an ancestor owns ([`receiver_exact_export`]);
@@ -39,6 +40,14 @@ fn class_of<'m>(module: &'m HirModule) -> impl Fn(&str) -> Option<&'m HirClassDe
 /// The copy an item name denotes, when `name` is one.
 fn copy_of(module: &HirModule, name: &str) -> Option<InheritedCopy> {
     inherited_copy_origin(name, &class_of(module))
+}
+
+/// The item whose source the compiled item `name` was lowered from: a
+/// copy's origin, else `name` itself. What a copy inherits from that source
+/// beyond its body -- its default parameter values (the method part of
+/// #1140) -- is looked up under this name.
+pub(crate) fn source_item(module: &HirModule, name: &str) -> String {
+    copy_of(module, name).map_or_else(|| name.to_string(), |copy| copy.origin_name)
 }
 
 /// What [`copy_export_verdict`] decides for one exported item.

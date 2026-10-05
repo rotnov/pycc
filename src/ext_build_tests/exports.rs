@@ -24,6 +24,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
         collect_exports(&hir).expect("a carriable program exports cleanly"),
         vec![
             ExtExport {
+                defaults: Vec::new(),
                 name: "first".to_string(),
                 class: None,
                 method: None,
@@ -34,6 +35,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 return_ty: Ty::Int,
             },
             ExtExport {
+                defaults: Vec::new(),
                 name: "second".to_string(),
                 class: None,
                 method: None,
@@ -44,6 +46,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 return_ty: Ty::Int,
             },
             ExtExport {
+                defaults: Vec::new(),
                 name: "third".to_string(),
                 class: None,
                 method: None,
@@ -54,6 +57,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 return_ty: Ty::Int,
             },
             ExtExport {
+                defaults: Vec::new(),
                 name: "scaled".to_string(),
                 class: None,
                 method: None,
@@ -64,6 +68,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 return_ty: Ty::Float,
             },
             ExtExport {
+                defaults: Vec::new(),
                 name: "negated".to_string(),
                 class: None,
                 method: None,
@@ -74,6 +79,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 return_ty: Ty::Bool,
             },
             ExtExport {
+                defaults: Vec::new(),
                 name: "sink".to_string(),
                 class: None,
                 method: None,
@@ -111,6 +117,7 @@ fn a_private_name_a_method_and_a_monomorphized_specialization_are_not_exports() 
     assert_eq!(
         collect_exports(&hir).expect("no public gap remains"),
         vec![ExtExport {
+            defaults: Vec::new(),
             name: "kept".to_string(),
             class: None,
             method: None,
@@ -139,6 +146,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
         collect_exports(&hir).expect("a rebind is not a capability gap"),
         vec![
             ExtExport {
+                defaults: Vec::new(),
                 name: "one".to_string(),
                 class: None,
                 method: None,
@@ -151,6 +159,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
             // Definition order, last definition's signature: the entry keeps
             // the position the name first claimed.
             ExtExport {
+                defaults: Vec::new(),
                 name: "two".to_string(),
                 class: None,
                 method: None,
@@ -161,6 +170,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 return_ty: Ty::Int,
             },
             ExtExport {
+                defaults: Vec::new(),
                 name: "three".to_string(),
                 class: None,
                 method: None,
@@ -242,6 +252,7 @@ fn a_bool_signature_is_carried_rather_than_gapped_and_keeps_its_own_slot() {
     assert_eq!(
         exports,
         vec![ExtExport {
+            defaults: Vec::new(),
             name: "flag".to_string(),
             class: None,
             method: None,
@@ -265,6 +276,7 @@ fn a_str_signature_is_carried_rather_than_gapped_in_either_position() {
     assert_eq!(
         exports,
         vec![ExtExport {
+            defaults: Vec::new(),
             name: "echo".to_string(),
             class: None,
             method: None,
@@ -293,6 +305,7 @@ fn a_tuple_signature_is_carried_rather_than_gapped_in_either_position() {
     assert_eq!(
         exports,
         vec![ExtExport {
+            defaults: Vec::new(),
             name: "swap".to_string(),
             class: None,
             method: None,
@@ -525,6 +538,7 @@ fn a_public_static_and_class_method_of_a_public_class_are_exported() {
         collect_exports(&hir).expect("both methods are carriable"),
         vec![
             ExtExport {
+                defaults: Vec::new(),
                 name: "Grid.scale.static".to_string(),
                 class: Some("Grid".to_string()),
                 method: Some("scale".to_string()),
@@ -535,6 +549,7 @@ fn a_public_static_and_class_method_of_a_public_class_are_exported() {
                 return_ty: Ty::Int,
             },
             ExtExport {
+                defaults: Vec::new(),
                 name: "Grid.make.classmethod".to_string(),
                 class: Some("Grid".to_string()),
                 method: Some("make".to_string()),
@@ -903,6 +918,7 @@ fn a_constructible_class_yields_one_constructor_descriptor_with_the_carried_tail
     assert_eq!(
         collect_constructors(&hir, &collect_class_publications(&hir, &exports)),
         vec![ExtCtor {
+            defaults: Vec::new(),
             class: "Grid".to_string(),
             name: "Grid.__init__".to_string(),
             // `self` is gone; the two `int`s remain, and the slot layout is
@@ -1085,6 +1101,7 @@ fn an_implicit_object_init_is_still_resolved_when_it_is_the_only_one() {
     assert_eq!(
         collect_constructors(&hir, &collect_class_publications(&hir, &exports)),
         vec![ExtCtor {
+            defaults: Vec::new(),
             class: "Grid".to_string(),
             name: "Grid.__init__".to_string(),
             params: Vec::new(),

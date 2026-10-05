@@ -1,5 +1,5 @@
-//! Comparisons, identity tests and `isinstance` with a CPython object
-//! operand (Part 1 of #1371).
+//! Comparisons, identity tests, membership tests and `isinstance` with a
+//! CPython object operand (Part 1 and Part 2b of #1371).
 //!
 //! The rules, each matching CPython 3.14 for what it admits:
 //!
@@ -19,6 +19,13 @@
 //!   CPython does. A `-> bool` return or a `bool` annotation therefore
 //!   refuses it with the ordinary assignability diagnostic; `bool(...)`
 //!   converts it explicitly.
+//! * **Membership** (`in`/`not in`, Part 2b) is admitted when the container
+//!   is an object and the item is an object or one of the four packable
+//!   scalars. CPython's `PySequence_Contains` truth-tests `__contains__`'s
+//!   answer itself, so the result is `bool`. An object item in a native
+//!   container, or an unpackable item in an object, is refused (`I0404`);
+//!   two native operands keep the HIR's `C0001`, because no native
+//!   membership test is lowered.
 //! * **A chained comparison** with an object operand is refused: its
 //!   short-circuit over raising, object-valued links is a later part of the
 //!   #1371 series.
@@ -80,6 +87,38 @@ pub(crate) fn rich_compare_ty(left_ty: &Ty, right_ty: &Ty) -> Option<Result<Ty, 
             other.name()
         )))
     })
+}
+
+/// Types `item in container` / `item not in container` (Part 2b of #1371).
+///
+/// Admitted only with an object container and a packable item
+/// (`super::is_packable_operand`); the result is `bool`, because CPython's
+/// `in` always answers one (`PySequence_Contains`). An object on the wrong
+/// side of a native value is refused with `I0404`, and two native operands
+/// keep the `C0001` HIR gives a literal or display container
+/// (`pycc_hir::compare_chain`), since pycc lowers no native membership test.
+pub(crate) fn membership_ty(
+    op: CmpOpKind,
+    item_ty: &Ty,
+    container_ty: &Ty,
+) -> Result<Ty, Diagnostic> {
+    match (item_ty, container_ty) {
+        (item, Ty::Object) if super::is_packable_operand(item) => Ok(Ty::Bool),
+        (item, Ty::Object) => Err(object_operation_unsupported(&format!(
+            "testing membership of a `{}` value in a CPython object",
+            item.name()
+        ))),
+        (Ty::Object, container) => Err(object_operation_unsupported(&format!(
+            "testing membership of a CPython object in a `{}` value",
+            container.name()
+        ))),
+        // `HirExpr::Compare` carries no source range (Part 5 of #1371).
+        _ => Err(Diagnostic::error(
+            "C0001",
+            format!("comparison operator not supported yet: {op:?}"),
+            Span::new(0, 0),
+        )),
+    }
 }
 
 /// `Err(I0404)` when any operand of a chained comparison is an object.

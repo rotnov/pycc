@@ -25,7 +25,7 @@ mod string_annotation_tests;
 
 use crate::class::ClassAnnotationInfo;
 use crate::expr::keyword_bind::SignatureTable;
-use crate::{HirItem, ImportBinding, Ty, stmt, unsupported};
+use crate::{HirExpr, HirItem, ImportBinding, Ty, stmt, unsupported};
 use bare_container::container_family;
 pub(crate) use bare_container::{with_bare_container_advice, with_bare_list_or_dict_advice};
 use container_annotation::container_annotation_to_ty;
@@ -156,9 +156,10 @@ pub(crate) fn lower_params(
     // every other out-of-scope construct in this file produces (self-review
     // finding, pre-merge). The checks themselves now live in `params`,
     // shared with `class::lower_method`; a *default value* is no longer one
-    // of them -- Part 2 of #884 (#1189) implements it for this path, and
-    // `lower_arg_list`'s `DefaultPolicy` below is what keeps every other
-    // path rejecting it.
+    // of them -- Part 2 of #884 (#1189) implements it for this path and
+    // the method part of #1140 for a method, and `lower_arg_list`'s
+    // `DefaultPolicy::Reject` now keeps only a `Protocol` member rejecting
+    // it.
     //
     // PEP 570 (#383): positional-only parameters (`posonlyargs`, before the
     // `/` marker) are lowered via the same `lower_arg_list` path as ordinary
@@ -177,7 +178,10 @@ pub(crate) fn lower_params(
     // PEP 570 (#383): lower `posonlyargs` (before `/`) via the same
     // `lower_arg_list` path as ordinary `args`, prepending them. The full
     // parameter list is `posonlyargs ++ args`.
-    let mut params = lower_arg_list(
+    // The lowered defaults are dropped here: a module-level `def`'s
+    // defaults are filled at its call sites from the AST-derived signature
+    // table (`expr::keyword_bind`), which runs before any item is lowered.
+    let (mut params, _) = lower_arg_list(
         &parameters.posonlyargs,
         is_public,
         fn_name,
@@ -187,16 +191,19 @@ pub(crate) fn lower_params(
         class_defs,
         DefaultPolicy::Admit,
     )?;
-    params.extend(lower_arg_list(
-        &parameters.args,
-        is_public,
-        fn_name,
-        type_param,
-        None,
-        aliases,
-        class_defs,
-        DefaultPolicy::Admit,
-    )?);
+    params.extend(
+        lower_arg_list(
+            &parameters.args,
+            is_public,
+            fn_name,
+            type_param,
+            None,
+            aliases,
+            class_defs,
+            DefaultPolicy::Admit,
+        )?
+        .0,
+    );
     Ok(params)
 }
 
@@ -212,13 +219,15 @@ pub(crate) fn lower_params(
 /// of duplicating it.
 ///
 /// `policy` decides what a default value means here (Part 2 of #884, #1189).
-/// Under [`DefaultPolicy::Reject`] -- every method and protocol-member
-/// caller -- the pre-existing capability check runs unchanged and *before*
-/// annotation resolution, so a method parameter whose annotation would
-/// itself be rejected still reports the capability message first. Under
-/// [`DefaultPolicy::Admit`] -- `lower_params`' two calls, and nothing else
-/// -- the annotation is resolved first and `params::check_default` then
-/// applies every default rule.
+/// Under [`DefaultPolicy::Reject`] -- the protocol-member callers -- the
+/// pre-existing capability check runs unchanged and *before* annotation
+/// resolution, so a parameter whose annotation would itself be rejected
+/// still reports the capability message first. Under
+/// [`DefaultPolicy::Admit`] -- `lower_params`' two calls -- and
+/// [`DefaultPolicy::AdmitMethod`] -- every `class::lower_method` arm, since
+/// the method part of #1140 -- the annotation
+/// is resolved first and `params::check_default` then applies every default
+/// rule, returning the lowered default alongside the parameter.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_arg_list(
     args: &[pycc_ast::ParameterWithDefault],
@@ -229,8 +238,9 @@ pub(crate) fn lower_arg_list(
     aliases: &[(String, Ty)],
     class_defs: &[ClassAnnotationInfo],
     policy: DefaultPolicy,
-) -> Result<Vec<(String, Ty)>, Diagnostic> {
-    args.iter()
+) -> Result<LoweredArgs, Diagnostic> {
+    let lowered: Vec<((String, Ty), Option<HirExpr>)> = args
+        .iter()
         .map(|param| {
             if policy == DefaultPolicy::Reject && param.default.is_some() {
                 return Err(unsupported(
@@ -242,6 +252,18 @@ pub(crate) fn lower_arg_list(
             let ty = match &param.parameter.annotation {
                 Some(ann) => annotation_to_ty(ann, type_param, class_name, aliases, class_defs)
                     .map_err(|error| with_bare_container_advice(error, ann))?,
+                // #1409: in an `--ext` module an unannotated public
+                // parameter takes the type its literal default implies.
+                // `Reject` never gets here with a default (refused above).
+                None if is_public
+                    && let Some(ty) = param
+                        .default
+                        .as_deref()
+                        .filter(|_| is_ext_module(aliases))
+                        .and_then(|default| params::unannotated_default_ty(default, policy)) =>
+                {
+                    ty
+                }
                 None if is_public => {
                     return Err(Diagnostic::error(
                         "T0001",
@@ -254,13 +276,22 @@ pub(crate) fn lower_arg_list(
                 }
                 None => Ty::Infer,
             };
-            if let Some(default) = param.default.as_deref() {
-                params::check_default(default, name, fn_name, &ty)?;
-            }
-            Ok((name.to_string(), ty))
+            let default = param
+                .default
+                .as_deref()
+                .map(|default| params::check_default(default, name, fn_name, &ty, policy))
+                .transpose()?;
+            Ok(((name.to_string(), ty), default))
         })
-        .collect()
+        .collect::<Result<_, Diagnostic>>()?;
+    Ok(lowered.into_iter().unzip())
 }
+
+/// What [`lower_arg_list`] produces: the `(name, type)` parameter list and,
+/// parallel to it, each parameter's lowered default value (`None` for a
+/// parameter without one). Under [`DefaultPolicy::Reject`] the second half
+/// is all `None` by construction.
+pub(crate) type LoweredArgs = (Vec<(String, Ty)>, Vec<Option<HirExpr>>);
 
 pub(crate) fn lower_return_annotation(
     returns: Option<&Expr>,

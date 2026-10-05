@@ -72,9 +72,10 @@ fn a_subscript_load_with_each_admitted_key_type_is_admitted() {
 /// with the diagnostic that owns it.
 ///
 /// A key with no `pycc_ext_obj_pack_*` helper is the new `I0404`; a
-/// *store* is `C0001` from HIR lowering and a *slice* is `T0033` from the
-/// type checker's own `Slice` arm. Splitting them out this way is what
-/// pins that admitting the load did not widen any of them. Binding the
+/// *store* is `C0001` from HIR lowering, and so is a `del` of a slice. (A
+/// slice *load* was a `T0033` row here until Part 2b of #1371 admitted it,
+/// `tests/issue_1371_object_membership_slice.rs`.) Splitting them out this
+/// way is what pins that admitting the load did not widen any of them. Binding the
 /// result to a module-level name was a fourth row until #1325 admitted it
 /// (`tests/issue_1325_foreign_binding.rs`).
 #[test]
@@ -92,9 +93,9 @@ fn the_neighbouring_subscript_shapes_keep_their_own_refusals() {
             "only assigning to a bare-name subscript target",
         ),
         (
-            "import gc\n\ngc.garbage[0:2]\n",
-            "T0033",
-            "does not support slicing",
+            "import gc\n\ndel gc.garbage[0:2]\n",
+            "C0001",
+            "a `del` of a slice",
         ),
     ] {
         let out = check(&dir, body);

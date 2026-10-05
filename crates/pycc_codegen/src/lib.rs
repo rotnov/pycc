@@ -97,12 +97,13 @@ pub use ext::{
 };
 use ext::{
     EXT_NAME_ERROR_SYMBOL, EXT_OBJ_CALL_BORROWED_SYMBOL, EXT_OBJ_CALL_SYMBOL,
-    EXT_OBJ_ERROR_BRIDGE_SYMBOL, EXT_OBJ_FORMAT_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL,
-    EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
-    EXT_OBJ_ISINSTANCE_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_NONE_SYMBOL,
-    EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL,
-    EXT_OBJ_PACK_OBJECT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL,
-    EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
+    EXT_OBJ_CONTAINS_SYMBOL, EXT_OBJ_ERROR_BRIDGE_SYMBOL, EXT_OBJ_FORMAT_SYMBOL,
+    EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL,
+    EXT_OBJ_GETSLICE_SYMBOL, EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_ISINSTANCE_SYMBOL,
+    EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_NONE_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
+    EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_OBJECT_SYMBOL,
+    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL, EXT_OBJ_TO_FLOAT_SYMBOL,
+    EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
     EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
@@ -3803,6 +3804,81 @@ fn emit_expr_unchecked<'ctx>(
             for (expr, scalar) in [(left, l), (right, r)] {
                 if let Some(scalar) = scalar {
                     release_scalar_if_int_temporary(context, builder, rt, expr, &scalar);
+                }
+            }
+            result
+        }
+        // Part 2b of #1371: `item in container`. Item, then container --
+        // CPython's own order -- with the `ObjCompare` arm's #638
+        // protection of an `int` temporary item across the container's
+        // evaluation. `foreign_compare::emit_contains` carries the rest.
+        MirExpr::ObjContains {
+            negate,
+            item,
+            container,
+        } => {
+            let item_scalar = emit_expr(context, builder, module, rt, user_functions, locals, item);
+            let pending = push_pending_int_release_if_scalar_temporary(rt, item, &item_scalar);
+            let container_scalar = emit_expr(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                container,
+            );
+            pop_pending_int_release(rt, pending);
+            let result = foreign_compare::emit_contains(
+                context,
+                builder,
+                module,
+                rt,
+                *negate,
+                item_scalar,
+                container_scalar,
+            );
+            release_scalar_if_int_temporary(context, builder, rt, item, &item_scalar);
+            result
+        }
+        // Part 2b of #1371: `o[a:b:c]`. Base, then each present bound in
+        // source order -- CPython's own -- with every evaluated `int`
+        // temporary protected across the evaluations after it and released
+        // after the call. `foreign_call::emit_slice` carries the rest.
+        MirExpr::ObjSlice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let mut pendings = Vec::new();
+            let mut bounds = Vec::with_capacity(3);
+            for bound in [start, stop, step] {
+                let scalar = bound.as_deref().map(|bound| {
+                    let scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, bound);
+                    pendings.push(push_pending_int_release_if_scalar_temporary(
+                        rt, bound, &scalar,
+                    ));
+                    scalar
+                });
+                bounds.push(scalar);
+            }
+            for pending in pendings.into_iter().rev() {
+                pop_pending_int_release(rt, pending);
+            }
+            let result = foreign_call::emit_slice(
+                context,
+                builder,
+                module,
+                rt,
+                base_scalar,
+                [bounds[0], bounds[1], bounds[2]],
+            );
+            for (bound, scalar) in [start, stop, step].into_iter().zip(bounds) {
+                if let (Some(bound), Some(scalar)) = (bound.as_deref(), scalar) {
+                    release_scalar_if_int_temporary(context, builder, rt, bound, &scalar);
                 }
             }
             result
