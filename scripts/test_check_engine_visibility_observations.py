@@ -14,7 +14,10 @@ the validation expectations from issue #195:
 - non-append-only observations;
 - latest_projection disagreeing with observations;
 - prose conflating indexability with visibility or citation;
-- missing bound phrases in SEARCH_VISIBILITY.md or ROADMAP.md.
+- missing bound phrases in SEARCH_VISIBILITY.md.
+
+The ROADMAP.md prose binding was retired with the Pages rewrite (umbrella
+#802); the ROADMAP positive controls prove ROADMAP.md no longer participates.
 """
 
 from __future__ import annotations
@@ -55,7 +58,6 @@ def _load_repository_files(repository_root: Path) -> dict[str, str]:
     return {
         "ENGINE_VISIBILITY_OBSERVATIONS.json": (docs / "ENGINE_VISIBILITY_OBSERVATIONS.json").read_text(),
         "SEARCH_VISIBILITY.md": (docs / "SEARCH_VISIBILITY.md").read_text(),
-        "ROADMAP.md": (docs / "ROADMAP.md").read_text(),
     }
 
 
@@ -103,7 +105,6 @@ def _write_repo(root: Path, files: dict[str, str]) -> None:
     docs.mkdir(parents=True, exist_ok=True)
     (docs / "ENGINE_VISIBILITY_OBSERVATIONS.json").write_text(files["ENGINE_VISIBILITY_OBSERVATIONS.json"])
     (docs / "SEARCH_VISIBILITY.md").write_text(files["SEARCH_VISIBILITY.md"])
-    (docs / "ROADMAP.md").write_text(files["ROADMAP.md"])
 
 
 class TestLiveArtifact(unittest.TestCase):
@@ -375,15 +376,22 @@ class TestProseBindings(unittest.TestCase):
             with self.assertRaises(ObservationError):
                 validate(Path(tmp))
 
-    def test_rejects_missing_artifact_reference_in_roadmap(self) -> None:
+    def test_missing_roadmap_does_not_affect_result(self) -> None:
+        """The checker must not read ROADMAP.md at all."""
         files = _load_repository_files(REPOSITORY_ROOT)
-        files["ROADMAP.md"] = files["ROADMAP.md"].replace(
-            "ENGINE_VISIBILITY_OBSERVATIONS.json", "REPLACED.json"
-        )
         with tempfile.TemporaryDirectory() as tmp:
             _write_repo(Path(tmp), files)
-            with self.assertRaises(ObservationError):
-                validate(Path(tmp))
+            self.assertFalse((Path(tmp) / "docs" / "ROADMAP.md").exists())
+            validate(Path(tmp))
+
+    def test_roadmap_content_does_not_affect_result(self) -> None:
+        """ROADMAP.md is no longer a bound prose surface: arbitrary unrelated
+        content in it must not change the verdict."""
+        files = _load_repository_files(REPOSITORY_ROOT)
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_repo(Path(tmp), files)
+            (Path(tmp) / "docs" / "ROADMAP.md").write_text("unrelated\n")
+            validate(Path(tmp))
 
     def test_rejects_forbidden_wording_in_visibility(self) -> None:
         files = _load_repository_files(REPOSITORY_ROOT)
@@ -393,13 +401,16 @@ class TestProseBindings(unittest.TestCase):
             with self.assertRaises(ObservationError):
                 validate(Path(tmp))
 
-    def test_rejects_forbidden_wording_in_roadmap(self) -> None:
+    def test_forbidden_wording_in_roadmap_is_not_checked(self) -> None:
+        """Forbidden indexability wording is enforced only in
+        SEARCH_VISIBILITY.md; ROADMAP.md is no longer scanned."""
         files = _load_repository_files(REPOSITORY_ROOT)
-        files["ROADMAP.md"] += "\n\nindexed means cited in the answer.\n"
         with tempfile.TemporaryDirectory() as tmp:
             _write_repo(Path(tmp), files)
-            with self.assertRaises(ObservationError):
-                validate(Path(tmp))
+            (Path(tmp) / "docs" / "ROADMAP.md").write_text(
+                "indexed means cited in the answer.\n"
+            )
+            validate(Path(tmp))
 
 
 class TestCLI(unittest.TestCase):
@@ -418,7 +429,6 @@ class TestCLI(unittest.TestCase):
             docs = Path(tmp) / "docs"
             docs.mkdir()
             (docs / "SEARCH_VISIBILITY.md").write_text("test")
-            (docs / "ROADMAP.md").write_text("test")
             result = subprocess.run(
                 [sys.executable, str(VALIDATOR_PATH), "--repository-root", tmp],
                 capture_output=True, text=True,

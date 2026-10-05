@@ -13,8 +13,10 @@ the validation expectations from issue #194:
 - deletion or rewriting of an earlier timestamped observation;
 - addition of overlapping 14-day totals as a cumulative metric;
 - wording that equates clones with humans, visits, clicks, or SEO
-  acquisition;
-- a roadmap projection that contradicts the latest structured snapshot.
+  acquisition.
+
+The ROADMAP.md prose binding was retired with the Pages rewrite (umbrella
+#802); the ROADMAP positive controls prove ROADMAP.md no longer participates.
 """
 
 from __future__ import annotations
@@ -46,7 +48,6 @@ traffic_history_timestamps = VALIDATOR_MODULE.traffic_history_timestamps
 traffic_interpretation_section = VALIDATOR_MODULE.traffic_interpretation_section
 check_forbidden_clone_wording = VALIDATOR_MODULE.check_forbidden_clone_wording
 visibility_binding_phrases = VALIDATOR_MODULE.visibility_binding_phrases
-roadmap_binding_phrases = VALIDATOR_MODULE.roadmap_binding_phrases
 normalize_whitespace = VALIDATOR_MODULE.normalize_whitespace
 
 
@@ -56,7 +57,6 @@ def _load_repository_files(repository_root: Path) -> dict[str, str]:
     return {
         "GITHUB_TRAFFIC_OBSERVATIONS.json": (docs / "GITHUB_TRAFFIC_OBSERVATIONS.json").read_text(),
         "SEARCH_VISIBILITY.md": (docs / "SEARCH_VISIBILITY.md").read_text(),
-        "ROADMAP.md": (docs / "ROADMAP.md").read_text(),
     }
 
 
@@ -140,6 +140,25 @@ class GitHubTrafficObservationTests(unittest.TestCase):
     # --- Positive tests ---
 
     def test_clean_tree_passes(self) -> None:
+        validate(self.root)
+
+    def test_roadmap_content_does_not_affect_result(self) -> None:
+        """ROADMAP.md is no longer a bound prose surface: arbitrary unrelated
+        content in it must not change the verdict."""
+        (self.root / "docs" / "ROADMAP.md").write_text("unrelated\n")
+        validate(self.root)
+
+    def test_missing_roadmap_does_not_affect_result(self) -> None:
+        """The checker must not read ROADMAP.md at all."""
+        self.assertFalse((self.root / "docs" / "ROADMAP.md").exists())
+        validate(self.root)
+
+    def test_clone_wording_in_roadmap_is_not_checked(self) -> None:
+        """Forbidden clone wording is enforced only in SEARCH_VISIBILITY.md;
+        ROADMAP.md is no longer scanned."""
+        (self.root / "docs" / "ROADMAP.md").write_text(
+            "clones are people and prove seo\n"
+        )
         validate(self.root)
 
     def test_artifact_validates_against_clean_tree(self) -> None:
@@ -323,22 +342,6 @@ class GitHubTrafficObservationTests(unittest.TestCase):
         ):
             validate(self.root)
 
-    def test_corrupted_roadmap_traffic_reference_fails(self) -> None:
-        """Remove the traffic artifact reference from the roadmap."""
-        path = self.root / "docs" / "ROADMAP.md"
-        text = path.read_text()
-        corrupted = text.replace(
-            "GITHUB_TRAFFIC_OBSERVATIONS.json",
-            "TRAFFIC_EVIDENCE.json",
-        )
-        self.assertNotEqual(text, corrupted)
-        path.write_text(corrupted)
-        with self.assertRaisesRegex(
-            ObservationError,
-            "missing bound phrase.*traffic artifact reference",
-        ):
-            validate(self.root)
-
     # --- Forbidden wording tests ---
 
     def test_forbidden_clone_wording_rejected(self) -> None:
@@ -351,18 +354,6 @@ class GitHubTrafficObservationTests(unittest.TestCase):
             1,
         )
         self.assertNotEqual(text, corrupted)
-        path.write_text(corrupted)
-        with self.assertRaisesRegex(
-            ObservationError,
-            "must not equate clones",
-        ):
-            validate(self.root)
-
-    def test_forbidden_clone_wording_in_roadmap_rejected(self) -> None:
-        """Wording that equates clones with humans in the roadmap must be rejected."""
-        path = self.root / "docs" / "ROADMAP.md"
-        text = path.read_text()
-        corrupted = text + "\nclones are people and prove seo\n"
         path.write_text(corrupted)
         with self.assertRaisesRegex(
             ObservationError,
@@ -392,13 +383,6 @@ class GitHubTrafficObservationTests(unittest.TestCase):
         phrases = visibility_binding_phrases(projection)
         phrase_texts = [p[0] for p in phrases]
         self.assertIn("automation-heavy", phrase_texts)
-
-    def test_roadmap_binding_phrases_include_artifact_reference(self) -> None:
-        artifact = json.loads(self.files["GITHUB_TRAFFIC_OBSERVATIONS.json"])
-        projection = validate_artifact(artifact)
-        phrases = roadmap_binding_phrases(projection)
-        phrase_texts = [p[0] for p in phrases]
-        self.assertIn("GITHUB_TRAFFIC_OBSERVATIONS.json", phrase_texts)
 
     def test_whitespace_normalization_detects_wrapped_phrases(self) -> None:
         text = "automation\nheavy"
@@ -469,7 +453,6 @@ class GitHubTrafficObservationEntrypointTests(unittest.TestCase):
             for name in (
                 "GITHUB_TRAFFIC_OBSERVATIONS.json",
                 "SEARCH_VISIBILITY.md",
-                "ROADMAP.md",
             ):
                 (docs / name).write_text(
                     (self.repository_root / "docs" / name).read_text()
@@ -501,7 +484,6 @@ class GitHubTrafficObservationEntrypointTests(unittest.TestCase):
             for name in (
                 "GITHUB_TRAFFIC_OBSERVATIONS.json",
                 "SEARCH_VISIBILITY.md",
-                "ROADMAP.md",
             ):
                 (docs / name).write_text(
                     (self.repository_root / "docs" / name).read_text()

@@ -22,11 +22,14 @@ This validator checks that:
 7. A ``window_audit`` with zero returned rows is preserved as a window
    result, never rewritten as "0 backlinks".
 8. The ``latest_projection`` agrees with the observations.
-9. The earned-authority prose in ``SEARCH_VISIBILITY.md`` and the roadmap
-   projection both reference the artifact and the launch gate.
-10. No prose fabricates evidence, treats self-authored references as
+9. The earned-authority prose in ``SEARCH_VISIBILITY.md`` references the
+   artifact and the launch gate.
+10. No bound prose fabricates evidence, treats self-authored references as
     independent, or treats the sampled Search Console Links report as
     complete.
+
+The ROADMAP.md prose binding was retired with the Pages rewrite (umbrella
+#802); SEARCH_VISIBILITY.md remains the bound prose surface.
 """
 
 from __future__ import annotations
@@ -41,7 +44,6 @@ from typing import Any
 
 ARTIFACT_PATH = Path("docs") / "EARNED_AUTHORITY_EVIDENCE.json"
 VISIBILITY_PATH = Path("docs") / "SEARCH_VISIBILITY.md"
-ROADMAP_PATH = Path("docs") / "ROADMAP.md"
 
 UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 
@@ -156,12 +158,6 @@ VISIBILITY_BINDING_PHRASES = [
     ("self_authored_external", "self-authored classification vocabulary"),
     ("independent_editorial", "independent editorial classification vocabulary"),
     ("append-only", "append-only evidence contract"),
-]
-
-ROADMAP_BINDING_PHRASES = [
-    ("EARNED_AUTHORITY_EVIDENCE.json", "earned-authority artifact reference in roadmap"),
-    ("launch readiness gate", "launch readiness gate reference in roadmap"),
-    ("no_independent_mention_in_observed_windows", "current-state projection in roadmap"),
 ]
 
 
@@ -437,10 +433,6 @@ def validate(repository_root: Path) -> dict[str, Any]:
     visibility_text = (repository_root / VISIBILITY_PATH).read_text()
     check_forbidden_wording(visibility_text)
     validate_bindings(visibility_text, VISIBILITY_BINDING_PHRASES, "SEARCH_VISIBILITY.md")
-
-    roadmap_text = (repository_root / ROADMAP_PATH).read_text()
-    check_forbidden_wording(roadmap_text)
-    validate_bindings(roadmap_text, ROADMAP_BINDING_PHRASES, "ROADMAP.md")
 
     return projection
 

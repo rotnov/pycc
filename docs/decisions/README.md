@@ -165,13 +165,13 @@ current.
 | [D-153](./D-153-correct-v0-3-s-conformance-target-before-any-v0.md) | Correct v0.3's conformance target before any v0.3 PR starts | accepted |
 | [D-154](./D-154-class-instance-runtime-layout-stays-opaque.md) | Class instance runtime layout stays opaque with FFI-only accessors (#385, Part 1 of #375) | accepted |
 | [D-155](./D-155-stop-exact-pinning-the-claude-side-ievo-reviewer.md) | Stop exact-pinning the Claude-side ievo reviewer to a commit | accepted |
-| [D-156](./D-156-status-page-freshness-check-two-signal-design.md) | Enforce GitHub Pages status/landing freshness with a two-signal ROADMAP.md diff check (#401) | accepted |
+| [D-156](./D-156-status-page-freshness-check-two-signal-design.md) | Enforce GitHub Pages status/landing freshness with a two-signal ROADMAP.md diff check (#401) | superseded |
 | [D-157](./D-157-pep-673-649-749-695-self-deferred-ann-generic-classes.md) | PEP 673 Self, PEP 649/749 self-referential deferred annotations, PEP 695 scoped generic classes | accepted |
 | [D-158](./D-158-property-as-hir-level-attr-access-rewrite.md) | Property as HIR-level attribute-access rewrite (no new MIR/codegen variant) | accepted |
 | [D-159](./D-159-ultra-review-cumulative-stats-and-model-attribution.md) | Add cumulative run statistics and per-model defect attribution to the `ultra-review` checkpoint | accepted |
 | [D-160](./D-160-super-static-dispatch-no-runtime-polymorphism.md) | super() uses static dispatch (no runtime polymorphism) | accepted |
-| [D-161](./D-161-pages-performance-budget-gate.md) | Pages performance budget gate | accepted |
-| [D-162](./D-162-site-accessibility-gate.md) | Site accessibility gate | accepted |
+| [D-161](./D-161-pages-performance-budget-gate.md) | Pages performance budget gate | superseded |
+| [D-162](./D-162-site-accessibility-gate.md) | Site accessibility gate | superseded |
 | [D-163](./D-163-enum-scoped-singleton-model.md) | Enum scoped singleton model — compile-time members, no enum.Enum module | accepted |
 | [D-164](./D-164-dataclass-static-dispatch-narrow-scope.md) | Dataclass static dispatch and narrow scope | accepted |
 | [D-165](./D-165-preserve-daily-github-traffic-evidence.md) | Preserve daily GitHub traffic evidence in an immutable artifact | accepted |
@@ -179,7 +179,7 @@ current.
 | [D-167](./D-167-preserve-page-indexing-aggregates-separately.md) | Preserve Page Indexing aggregates separately from per-URL evidence | accepted |
 | [D-168](./D-168-pages-visit-measurement-capability-contract.md) | Pages visit measurement capability contract: no analytics today, schema and privacy boundary for future activation | accepted |
 | [D-169](./D-169-match-exhaustiveness-per-arm-coverage-check.md) | Match exhaustiveness: per-arm coverage check instead of decision-tree compilation | accepted |
-| [D-170](./D-170-status-page-freshness-third-signal-feature-paragraphs.md) | Extend the status-page freshness check with a third signal: feature-landing paragraph set changes (#522) | accepted |
+| [D-170](./D-170-status-page-freshness-third-signal-feature-paragraphs.md) | Extend the status-page freshness check with a third signal: feature-landing paragraph set changes (#522) | superseded |
 | [D-171](./D-171-change-aware-ci-gate-scheduling.md) | Change-aware CI gate scheduling | accepted |
 | [D-172](./D-172-nonblocking-property-based-ci-policy-audit.md) | Use a base-owned property audit without forced CI successor activation | accepted |
 | [D-173](./D-173-exception-propagation-via-global-state-superseding-d-005.md) | Exception propagation via explicit per-thread state, superseding D-005 | accepted |
@@ -195,7 +195,7 @@ current.
 | [D-183](./D-183-honor-cargo-target-dir-when-locating-build.md) | Honor CARGO_TARGET_DIR when locating build artifacts | accepted |
 | [D-184](./D-184-build-pycc-rt-from-pycc-codegen-s-build.md) | Build pycc_rt from pycc_codegen's build script | accepted |
 | [D-185](./D-185-permit-a-dedicated-tracking-issue-per-oversized.md) | Permit a dedicated tracking issue per oversized source file, without weakening the same-change decomposition rule | accepted |
-| [D-186](./D-186-bind-evidence-heroes-to-an-offline-versioned.md) | Bind evidence heroes to an offline versioned manifest with reviewed immutable attestations | accepted |
+| [D-186](./D-186-bind-evidence-heroes-to-an-offline-versioned.md) | Bind evidence heroes to an offline versioned manifest with reviewed immutable attestations | superseded |
 | [D-187](./D-187-widen-a-bool-into-an-int-declared-attribute.md) | Widen a bool into an int-declared attribute slot in MIR, not in codegen | accepted |
 | [D-188](./D-188-synthesize-hirclassdefs-for-the-builtin-exception.md) | Synthesize HirClassDefs for the builtin exception classes | accepted |
 | [D-189](./D-189-assign-user-exception-classes-a-compile-time.md) | Assign user exception classes a compile-time type tag and carry the class name on the exception object | accepted |
@@ -209,7 +209,7 @@ current.
 | [D-197](./D-197-optional-t-representation-and-is-none-part1.md) | Optional[T] representation, T | None parsing, and is/is not on None (Part 1 of #747) | accepted |
 | [D-198](./D-198-cast-erasure-limits-cast-to-representation.md) | `cast` erasure limits `cast` to representation-preserving targets | accepted |
 | [D-199](./D-199-opaque-bindings-for-solver-unrepresentable.md) | Track opaque bindings in the private-helper constraint solver (#771) | accepted |
-| [D-200](./D-200-raise-llms-txt-aggregate-budget-to-264-kib.md) | Raise the llms.txt aggregate context budget from 256 KiB to 264 KiB (issue #207) | accepted |
+| [D-200](./D-200-raise-llms-txt-aggregate-budget-to-264-kib.md) | Raise the llms.txt aggregate context budget from 256 KiB to 264 KiB (issue #207) | superseded |
 | [D-201](./D-201-shared-pycc-scratch-crate-and-lint-gate-for.md) | Shared `pycc_scratch` crate and lint gate for scratch-directory lifecycle | accepted |
 | [D-202](./D-202-pep-654-except-star-and-exceptiongroup.md) | PEP 654 `except*`/ExceptionGroup: six deliberate simplifications | accepted |
 | [D-203](./D-203-narrow-the-d-091-bench-manifest-tail-check-to.md) | Narrow the D-091 bench-manifest tail check to tolerate the `pycc_scratch` root dev-dependency line | accepted |
@@ -227,7 +227,7 @@ current.
 | [D-215](./D-215-stage-a-tolerant-rustfmt-ci-gate-check-ahead-of.md) | Stage a tolerant rustfmt CI-gate check ahead of activating the rustfmt job (issue #24, Part 2) | accepted |
 | [D-216](./D-216-close-the-target-dir-flag-and-config-file.md) | Close the --target-dir flag and config-file build.target-dir exclusions as permanent | accepted |
 | [D-217](./D-217-report-every-frontend-diagnostic-per-pass-with.md) | Report every frontend diagnostic per pass, with a byte-stable first diagnostic and JSON Lines output (issue #864, Part 1) | accepted |
-| [D-218](./D-218-raise-llms-txt-aggregate-budget-to-272-kib.md) | Raise the llms.txt aggregate context budget from 264 KiB to 272 KiB (issue #207) | accepted |
+| [D-218](./D-218-raise-llms-txt-aggregate-budget-to-272-kib.md) | Raise the llms.txt aggregate context budget from 264 KiB to 272 KiB (issue #207) | superseded |
 | [D-219](./D-219-hir-per-item-diagnostic-collection-with-poisoned-binding-cascade-suppression.md) | HIR lowering collects one diagnostic per top-level item and silently skips cascades of a skipped class or alias (issue #864, Part 2) | accepted |
 | [D-220](./D-220-type-checker-per-function-diagnostic-collection-with-a-per-function-solver-first-merge.md) | The type checker collects one diagnostic per failing function and merges the solver's and the annotation checker's lists solver-first per function (issue #864, Part 3) | accepted |
 | [D-221](./D-221-the-conformance-harness-is-the-root-file-plus-its.md) | The conformance harness is `tests/conformance.rs` plus `tests/conformance/*.rs`; every harness text-reader audits the concatenation (#729) | accepted |
@@ -236,10 +236,10 @@ current.
 | [D-224](./D-224-restrict-class-level-attributes-to-scalar.md) | Restrict class-level attributes to scalar compile-time constants | accepted |
 | [D-225](./D-225-synthesize-an-implicit-zero-argument-constructor.md) | Synthesize an implicit zero-argument constructor for a class with no `__init__` | accepted |
 | [D-226](./D-226-infer-an-un-annotated-class-attribute-s-type.md) | Infer an un-annotated class attribute's type from its literal | accepted |
-| [D-227](./D-227-partition-the-llms-txt-context-ceiling-across.md) | Partition the llms.txt context ceiling across per-resource budgets | accepted |
+| [D-227](./D-227-partition-the-llms-txt-context-ceiling-across.md) | Partition the llms.txt context ceiling across per-resource budgets | superseded |
 | [D-228](./D-228-lower-parameterized-container-type-annotations.md) | Lower parameterized container type annotations in parameter, local- and module-variable and type-alias positions | accepted |
 | [D-229](./D-229-reserve-from-future-import-as-a-compile-time-directive.md) | Reserve `from __future__ import ...` as a compile-time directive at both import sites | accepted |
-| [D-230](./D-230-bind-public-evidence-to-ordered-immutable-executions.md) | Bind public evidence to ordered immutable executions | accepted |
+| [D-230](./D-230-bind-public-evidence-to-ordered-immutable-executions.md) | Bind public evidence to ordered immutable executions | superseded |
 | [D-231](./D-231-lower-stdlib-import-x-as-y-to-canonical-names-with-an.md) | Lower stdlib `import X as Y` to canonical names with an alias-aware receiver shadow check | accepted |
 | [D-232](./D-232-rank-an-implicit-object-style-constructor-last-in.md) | Rank an implicit object-style constructor last in constructor resolution | accepted |
 | [D-233](./D-233-hir-lowering-gains-a-second-per-item-diagnostic-source.md) | HIR lowering gains a second, syntactic per-item diagnostic source: the enum-call scan (issue #944, amending D-219) | accepted |
@@ -248,11 +248,11 @@ current.
 | [D-236](./D-236-reject-a-class-attribute-named-after-the-instantiation.md) | Reject a class attribute named after the instantiation or class-creation protocol | accepted |
 | [D-237](./D-237-reject-string-conversion-of-a-non-dataclass-non-exception.md) | Reject string conversion of a non-dataclass, non-exception instance and of a protocol-typed value with C0001 | accepted |
 | [D-238](./D-238-reject-enum-body-assignments-cpython-keeps-out-of-the.md) | Reject Enum-body assignments CPython keeps out of the member list with C0001 | accepted |
-| [D-239](./D-239-check-canonical-page-date-pins-against-the-predicted.md) | Check canonical page date pins against the predicted merge date | accepted |
+| [D-239](./D-239-check-canonical-page-date-pins-against-the-predicted.md) | Check canonical page date pins against the predicted merge date | superseded |
 | [D-240](./D-240-accepted-decision-files-are-insert-only-and-ci-enforces-it.md) | Accepted decision files are insert-only, and CI enforces it | accepted |
-| [D-241](./D-241-status-hero-is-a-checked-in-offline-refreshed-required-check-snapshot.md) | Status hero is a checked-in, offline-refreshed required-check snapshot bound to one default-branch revision | accepted |
+| [D-241](./D-241-status-hero-is-a-checked-in-offline-refreshed-required-check-snapshot.md) | Status hero is a checked-in, offline-refreshed required-check snapshot bound to one default-branch revision | superseded |
 | [D-242](./D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) | Product mode: the delivery process informs rather than blocks | accepted |
-| [D-243](./D-243-architecture-hero-is-a-checked-in-re-derivable-compiler-pipeline-trace.md) | Architecture hero is a checked-in, re-derivable compiler pipeline trace | accepted |
+| [D-243](./D-243-architecture-hero-is-a-checked-in-re-derivable-compiler-pipeline-trace.md) | Architecture hero is a checked-in, re-derivable compiler pipeline trace | superseded |
 | [D-244](./D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) | Add a hosted CPython extension-module artifact mode and pull the C-API interop core ahead of v0.5/v0.6 | accepted |
 | [D-245](./D-245-resolve-empty-container-element-types-in-a-pre-check-hir-pass.md) | Resolve empty-container element types in a pre-check HIR pass | accepted |
 | [D-246](./D-246-seed-dunder-name-all-or-nothing-per-program.md) | Seed `__name__` all-or-nothing per program, deviating from CPython | accepted |
@@ -268,3 +268,4 @@ current.
 | [D-256](./D-256-admit-a-foreign-callable-staticmethod-class.md) | Admit a foreign-callable `staticmethod` class attribute, re-read at each access | accepted |
 | [D-257](./D-257-kill-criterion-compile-scope-is-the-subject-module.md) | The kill criterion's "compiles unchanged" covers the subject module, with sibling imports bound as foreign | accepted |
 | [D-258](./D-258-ext-module-any-object-and-object-containers-are-opaque.md) | In an `--ext` module, `Any`, `object` and object-element container annotations are the opaque CPython object | accepted |
+| [D-259](./D-259-replace-the-pages-site-with-a-small-generated-site.md) | Replace the Pages site with a small generated site checked only for structure | accepted |

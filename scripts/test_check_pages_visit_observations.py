@@ -14,7 +14,10 @@ cover the validation expectations from issue #208:
 - prose conflating repository views with Pages visits, GSC clicks with
   all-provider visits, or attributing a visit to a query the evidence
   does not expose;
-- missing bound phrases in SEARCH_VISIBILITY.md, WEBSITE.md, or ROADMAP.md.
+- missing bound phrases in SEARCH_VISIBILITY.md.
+
+The ROADMAP.md/WEBSITE.md prose bindings were retired with the Pages rewrite
+(umbrella #802); the positive controls prove neither file participates.
 """
 
 from __future__ import annotations
@@ -54,8 +57,6 @@ def _load_repository_files(repository_root: Path) -> dict[str, str]:
     return {
         "PAGES_VISIT_OBSERVATIONS.json": (docs / "PAGES_VISIT_OBSERVATIONS.json").read_text(),
         "SEARCH_VISIBILITY.md": (docs / "SEARCH_VISIBILITY.md").read_text(),
-        "WEBSITE.md": (docs / "WEBSITE.md").read_text(),
-        "ROADMAP.md": (docs / "ROADMAP.md").read_text(),
     }
 
 
@@ -134,8 +135,6 @@ def _write_repo(root: Path, files: dict[str, str]) -> None:
     docs.mkdir(parents=True, exist_ok=True)
     (docs / "PAGES_VISIT_OBSERVATIONS.json").write_text(files["PAGES_VISIT_OBSERVATIONS.json"])
     (docs / "SEARCH_VISIBILITY.md").write_text(files["SEARCH_VISIBILITY.md"])
-    (docs / "WEBSITE.md").write_text(files["WEBSITE.md"])
-    (docs / "ROADMAP.md").write_text(files["ROADMAP.md"])
 
 
 class TestLiveArtifact(unittest.TestCase):
@@ -433,25 +432,24 @@ class TestProseBindings(unittest.TestCase):
             with self.assertRaises(ObservationError):
                 validate(Path(tmp))
 
-    def test_rejects_missing_artifact_reference_in_website(self) -> None:
+    def test_missing_roadmap_and_website_do_not_affect_result(self) -> None:
+        """The checker must not read ROADMAP.md or WEBSITE.md at all."""
         files = _load_repository_files(REPOSITORY_ROOT)
-        files["WEBSITE.md"] = files["WEBSITE.md"].replace(
-            "PAGES_VISIT_OBSERVATIONS.json", "REPLACED.json"
-        )
         with tempfile.TemporaryDirectory() as tmp:
             _write_repo(Path(tmp), files)
-            with self.assertRaises(ObservationError):
-                validate(Path(tmp))
+            self.assertFalse((Path(tmp) / "docs" / "ROADMAP.md").exists())
+            self.assertFalse((Path(tmp) / "docs" / "WEBSITE.md").exists())
+            validate(Path(tmp))
 
-    def test_rejects_missing_artifact_reference_in_roadmap(self) -> None:
+    def test_roadmap_and_website_content_do_not_affect_result(self) -> None:
+        """ROADMAP.md and WEBSITE.md are no longer bound prose surfaces:
+        arbitrary unrelated content in them must not change the verdict."""
         files = _load_repository_files(REPOSITORY_ROOT)
-        files["ROADMAP.md"] = files["ROADMAP.md"].replace(
-            "PAGES_VISIT_OBSERVATIONS.json", "REPLACED.json"
-        )
         with tempfile.TemporaryDirectory() as tmp:
             _write_repo(Path(tmp), files)
-            with self.assertRaises(ObservationError):
-                validate(Path(tmp))
+            (Path(tmp) / "docs" / "ROADMAP.md").write_text("unrelated\n")
+            (Path(tmp) / "docs" / "WEBSITE.md").write_text("unrelated\n")
+            validate(Path(tmp))
 
     def test_rejects_forbidden_wording_in_visibility(self) -> None:
         files = _load_repository_files(REPOSITORY_ROOT)
@@ -461,21 +459,20 @@ class TestProseBindings(unittest.TestCase):
             with self.assertRaises(ObservationError):
                 validate(Path(tmp))
 
-    def test_rejects_forbidden_wording_in_website(self) -> None:
+    def test_forbidden_wording_in_roadmap_and_website_is_not_checked(self) -> None:
+        """Forbidden conflation wording is enforced only in
+        SEARCH_VISIBILITY.md; ROADMAP.md and WEBSITE.md are no longer
+        scanned."""
         files = _load_repository_files(REPOSITORY_ROOT)
-        files["WEBSITE.md"] += "\n\nsearch console clicks are all visits.\n"
         with tempfile.TemporaryDirectory() as tmp:
             _write_repo(Path(tmp), files)
-            with self.assertRaises(ObservationError):
-                validate(Path(tmp))
-
-    def test_rejects_forbidden_wording_in_roadmap(self) -> None:
-        files = _load_repository_files(REPOSITORY_ROOT)
-        files["ROADMAP.md"] += "\n\nanalytics is a ranking factor.\n"
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_repo(Path(tmp), files)
-            with self.assertRaises(ObservationError):
-                validate(Path(tmp))
+            (Path(tmp) / "docs" / "ROADMAP.md").write_text(
+                "analytics is a ranking factor.\n"
+            )
+            (Path(tmp) / "docs" / "WEBSITE.md").write_text(
+                "search console clicks are all visits.\n"
+            )
+            validate(Path(tmp))
 
 
 class TestCLI(unittest.TestCase):
@@ -494,8 +491,6 @@ class TestCLI(unittest.TestCase):
             docs = Path(tmp) / "docs"
             docs.mkdir()
             (docs / "SEARCH_VISIBILITY.md").write_text("test")
-            (docs / "WEBSITE.md").write_text("test")
-            (docs / "ROADMAP.md").write_text("test")
             result = subprocess.run(
                 [sys.executable, str(VALIDATOR_PATH), "--repository-root", tmp],
                 capture_output=True, text=True,

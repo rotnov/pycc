@@ -1,217 +1,63 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pycc — AOT compiler for typed Python to native binaries</title>
+<meta name="description" content="pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 that produces native binaries through Rust and LLVM; AI-created and human-managed.">
+<meta name="google-site-verification" content="JYWBkUpaYuJgPDksjf5oGOn49o8X41PqUxS--u-eF24">
+<link rel="canonical" href="https://rotnov.github.io/pycc/">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="pycc">
+<meta property="og:url" content="https://rotnov.github.io/pycc/">
+<meta property="og:title" content="pycc — Typed Python in. Native binaries out.">
+<meta property="og:description" content="A pre-alpha AOT compiler for typed Python 3.14 that produces native binaries through Rust and LLVM.">
+<meta property="og:image" content="https://rotnov.github.io/pycc/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "pycc",
+  "alternateName": "pycc Python compiler",
+  "description": "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 that produces native binaries; AI-created and human-managed.",
+  "url": "https://rotnov.github.io/pycc/",
+  "codeRepository": "https://github.com/rotnov/pycc",
+  "license": "https://opensource.org/license/mit",
+  "programmingLanguage": "Rust",
+  "keywords": ["Python compiler", "ahead-of-time compiler", "typed Python", "native binary", "AI-created software"]
+}
+</script>
+</head>
+<body>
+<header class="top"><a class="brand" href="./">pycc</a>
+<nav><a href="status/">Status</a> <a href="https://github.com/rotnov/pycc">GitHub</a></nav></header>
+<main>
+<h1>Typed Python in. Native binaries out.</h1>
+<p class="lede">pycc is an ahead-of-time compiler for type-annotated Python 3.14. It
+checks every annotation at compile time and produces a standalone native
+executable through Rust and LLVM.</p>
+<p><strong>Pre-alpha.</strong> pycc compiles an implemented subset of Python, not
+the whole language, and is not ready for production. The
+<a href="status/">status page</a> tracks what works today.</p>
 
-    <title>pycc — AOT compiler for typed Python to native binaries</title>
-    <meta
-      name="description"
-      content="pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM; AI-created and human-managed."
-    >
-    <meta name="author" content="pycc AI agents">
-    <meta name="pycc:evidence-id" content="landing-quick-start-v1">
-    <meta name="pycc:evidence-kind" content="native-build-output">
-    <meta name="pycc:evidence-state" content="all-Tier-1">
-    <meta
-      name="google-site-verification"
-      content="JYWBkUpaYuJgPDksjf5oGOn49o8X41PqUxS--u-eF24"
-    >
-    <meta
-      name="robots"
-      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
-    >
-    <meta name="theme-color" content="#101310">
-    <meta name="color-scheme" content="dark">
-    <link rel="canonical" href="https://rotnov.github.io/pycc/">
-    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+<h2 id="try">Try it</h2>
+<pre><code>$ cat hello.py
+def fib(n: int) -> int:
+    if n &lt; 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
 
-    <meta property="og:type" content="website">
-    <meta property="og:site_name" content="pycc">
-    <meta property="og:locale" content="en_US">
-    <meta property="og:url" content="https://rotnov.github.io/pycc/">
-    <meta property="og:title" content="pycc — Typed Python in. Native binaries out.">
-    <meta
-      property="og:description"
-      content="A pre-alpha AOT compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM, created by AI and managed by a human."
-      data-evidence-id="landing-quick-start-v1"
-      data-evidence-kind="native-build-output"
-      data-evidence-state="all-Tier-1"
-    >
-    <meta property="og:image" content="https://rotnov.github.io/pycc/og.png">
-    <meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
-
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="pycc — Typed Python in. Native binaries out.">
-    <meta
-      name="twitter:description"
-      content="A pre-alpha AOT compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM, created by AI and managed by a human."
-      data-evidence-id="landing-quick-start-v1"
-      data-evidence-kind="native-build-output"
-      data-evidence-state="all-Tier-1"
-    >
-    <meta name="twitter:image" content="https://rotnov.github.io/pycc/og.png">
-    <meta name="twitter:image:alt" content="pycc — typed Python in, native binaries out">
-
-    <script type="application/ld+json">
-      {
-        "@context": "https://schema.org",
-        "@graph": [
-          {
-            "@type": "WebPage",
-            "@id": "https://rotnov.github.io/pycc/#webpage",
-            "url": "https://rotnov.github.io/pycc/",
-            "name": "pycc — AOT compiler for typed Python to native binaries",
-            "description": "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM; AI-created and human-managed.",
-            "inLanguage": "en",
-            "dateModified": "2026-09-06",
-            "additionalProperty": [
-              {
-                "@type": "PropertyValue",
-                "propertyID": "pycc:evidence-id",
-                "value": "landing-quick-start-v1"
-              },
-              {
-                "@type": "PropertyValue",
-                "propertyID": "pycc:evidence-kind",
-                "value": "native-build-output"
-              },
-              {
-                "@type": "PropertyValue",
-                "propertyID": "pycc:evidence-state",
-                "value": "all-Tier-1"
-              }
-            ],
-            "mainEntity": {
-              "@id": "https://rotnov.github.io/pycc/#project"
-            }
-          },
-          {
-            "@type": "SoftwareSourceCode",
-            "@id": "https://rotnov.github.io/pycc/#project",
-            "name": "pycc",
-            "alternateName": "pycc Python compiler",
-            "description": "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with an implemented path to standalone native binaries; AI-created and human-managed.",
-            "url": "https://rotnov.github.io/pycc/",
-            "mainEntityOfPage": {
-              "@id": "https://rotnov.github.io/pycc/#webpage"
-            },
-            "codeRepository": "https://github.com/rotnov/pycc",
-            "license": "https://opensource.org/license/mit",
-            "programmingLanguage": "Rust",
-            "keywords": [
-              "Python compiler",
-              "ahead-of-time compiler",
-              "typed Python",
-              "native binary",
-              "static typing",
-              "AI-created software",
-              "AI agents",
-              "autonomous software development"
-            ]
-          }
-        ]
-      }
-    </script>
-
-    <link rel="stylesheet" href="styles.css">
-    <script defer src="site.js"></script>
-  </head>
-  <body>
-    <a class="skip-link" href="#main-content">Skip to content</a>
-
-    <header class="site-header">
-      <a class="brand" href="./" aria-label="pycc home">
-        <span class="brand-mark" aria-hidden="true">&gt;_</span>
-        <span>pycc</span>
-      </a>
-      <nav class="site-nav" aria-label="Primary navigation">
-        <a href="./" aria-current="page">Home</a>
-        <a href="language-support/">Language support</a>
-        <a href="diagnostics/">Diagnostics</a>
-        <a href="architecture/">How it works</a>
-        <a href="status/">Current status</a>
-        <a href="python-aot-compilers/">Compare compilers</a>
-        <a href="ai-native/">AI provenance</a>
-        <a class="nav-cta" href="https://github.com/rotnov/pycc">GitHub ↗</a>
-      </nav>
-    </header>
-
-    <main id="main-content">
-      <section
-        class="hero"
-        aria-labelledby="hero-title"
-        data-evidence-role="hero"
-        data-evidence-id="landing-quick-start-v1"
-        data-evidence-kind="native-build-output"
-        data-evidence-state="all-Tier-1"
-      >
-        <div class="hero-copy">
-          <p class="eyebrow">
-            <span class="signal" aria-hidden="true"></span>
-            Pre-alpha · typed Python subset
-          </p>
-          <h1 id="hero-title">
-            Typed Python in.<br>
-            <span>Native binaries out.</span>
-          </h1>
-          <p class="hero-lede">
-            pycc compiles type-annotated Python before your program runs,
-            producing a standalone native executable for the implemented subset.
-          </p>
-          <p class="hero-boundary">
-            Python 3.14 is the target, not full compatibility. Not ready for production.
-          </p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="#try">
-              Try the checked example
-            </a>
-            <a class="button button-secondary" href="language-support/">
-              Check language support
-            </a>
-          </div>
-          <div class="command">
-            <code><span>$</span> pycc build hello.py -o hello</code>
-            <button class="copy-button" type="button" data-copy="pycc build hello.py -o hello">
-              Copy
-            </button>
-          </div>
-          <p class="command-note">Compile typed Python to a native binary · pre-alpha</p>
-        </div>
-
-        <div class="hero-code">
-          <div class="code-window">
-            <div class="window-bar">
-              <div class="window-dots" aria-hidden="true">
-                <span></span><span></span><span></span>
-              </div>
-              <span>hello.py</span>
-              <span class="window-state">Python 3.14 subset</span>
-            </div>
-            <pre><code><span class="code-keyword">def</span> <span class="code-function">fib</span>(n: <span class="code-type">int</span>) -&gt; <span class="code-type">int</span>:
-    <span class="code-keyword">if</span> n &lt; <span class="code-number">2</span>:
-        <span class="code-keyword">return</span> n
-    <span class="code-keyword">return</span> fib(n - <span class="code-number">1</span>) + fib(n - <span class="code-number">2</span>)
-
-i = <span class="code-number">0</span>
-<span class="code-keyword">while</span> i &lt; <span class="code-number">11</span>:
+i = 0
+while i &lt; 11:
     print(fib(i))
-    i = i + <span class="code-number">1</span></code></pre>
-          </div>
-          <div class="output-window">
-            <div class="window-bar">
-              <div class="window-dots" aria-hidden="true">
-                <span></span><span></span><span></span>
-              </div>
-              <span>$ ./hello</span>
-              <span
-                class="evidence-state"
-                data-evidence-id="landing-quick-start-v1"
-                data-evidence-kind="native-build-output"
-                data-evidence-state="all-Tier-1"
-              >all-Tier-1</span>
-            </div>
-            <pre><code>0
+    i = i + 1
+$ pycc check hello.py
+$ pycc build hello.py -o hello
+$ ./hello
+0
 1
 1
 2
@@ -222,329 +68,32 @@ i = <span class="code-number">0</span>
 21
 34
 55</code></pre>
-          </div>
-          <p
-            class="hero-provenance"
-            data-evidence-id="landing-quick-start-v1"
-            data-evidence-kind="native-build-output"
-            data-evidence-state="all-Tier-1"
-          >
-            Source: <a href="https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/fixtures/quick_start.py"><code>tests/fixtures/quick_start.py</code></a>.
-            Snapshot: <a href="https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/fixtures/quick_start.expected.txt"><code>tests/fixtures/quick_start.expected.txt</code></a>.
-            Test: <a href="https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/quick_start.rs"><code>tests/quick_start.rs::quick_start_fixture_builds_and_prints_the_documented_sequence</code></a>.
-            Accepted at <a href="https://github.com/rotnov/pycc/commit/8324332d5ea713bd8a56f4d08bf7e0120757d66b"><code>8324332</code></a>
-            in <a href="https://github.com/rotnov/pycc/actions/runs/33198103510">CI run 33198103510</a>
-            on all five Tier-1 targets (Linux x64/arm64, macOS x64/arm64,
-            Windows x64), with CPython 3.14.7, Rust 1.97.1, LLVM 22, the debug
-            profile, and no extra compiler flags. Limitations: This compiles
-            only the implemented v0.1 subset: statement-form <code>if</code>
-            and <code>while</code>, recursive calls, and <code>print</code>. It
-            does not prove support for classes, exceptions, generators, or
-            imports.
-          </p>
-          <details class="hero-evidence-details">
-            <summary>Artifact integrity and five Tier-1 CI jobs</summary>
-            <dl>
-              <dt>Source SHA-256</dt>
-              <dd><code>09f7f6732d6837a0e7a91298eea549b0bdcba77d4908839ce1878955f4a0f043</code></dd>
-              <dt>Test SHA-256</dt>
-              <dd><code>cb7af27aab96bf468fea7ee973e00ae9d11c0054187e09f2e94e4d8b9199a766</code></dd>
-              <dt>Stdout SHA-256</dt>
-              <dd><code>668cec0e1f32369a43d6f74b1e795fe37f1e46bdb8eb0d7712b35c7e95e173e6</code></dd>
-            </dl>
-            <ul>
-              <li><a href="https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383105"><code>macos-14 · aarch64-apple-darwin</code></a></li>
-              <li><a href="https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383070"><code>macos-15-intel · x86_64-apple-darwin</code></a></li>
-              <li><a href="https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940382966"><code>ubuntu-latest · x86_64-unknown-linux-gnu</code></a></li>
-              <li><a href="https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383014"><code>ubuntu-24.04-arm · aarch64-unknown-linux-gnu</code></a></li>
-              <li><a href="https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940382973"><code>windows-latest · x86_64-pc-windows-msvc</code></a></li>
-            </ul>
-          </details>
-        </div>
-      </section>
+<p>This example is <a href="https://github.com/rotnov/pycc/blob/main/tests/fixtures/quick_start.py"><code>tests/fixtures/quick_start.py</code></a>;
+<a href="https://github.com/rotnov/pycc/blob/main/tests/quick_start.rs"><code>tests/quick_start.rs</code></a>
+builds it and checks its output on every CI run. To build pycc itself, see
+<a href="https://github.com/rotnov/pycc#building-from-source">Building from source</a>.</p>
 
-      <p>Inspect the <a href="language-support/">tested language subset</a> and
-        <a href="diagnostics/">actual compiler diagnostics</a> for exact source,
-        outputs, and the limits of each claim.</p>
+<h2 id="how">How it works</h2>
+<p>Source is parsed, resolved and strictly type-checked, lowered to a typed
+intermediate representation, compiled by LLVM and linked with a small
+native runtime. Type errors are compile errors. The
+<a href="https://github.com/rotnov/pycc/blob/main/docs/ARCHITECTURE.md">architecture document</a>
+describes each stage.</p>
 
-      <section class="contract" aria-label="pycc design contract">
-        <div>
-          <strong>3.14</strong>
-          <span>Standard Python target</span>
-        </div>
-        <div>
-          <strong>Strict</strong>
-          <span>Compile-time types</span>
-        </div>
-        <div>
-          <strong>Native</strong>
-          <span>Standalone output</span>
-        </div>
-        <div>
-          <strong>No dialect</strong>
-          <span>Python syntax stays Python</span>
-        </div>
-      </section>
+<h2 id="experiment">An AI-native experiment</h2>
+<p>AI agents write pycc's specifications, code, tests, documentation and
+reviews; a human sets goals and constraints. The
+<a href="https://github.com/rotnov/pycc">public history</a> records every change.</p>
 
-      <section class="section source-evaluation" id="try" aria-labelledby="try-title">
-        <p class="eyebrow">01 · Evaluate pycc</p>
-        <h2 id="try-title">Try the checked example</h2>
-        <p>This example requires a local source build, not a package-manager install.
-          Start with the <a href="https://github.com/rotnov/pycc">source repository</a>,
-          the <a href="https://github.com/rotnov/pycc/blob/main/docs/DISTRIBUTION.md#current-installation-boundary">distribution prerequisites</a>,
-          and the <a href="https://github.com/rotnov/pycc/blob/main/.github/workflows/ci.yml">current CI platform setup</a>.
-          Use the pinned Rust toolchain and LLVM 22.1.1, with <code>LLVM_SYS_221_PREFIX</code> pointing at that LLVM installation.</p>
-        <p>After those prerequisites, run this Unix-shell source-checkout sequence.
-          Windows has separate LLVM/MSVC prerequisites in the distribution guide;
-          this transcript is not an all-platform installation attestation.</p>
-        <pre tabindex="0" aria-label="Unix-shell source evaluation commands"><code>git clone https://github.com/rotnov/pycc.git
-cd pycc
-cargo build --workspace
-./target/debug/pycc run tests/fixtures/quick_start.py</code></pre>
-        <p>The checked fixture prints the Fibonacci sequence from 0 through 55 shown above.
-          This current source flow is separate from the immutable historical build transcript.</p>
-        <h3>Will my code work?</h3>
-        <p>Start with <a href="language-support/">language support and its explicit limits</a>.
-          Python 3.14 is the target, not full compatibility.</p>
-        <h3>What errors will I see?</h3>
-        <p>Inspect <a href="diagnostics/">real human and JSON diagnostics</a>, including current span limitations.</p>
-        <h3>How does it differ?</h3>
-        <p><a href="python-aot-compilers/">How is this different from Cython, mypyc, or Nuitka?</a>
-          Compare language contracts, output artifacts, and runtime models.</p>
-        <p>Benchmark evidence and a Performance page are not yet published;
-          <a href="https://github.com/rotnov/pycc/issues/567">#567 owns that evidence</a>.</p>
-      </section>
-
-      <section class="ai-built-section" id="ai-built" aria-labelledby="ai-built-title">
-        <div class="ai-built-head">
-          <div>
-            <p class="eyebrow">02 · Development model</p>
-            <h2 id="ai-built-title">
-              Built entirely by AI.<br>
-              <span>Managed by a human.</span>
-            </h2>
-          </div>
-          <p class="ai-built-lede">
-            pycc is an experiment in autonomous software development. AI agents
-            create the specifications, every line of project code, tests,
-            documentation, reviews, and release automation.
-          </p>
-        </div>
-
-        <div class="ai-roles">
-          <article class="ai-role">
-            <span class="role-label">AI agents</span>
-            <strong>Build the entire project</strong>
-            <p>
-              Design, implementation, verification, documentation, code review,
-              CI, releases, and the process rules that govern the next cycle.
-            </p>
-          </article>
-          <article class="ai-role">
-            <span class="role-label role-label-human">Human manager</span>
-            <strong>Sets direction</strong>
-            <p>
-              Only manages goals, constraints, priorities, product decisions,
-              and the definition of success.
-            </p>
-          </article>
-        </div>
-
-        <p class="ai-built-note">
-          <span>0</span>
-          No project code is handwritten by a human.
-        </p>
-      </section>
-
-      <section class="section section-split" id="why" aria-labelledby="why-title">
-        <div class="section-heading">
-          <p class="eyebrow">03 · Why pycc</p>
-          <h2 id="why-title">One tool should finish the whole job.</h2>
-        </div>
-        <div class="section-copy">
-          <p class="lead">
-            Type checkers stop before runtime. Packagers bundle an interpreter.
-            Typed-subset compilers trade compatibility breadth for static
-            optimization. Python-like compilers ask you to adopt a dialect.
-          </p>
-          <p>
-            pycc's design target combines hard type errors, standard Python
-            syntax, native execution, and autonomous permitted-interoperability
-            bundles in one compiler pipeline. Annotations are the contract—not
-            optional hints.
-          </p>
-          <p>Native and pure builds emit standalone executables;
-            planned permitted CPython interop emits a self-contained bundle with its pinned runtime.</p>
-        </div>
-      </section>
-
-      <section class="comparison-wrap" aria-labelledby="comparison-title">
-        <div class="comparison-intro">
-          <p id="comparison-title">The intended position</p>
-          <span>Design targets, not release claims</span>
-        </div>
-        <div class="table-scroll" tabindex="0" role="group" aria-labelledby="comparison-title">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Tool</th>
-                <th scope="col">Static model</th>
-                <th scope="col">Output artifact</th>
-                <th scope="col">Language contract</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr class="highlight-row">
-                <th scope="row"><span class="mini-mark">&gt;_</span> pycc</th>
-                <td><span class="yes">Hard annotations</span></td>
-                <td><span class="yes">Standalone target</span></td>
-                <td><span class="yes">CPython 3.14 target</span></td>
-              </tr>
-              <tr>
-                <th scope="row">LPython</th>
-                <td>Typed subset</td>
-                <td>AOT executable</td>
-                <td>CPython-compatible subset</td>
-              </tr>
-              <tr>
-                <th scope="row">Codon</th>
-                <td>Static language</td>
-                <td>Native code</td>
-                <td>Python-like language</td>
-              </tr>
-              <tr>
-                <th scope="row">Nuitka</th>
-                <td>None required</td>
-                <td>Executable</td>
-                <td>Standard Python</td>
-              </tr>
-              <tr>
-                <th scope="row">mypyc</th>
-                <td>Strict subset</td>
-                <td>C extension</td>
-                <td>Standard Python subset</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="comparison-detail">
-          This table describes the intended position. The
-          <a href="python-aot-compilers/">source-backed Python AOT compiler comparison</a>
-          separates current output models and pycc's pre-alpha status.
-        </p>
-      </section>
-
-      <section class="section pipeline-section" id="pipeline" aria-labelledby="pipeline-title">
-        <div class="section-heading">
-          <p class="eyebrow">03 · Compiler pipeline</p>
-          <h2 id="pipeline-title">From source file to machine code.</h2>
-        </div>
-        <ol class="pipeline">
-          <li class="pipeline-step">
-            <span>01</span>
-            <p class="step-input">.py</p>
-            <h3>Parse</h3>
-            <p>CPython 3.14 grammar, source spans preserved.</p>
-          </li>
-          <li class="pipeline-step">
-            <span>02</span>
-            <p class="step-input">HIR</p>
-            <h3>Check</h3>
-            <p>Resolve names and enforce the typed contract.</p>
-          </li>
-          <li class="pipeline-step">
-            <span>03</span>
-            <p class="step-input">MIR</p>
-            <h3>Lower</h3>
-            <p>Build typed IR for optimization and ownership analysis.</p>
-          </li>
-          <li class="pipeline-step">
-            <span>04</span>
-            <p class="step-input">LLVM</p>
-            <h3>Compile</h3>
-            <p>Emit the native binary, or package the planned pinned CPython closure when permitted interop requires it.</p>
-          </li>
-        </ol>
-      </section>
-
-      <section class="status-section" id="status" aria-labelledby="status-title">
-        <div class="status-card">
-          <div>
-            <p class="eyebrow">04 · Honest status</p>
-            <h2 id="status-title">v0.1 through v0.3 are met and released as <code>v0.3.0</code>. The compiler is not ready for production.</h2>
-          </div>
-          <div class="status-copy">
-            <p>
-              <code>pycc check</code> now runs the v0.1 frontend:
-              parsing, HIR lowering, strict type checking, private-helper
-              inference, and stable human or JSON diagnostics. Native
-              <code>build</code>/<code>run</code> lower that implemented surface
-              through MIR, LLVM, the host linker, and the runtime. v0.1's
-              acceptance criteria are met: <code>fib</code> and
-              <code>mandelbrot-ascii</code> match pinned CPython output on all
-              five Tier-1 targets, <code>pycc check</code> clears its
-              <75ms/1000 LOC throughput floor, and diagnostic output matches the
-              stable CLI specification's example.
-            </p>
-            <ul>
-              <li><span aria-hidden="true">✓</span> Strict v0.1 frontend and diagnostic snapshots</li>
-              <li><span aria-hidden="true">✓</span> v0.1 native backend with documented gaps</li>
-              <li><span aria-hidden="true">✓</span> v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)</li>
-              <li><span aria-hidden="true">✓</span> v0.2 acceptance criteria also met (2026-08-04)</li>
-              <li><span aria-hidden="true">✓</span> v0.3 acceptance criteria met and released as <code>v0.3.0</code> (2026-08-26): classes, inheritance, pattern matching, and exceptions, with conformance clearing 38 of 37 required matrix rows across all 39 required PEP numbers</li>
-              <li><span aria-hidden="true">→</span> v0.4 is in progress. Cross-file project from imports have landed. Bare/submodule imports, namespace handling, broader project CLI behavior, and incremental compilation remain incomplete.</li>
-            </ul>
-          </div>
-        </div>
-
-        <div class="spec-grid">
-          <a href="status/">
-            <span>Current evidence</span>
-            <strong>Implemented vs planned</strong>
-            <small>Commit-relative status</small>
-          </a>
-          <a href="architecture/">
-            <span>System design</span>
-            <strong>Compiler architecture</strong>
-            <small>Current and target pipeline</small>
-          </a>
-          <a href="ai-native/">
-            <span>Development model</span>
-            <strong>The AI-native experiment</strong>
-            <small>AI creates · human manages</small>
-          </a>
-        </div>
-      </section>
-
-      <section class="final-cta" aria-labelledby="cta-title">
-        <p class="eyebrow">Read the code. Watch the agents work.</p>
-        <h2 id="cta-title">Follow an AI-built Python compiler from first slice to production.</h2>
-        <p>
-          A human manages the mission. AI agents execute, test, review, and
-          evolve the project in public under the MIT license.
-        </p>
-        <a class="button button-primary" href="https://github.com/rotnov/pycc">
-          Visit the repository
-          <span aria-hidden="true">↗</span>
-        </a>
-      </section>
-    </main>
-
-    <footer>
-      <a class="brand" href="./" aria-label="pycc home">
-        <span class="brand-mark" aria-hidden="true">&gt;_</span>
-        <span>pycc</span>
-      </a>
-      <p>An AI-created, human-managed AOT compiler for typed Python. Pre-alpha.</p>
-      <div>
-        <a href="language-support/">Language</a>
-        <a href="diagnostics/">Diagnostics</a>
-        <a href="status/">Status</a>
-        <a href="architecture/">Architecture</a>
-        <a href="python-aot-compilers/">Compare</a>
-        <a href="https://github.com/rotnov/pycc">GitHub</a>
-        <a href="llms.txt">LLM guide</a>
-      </div>
-    </footer>
-  </body>
+<h2 id="learn">Learn more</h2>
+<ul>
+<li><a href="status/">Current status</a>, generated from the roadmap</li>
+<li><a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">Roadmap</a></li>
+<li><a href="https://github.com/rotnov/pycc/blob/main/docs/PYTHON_STANDARDS.md">Python standards matrix</a></li>
+<li><a href="https://github.com/rotnov/pycc/blob/main/docs/SPEC.md">Specification index</a></li>
+<li><a href="llms.txt">llms.txt</a> for language models</li>
+</ul>
+</main>
+<footer><p>MIT licensed. Source: <a href="https://github.com/rotnov/pycc">github.com/rotnov/pycc</a>.</p></footer>
+</body>
 </html>

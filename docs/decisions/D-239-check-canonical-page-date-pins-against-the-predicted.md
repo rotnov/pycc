@@ -1,12 +1,13 @@
 ---
 id: D-239
 title: "Check canonical page date pins against the predicted merge date"
-status: accepted
+status: superseded
 ---
 
 ## D-239: Check canonical page date pins against the predicted merge date
 
-- Status: accepted
+- Status: superseded by D-259
+- Amendment (2026-10-05): superseded by [D-259](./D-259-replace-the-pages-site-with-a-small-generated-site.md), which replaces the Pages site with a small generated site checked only for structure (umbrella #802).
 - Context: Every canonical page under `site/` carries four date pins that must
   agree with each other and with git history: the `<lastmod>` for the page's
   `<loc>` in `site/sitemap.xml`, the JSON-LD `dateModified` in the page's own
