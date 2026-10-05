@@ -60,6 +60,7 @@ mod foreign_pack;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
 mod hash;
+mod object_return;
 mod sequence;
 /// Set insertion, length and iteration helpers, and the insert of a set of
 /// user-class instances (#1343, Part 1 of #1336).
@@ -7546,10 +7547,23 @@ fn emit_stmt<'ctx>(
             // set the is_returning flag, and branch to the finally block.
             // After the finally body runs, the codegen emits the `ret`.
             let finally_target = finally_stack.last().cloned();
+            // #1387: in a function returning `object` (D-258), a bare
+            // `return` means `return None`, and both hand the host CPython's
+            // `None` -- see `object_return`.
+            let bare_none = MirExpr::NoneLiteral;
+            let value = object_return::object_return_value(&expected_return_ty, value, &bare_none);
             match value {
                 Some(expr) => {
-                    let scalar =
-                        emit_expr(context, builder, module, rt, user_functions, locals, expr);
+                    let scalar = object_return::object_return_none(
+                        context,
+                        builder,
+                        module,
+                        &expected_return_ty,
+                        expr,
+                    )
+                    .unwrap_or_else(|| {
+                        emit_expr(context, builder, module, rt, user_functions, locals, expr)
+                    });
                     let scalar = incref_if_str_duplicate(builder, rt, expr, scalar);
                     let scalar = retain_if_int_duplicate(context, builder, rt, expr, scalar);
                     let scalar =

@@ -19,6 +19,7 @@ mod inherited_copies;
 mod module;
 mod monomorphize;
 mod narrow;
+mod object_none;
 mod redeclaration;
 mod return_coverage;
 mod set_element;
@@ -2817,7 +2818,7 @@ fn check_stmt_in_function(
 ) -> Result<(), Diagnostic> {
     match stmt {
         HirStmt::Return(None) => {
-            if return_ty != Ty::None {
+            if return_ty != Ty::None && !object_none::admits_none_return(&return_ty, None) {
                 return Err(Diagnostic::error(
                     "T0022",
                     format!(
@@ -2828,6 +2829,10 @@ fn check_stmt_in_function(
                 )
                 .with_help(format!("return a `{}` value", return_ty.name())));
             }
+            Ok(())
+        }
+        HirStmt::Return(Some(expr)) if object_none::admits_none_return(&return_ty, Some(expr)) => {
+            // #1387: `return None` into an `object` slot; see `object_none`.
             Ok(())
         }
         HirStmt::Return(Some(expr)) => {
