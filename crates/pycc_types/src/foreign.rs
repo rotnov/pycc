@@ -285,7 +285,7 @@ pub(crate) fn object_into_scalar_help(actual: &Ty, declared: &Ty) -> Option<Stri
         .then(|| {
             let name = declared.name();
             format!(
-                "a CPython object reaches a `{name}` slot only through an explicit conversion: wrap the value in `{name}(...)`"
+                "a CPython object reaches `{name}` slots only through an explicit conversion: wrap the value in `{name}(...)`"
             )
         })
 }

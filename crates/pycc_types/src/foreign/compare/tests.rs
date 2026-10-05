@@ -111,13 +111,15 @@ fn a_rich_comparison_on_an_object_is_an_object_not_a_bool() {
 
 /// #1419: a `bool` slot keeps refusing an object comparison -- pycc does
 /// not coerce it with `PyObject_IsTrue` (D-258's #1419 amendment) -- and
-/// the refusal's `help` names the explicit `bool(...)` conversion. Every
-/// `bool` slot is covered: a `-> bool` return (module function and
-/// method), an annotated binding at module level and in a function, and an
-/// `and` whose operand is an object comparison.
+/// the `T0022`/`T0025` refusal's `help` names the explicit `bool(...)`
+/// conversion: a `-> bool` return (module function and method) and an
+/// annotated binding at module level and in a function. An `and` whose
+/// operand is an object comparison keeps its own `I0404`. Other refusals of
+/// an object in a `bool` slot (`T0026` after a value-less declaration,
+/// `T0021` for a `bool` call argument) keep their generic help.
 #[test]
 fn a_bool_slot_refuses_an_object_comparison_and_suggests_bool() {
-    const HELP: &str = "a CPython object reaches a `bool` slot only through an explicit conversion: wrap the value in `bool(...)`";
+    const HELP: &str = "a CPython object reaches `bool` slots only through an explicit conversion: wrap the value in `bool(...)`";
     for (source, code, phrase) in [
         (
             "def f() -> bool:\n    o = numpy.pi\n    return o == 1\n",
@@ -175,15 +177,15 @@ fn an_object_into_a_scalar_slot_names_that_scalar_s_conversion() {
     for (source, help) in [
         (
             "def f() -> int:\n    return numpy.pi\n",
-            "a CPython object reaches a `int` slot only through an explicit conversion: wrap the value in `int(...)`",
+            "a CPython object reaches `int` slots only through an explicit conversion: wrap the value in `int(...)`",
         ),
         (
             "def f() -> float:\n    return numpy.pi\n",
-            "a CPython object reaches a `float` slot only through an explicit conversion: wrap the value in `float(...)`",
+            "a CPython object reaches `float` slots only through an explicit conversion: wrap the value in `float(...)`",
         ),
         (
             "s: str = numpy.pi\n",
-            "a CPython object reaches a `str` slot only through an explicit conversion: wrap the value in `str(...)`",
+            "a CPython object reaches `str` slots only through an explicit conversion: wrap the value in `str(...)`",
         ),
         (
             "def f() -> list[int]:\n    return numpy.pi\n",
