@@ -65,8 +65,7 @@ pub(crate) fn lower_type_alias_stmt(
         .name
         .as_name_expr()
         .expect("ruff always parses a `type` statement's name as Expr::Name");
-    let ty = annotation_to_ty(&type_alias.value, None, None, aliases, class_defs)
-        .map_err(|error| crate::with_bare_container_advice(error, &type_alias.value))?;
+    let ty = alias_value_to_ty(&type_alias.value, aliases, class_defs)?;
     Ok(Some((name.id.to_string(), ty)))
 }
 
@@ -114,7 +113,33 @@ pub(crate) fn lower_legacy_type_alias_ann_assign(
     let Expr::Name(target) = ann.target.as_ref() else {
         return Ok(None);
     };
-    let ty = annotation_to_ty(value, None, None, aliases, class_defs)
-        .map_err(|error| crate::with_bare_container_advice(error, value))?;
+    let ty = alias_value_to_ty(value, aliases, class_defs)?;
     Ok(Some((target.id.to_string(), ty)))
+}
+
+/// Resolves a type alias's value (`type X = <value>`, `X: TypeAlias =
+/// <value>`) as a type. The value is an expression, not an annotation, so
+/// `pycc_parser::parse_all` leaves a quoted one in place (Part 1 of #889
+/// unquotes annotations only). A quoted value (`type X = "int"`) is
+/// therefore refused with the `C0001` it had before #889, rather than
+/// resolving through `annotation_to_ty`'s nested-string arm. A string
+/// nested inside the value (`type X = list["int"]`) is an annotation
+/// argument, and resolves like one.
+fn alias_value_to_ty(
+    value: &Expr,
+    aliases: &[(String, Ty)],
+    class_defs: &[ClassAnnotationInfo],
+) -> Result<Ty, Diagnostic> {
+    let resolved = if value.is_string_literal_expr() {
+        Err(crate::unsupported(
+            format!(
+                "only a bare name type annotation is supported so far, got {}",
+                pycc_ast::expr_kind_name(value)
+            ),
+            pycc_ast::expr_range(value),
+        ))
+    } else {
+        annotation_to_ty(value, None, None, aliases, class_defs)
+    };
+    resolved.map_err(|error| crate::with_bare_container_advice(error, value))
 }

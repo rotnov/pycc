@@ -178,3 +178,38 @@ fn a_quoted_optional_lowers_to_the_optional_type() {
         Some(vec![("a".to_string(), Ty::Optional(Box::new(Ty::Int)))])
     );
 }
+
+#[test]
+fn a_quoted_type_alias_value_keeps_its_refusal() {
+    // A type alias's value is an expression, not an annotation, so a quoted
+    // one is refused exactly as before Part 1 of #889, in both spellings.
+    for source in ["type X = \"int\"\n", "X: TypeAlias = \"int\"\n"] {
+        let diagnostic = lower_err(source);
+        assert_eq!(diagnostic.code, "C0001", "{source:?}");
+        assert_eq!(
+            diagnostic.span,
+            Some(span_of(source, "\"int\"")),
+            "{source:?}"
+        );
+        assert!(
+            diagnostic.message.contains("got a string literal"),
+            "{source:?}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn a_string_nested_in_a_type_alias_value_resolves() {
+    for (quoted, unquoted) in [
+        ("type X = list[\"int\"]\n", "type X = list[int]\n"),
+        (
+            "X: TypeAlias = list[\"int\"]\n",
+            "X: TypeAlias = list[int]\n",
+        ),
+    ] {
+        let aliases = lower_ok(quoted).type_aliases;
+        assert_eq!(aliases, lower_ok(unquoted).type_aliases, "{quoted:?}");
+        assert_eq!(aliases.len(), 1, "{quoted:?}");
+    }
+}

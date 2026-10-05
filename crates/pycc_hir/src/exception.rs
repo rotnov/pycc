@@ -410,11 +410,13 @@ pub fn builtin_exception_init_item() -> HirItem {
 /// operands, `except` types, annotations, call arguments, attribute values,
 /// comprehensions, `match` patterns, f-string interpolations -- reachable by
 /// construction, and keeps new upstream AST nodes covered automatically.
-/// A string annotation counts exactly where annotation lowering resolves
-/// it (Part 1 of #889): a top-level one (`x: "ValueError"`) arrives already
-/// unquoted from `pycc_parser::parse_all`, and one nested in an annotation
-/// (`list["ValueError"]`) is parsed here by `visit_annotation`. A string
-/// anywhere else (`x = "ValueError"`) is only a string.
+/// A string annotation counts wherever annotation lowering may resolve it
+/// (Part 1 of #889): a top-level one (`x: "ValueError"`) arrives already
+/// unquoted from `pycc_parser::parse_all`, and a string nested in an
+/// annotation or a type alias value (`list["ValueError"]`) is parsed here.
+/// That over-approximates harmlessly -- a string lowering discards, such as
+/// `Literal["ValueError"]`, also counts, which only seeds the classes. A
+/// string anywhere else (`x = "ValueError"`) is only a string.
 ///
 /// The one non-name reference is an `assert` statement (#1369), which
 /// raises `AssertionError` without spelling it; a `visit_stmt` override
@@ -454,6 +456,24 @@ fn nested_string_annotation_references(annotation: &Expr) -> bool {
     })
 }
 
+/// The value of a type alias statement, in either spelling: `type X =
+/// <value>` or the legacy `X: TypeAlias = <value>`, the two shapes
+/// `import::type_alias` resolves as a type.
+fn type_alias_value(stmt: &Stmt) -> Option<&Expr> {
+    match stmt {
+        Stmt::TypeAlias(alias) => Some(&alias.value),
+        Stmt::AnnAssign(assign)
+            if assign
+                .annotation
+                .as_name_expr()
+                .is_some_and(|name| name.id.as_str() == "TypeAlias") =>
+        {
+            assign.value.as_deref()
+        }
+        _ => None,
+    }
+}
+
 impl<'a> Visitor<'a> for ReferenceScan {
     fn visit_expr(&mut self, expr: &'a Expr) {
         // Once one spelling is seen the answer cannot change, so stop
@@ -478,6 +498,13 @@ impl<'a> Visitor<'a> for ReferenceScan {
             return;
         }
         if matches!(stmt, Stmt::Assert(_)) {
+            self.found = true;
+            return;
+        }
+        // Part 1 of #889: a type alias's value is resolved as a type, so a
+        // string nested in it (`type E = list["ValueError"]`) is resolved
+        // too, although the generic walk visits the value as an expression.
+        if type_alias_value(stmt).is_some_and(nested_string_annotation_references) {
             self.found = true;
             return;
         }

@@ -9,9 +9,10 @@
 //! contributes no line coverage; the Tier-1 `native-build-test` leg runs
 //! it with `cargo test --workspace -- --include-ignored`, comparing the
 //! extension artifact against CPython's own run of the same source. Every
-//! fixture is valid under CPython 3.13 (CI's hosted floor), which evaluates
-//! an unquoted annotation eagerly; that is why the self-referential ones
-//! here are quoted.
+//! program that runs (the native run and the hosted fixture) is valid under
+//! CPython 3.13 (CI's hosted floor), which evaluates an unquoted annotation
+//! eagerly; that is why the self-referential annotations there are quoted.
+//! The unquoted twins fed only to `pycc check` need not be.
 
 use pycc_scratch::ScratchDir;
 use std::path::{Path, PathBuf};

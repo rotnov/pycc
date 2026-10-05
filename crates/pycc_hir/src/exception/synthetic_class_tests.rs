@@ -377,12 +377,19 @@ fn a_builtin_exception_name_inside_a_string_annotation_is_a_reference() {
         "x: \"ValueError\"\n",
         "def f(e: list[\"ValueError\"]) -> None:\n    pass\n",
         "def f(e: list[\"list['ValueError']\"]) -> None:\n    pass\n",
+        // a string nested in a type alias value, in both spellings
+        "type E = list[\"ValueError\"]\n",
+        "E: TypeAlias = list[\"ValueError\"]\n",
     ] {
         assert!(references(source), "must be a reference: {source:?}");
     }
     for source in [
         "def f(e: list[\"Value Error\"]) -> None:\n    pass\n",
         "def f(e: list[\"int\"]) -> None:\n    pass\n",
+        "type E = list[\"int\"]\n",
+        "E: TypeAlias = list[\"int\"]\n",
+        // an ordinary annotated assignment's value is not a type
+        "E: str = \"ValueError\"\n",
     ] {
         assert!(!references(source), "must not be a reference: {source:?}");
     }
