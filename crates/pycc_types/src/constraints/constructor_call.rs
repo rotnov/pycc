@@ -18,15 +18,21 @@
 //!
 //! **What it does not check.** The check phase stays the authority on
 //! whether the instantiation is valid (`class::resolve_instantiation`): an
-//! abstract, protocol or enum class still answers its instance here, so the
-//! check phase's precise `C0001` is what the program is refused with, rather
-//! than a misleading "cannot infer return type". The arguments are collected
-//! by the `Call` arm for their own constraints but deliberately not unified
-//! with `__init__`'s parameters, on `method_return`'s reasoning for a method
-//! call: a method parameter is never inferred from its call sites
-//! (`docs/TYPE_SYSTEM.md`, "v0.1 local inference"). So an unannotated helper
-//! parameter passed only to a constructor (`def _mk(v): return C(v)`) stays
-//! uninferred.
+//! abstract class still answers its instance here, so the check phase's
+//! precise `C0001` is what the program is refused with, rather than a
+//! misleading "cannot infer return type". A protocol class answers nothing:
+//! its instance would let `method_return` type `P().f()` against a class
+//! whose stub methods are not callable members, and that term's `T0044`
+//! would displace the check phase's "cannot instantiate protocol class"
+//! (`crate::module::merge_solver_first`), so the helper keeps its prior
+//! `T0021`. An enum class never reaches the solver: HIR lowering refuses
+//! `E(...)` itself (`pycc_hir::enum_class_call_message`). The arguments
+//! are collected by the `Call` arm for their own constraints but
+//! deliberately not unified with `__init__`'s parameters, on
+//! `method_return`'s reasoning for a method call: a method parameter is never
+//! inferred from its call sites (`docs/TYPE_SYSTEM.md`, "v0.1 local
+//! inference"). So an unannotated helper parameter passed only to a
+//! constructor (`def _mk(v): return C(v)`) stays uninferred.
 //!
 //! A generic class (`class C[T]:`) answers nothing: a bare `C(x)` has no
 //! type argument to instantiate with, and this solver has no
@@ -35,15 +41,15 @@
 
 use super::*;
 
-/// `Ty::Instance(callee)` when `callee` names a non-generic class in the
-/// module's class table; `None` otherwise (the `Call` arm then keeps its
-/// historical "no term").
+/// `Ty::Instance(callee)` when `callee` names a non-generic, non-protocol
+/// class in the module's class table; `None` otherwise (the `Call` arm
+/// then keeps its historical "no term").
 pub(super) fn constructor_call_term(
     env: &ConstraintEnvironment<'_, '_>,
     callee: &str,
 ) -> Option<TypeTerm> {
     let (name, def) = env.class_defs.iter().find(|(name, _)| name == callee)?;
-    if def.type_param.is_some() {
+    if def.type_param.is_some() || def.is_protocol {
         return None;
     }
     Some(Ok(Ty::Instance(Box::new(name.clone()))))

@@ -122,6 +122,20 @@ fn an_abstract_class_keeps_the_check_phases_precise_refusal() {
 }
 
 #[test]
+fn a_protocol_class_answers_nothing_and_keeps_the_prior_t0021() {
+    // An instance answer would let #1420's method term report a `T0044`
+    // over the protocol's stub `f`, displacing the check phase's refusal;
+    // answering nothing keeps the base tree's diagnostic.
+    let source = "from typing import Protocol\n\nclass P(Protocol):\n    \
+        def f(self) -> int: ...\n\ndef _mk():\n    return P()\n\nprint(_mk().f())\n";
+    refused(
+        source,
+        "T0021",
+        "cannot infer return type of private helper `_mk`",
+    );
+}
+
+#[test]
 fn a_join_with_another_type_is_a_conflict() {
     let source = format!(
         "{CLASS}\n\ndef _mk(flag: bool):\n    if flag:\n        return R(1)\n    return 3\n\nprint(_mk(True))\n"

@@ -237,8 +237,9 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     ///
     /// The check phase needs no equivalent -- `env.lookup_class` and
     /// `env.lookup_generic` already run ahead of its interception -- but
-    /// `ConstraintEnvironment` carries no class table at all, and
-    /// `signatures` covers only `def`s. Seeded once per module in
+    /// this seam does not consult `ConstraintEnvironment`'s class table
+    /// (`class_defs`, keyed by the canonical class name), and `signatures`
+    /// covers only `def`s. Seeded once per module in
     /// `constraints::signatures` from the HIR's own class table, per
     /// *spelling*: a module defining `class ndarray` must still be able to
     /// call `NDArray(n)`. Since Part 1 of #1319 it also holds `frozenset`
@@ -618,8 +619,8 @@ fn term_for_type(ty: Ty, parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>
 /// `reject_non_int_producer_length`'s own doc comment.
 ///
 /// The solver's own statement (h): a `def` of the spelling is in
-/// `signatures`, a `class` of it is in `shadowed_producers` (the solver has
-/// no class table), a module-level value binding of it is in `bindings`, and
+/// `signatures`, a `class` of it is in `shadowed_producers` (the class
+/// table is not consulted here), a module-level value binding of it is in `bindings`, and
 /// a *function-local* binding of it is in `local_names`. Any of the four
 /// means the program's own meaning wins.
 ///
@@ -1363,8 +1364,8 @@ pub(crate) fn collect_expr_constraints(
             // is not a bare name) is reported here, from the same shared
             // helper `check_cast` uses, so the two passes cannot drift.
             //
-            // The solver has no class table (`ConstraintEnvironment` carries
-            // only value bindings), so it produces a *term* only for the
+            // The class table is not consulted here (`class_defs` serves
+            // the method-call and constructor-call terms only), so it produces a *term* only for the
             // four builtin scalar target names it can recognize on its own;
             // an unverified class name yields `Ok(None)` and leaves the
             // decision to `check_cast`. Producing an unverified
@@ -1492,8 +1493,8 @@ pub(crate) fn collect_expr_constraints(
                 // reason the message still enumerates only the three original
                 // types.
                 //
-                // It does *not* carry that arm's user-defined-class guard, and
-                // cannot: this solver's environment has no class table. Nor
+                // It does *not* carry that arm's user-defined-class guard: the
+                // class table is not consulted here. Nor
                 // does it need one -- a `Ty::Object` term can only come from a
                 // foreign name, and `I0404` refuses a foreign name used in a
                 // function body at all, which is the only place this solver
@@ -1555,7 +1556,7 @@ pub(crate) fn collect_expr_constraints(
                 //
                 // The user-defined-*class* guard `infer_expr_in`'s arms carry
                 // is absent here for the reason the `float` arm above states:
-                // this solver's environment has no class table, and `I0404`
+                // the class table is not consulted here, and `I0404`
                 // keeps a foreign object out of every function body it runs
                 // on. `infer_expr_in` is the authority for a class-shadowed
                 // name and refuses the program there.

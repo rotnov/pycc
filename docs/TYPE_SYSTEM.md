@@ -65,8 +65,10 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   solver does not validate the call: the check phase still resolves the
   constructor through the MRO and checks the arguments against `__init__`
   (`T0021` on a mistyped or miscounted argument). It also still refuses an
-  abstract, protocol or enum class with its own `C0001`, which the solver's
-  answer no longer hides behind "cannot infer return type". As with a method
+  abstract class with its own `C0001`, which the solver's answer no longer
+  hides behind "cannot infer return type". A protocol class answers nothing,
+  so a helper returning `P()` keeps the prior `T0021`, and an enum call
+  `E(1)` is refused by lowering before the solver runs. As with a method
   call, the arguments are not unified with `__init__`'s parameters. A set
   comprehension of constructor calls (`{R(i) for i in range(n)}`) therefore
   infers `set[R]`, and `frozenset(...)` of one `frozenset[R]`. An annotated

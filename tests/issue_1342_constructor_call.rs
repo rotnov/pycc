@@ -113,6 +113,29 @@ fn a_mistyped_constructor_argument_is_still_refused() {
     assert!(!rendered.contains("cannot infer return type"), "{rendered}");
 }
 
+/// An enum class call never reaches the solver: lowering refuses it with
+/// its own `C0001`, unchanged by the constructor term.
+#[test]
+fn an_enum_class_call_keeps_the_lowering_refusal() {
+    let dir = ScratchDir::new("1342_enum").expect("scratch");
+    let output = pycc()
+        .arg("check")
+        .arg(write(
+            &dir,
+            "m.py",
+            "from enum import Enum\n\n\nclass E(Enum):\n    A = 1\n\n\n\
+             def _mk():\n    return E(1)\n\n\nprint(_mk())\n",
+        ))
+        .output()
+        .expect("pycc should spawn");
+    let rendered = format!("{}{}", stdout_of(&output), stderr_of(&output));
+    assert_eq!(output.status.code(), Some(1), "{rendered}");
+    assert!(
+        rendered.contains("error[C0001]: cannot call enum class `E`"),
+        "{rendered}"
+    );
+}
+
 // ---------------------------------------------------------------------
 // Hosted: the extension artifact against CPython's own run.
 // ---------------------------------------------------------------------
