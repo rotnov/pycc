@@ -46,6 +46,6 @@ pub(crate) fn infer_expr_call(
     if !matches!(callee_ty, Ty::Object) {
         return Err(subscript_callee_unsupported());
     }
-    super::check_object_call_args(&arg_tys, "call")?;
+    super::check_object_call_args(env, args, &arg_tys, "call")?;
     Ok(Ty::Object)
 }

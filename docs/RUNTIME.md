@@ -1473,6 +1473,60 @@ callee was produced, the call is never reached and the produced callee is not
 released -- the [#1092](https://github.com/rotnov/pycc/issues/1092) leak-only
 rule, once per failure.
 
+**A pycc instance argument crosses as a carrier of its run-time class.**
+[#1435](https://github.com/rotnov/pycc/issues/1435) adds
+`pycc_ext_obj_pack_instance(inst)`, the packer for an instance of a regular
+pycc class passed positionally to a call on a CPython object -- `cb(self)`,
+`o.m(1, q)`, `table[k](q)`. It returns a new reference to a
+`PyccExtInstance` (the `{PyObject_HEAD; void *inst;}` carrier #1145
+introduced for constructed instances) and keeps the packers' one contract
+above. Four rules fix what that carrier is.
+
+- *Its type is the run-time class's.* The class name is field 0 of the
+  instance's layout descriptor (`pycc_rt_ext_instance_class`), so an
+  instance of a subclass crosses as the subclass even through a base-typed
+  name. A **published** class answers with its own type object -- every
+  published type is now a carrier type, sized `sizeof(PyccExtInstance)` with
+  the shared deallocator, and a non-constructible one keeps
+  `Py_TPFLAGS_DISALLOW_INSTANTIATION` -- so the host can call the class's
+  exported methods on what it received. Any other class (private, publishing
+  nothing, or a generic class) gets a method-less type named
+  `<module>.<Class>` (`__main__.<Class>` in an embedded executable), created
+  on first use with `Py_TPFLAGS_DISALLOW_INSTANTIATION` and cached by class
+  name for the module's lifetime. The cache key is the bare class name, which
+  is unique per artifact because the project namespace is flat (a second
+  top-level `Q` is a `C0001`); a generic class's instantiations share one
+  layout name and are never published, so they share one method-less type.
+- *Identity is CPython's while a carrier lives.* The instance keeps a weak
+  back-pointer to its live carrier (`pycc_rt_ext_instance_carrier` /
+  `_set_carrier`), set by `tp_init` for a host-constructed object and by the
+  packer for a fresh one, and cleared by the carrier's deallocator only when
+  it still names that carrier. So `q.go(lambda x: x) is q`, two crossings of
+  one instance are `is`-equal, and a host that drops every reference gets a
+  fresh carrier for the next crossing -- the instance itself is never freed
+  (D-107, as for a constructed instance above).
+- *Only the call-argument position is admitted.* The checker's
+  `is_carriable_instance` (`crates/pycc_types/src/foreign.rs`) admits a
+  `Ty::Instance` of a non-enum class with no exception type tag and no
+  builtin exception on its MRO; a `Protocol`-typed value, an enum member and
+  an exception instance stay `I0404`. A subscript key, a comparison operand
+  and a list-display element stay refused, because the class's
+  `__hash__`/`__eq__` would not run there (below). A `@classmethod`'s own
+  `cls` is refused by name (`Environment::in_classmethod`): it is typed as
+  an instance but is a null receiver, and an alias that slips past the
+  syntactic check reaches the packer's `NULL` guard, which raises
+  `SystemError`.
+- *Deviations from CPython, pinned by
+  `tests/issue_1435_instance_argument.rs`.* A carrier exposes exactly its
+  type's exported methods: no attribute is readable, so `hasattr(x, 'n')` is
+  `False` (as for a host-constructed object since #1145). Published types are
+  flat, so `isinstance(derived, mod.Base)` is `False`. A class's dunder
+  overrides (`__eq__`, `__hash__`, `__repr__`, ...) are not wired to type
+  slots, so the host sees `object`'s identity equality and default `repr`.
+  And an instance whose `self` escapes during `__init__` is packed before
+  `tp_init` links the constructed carrier, so that escape gets a different
+  carrier than the host's object.
+
 **A slice load is one more producer; a membership test is not.** Part 2b of
 [#1371](https://github.com/rotnov/pycc/issues/1371) adds
 `pycc_ext_obj_getslice(o, start, stop, step, present)`, which builds CPython's

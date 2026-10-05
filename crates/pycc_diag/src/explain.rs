@@ -1455,7 +1455,10 @@ is another CPython object. Part 2d of #1371 builds a list display \
 bound to an object slot -- annotated `object`, `Any` or a bare `list`, \
 or an empty `[]` assigned to a name whose other binding is a CPython \
 object -- as a fresh CPython `list` of its `int`, `float`, `bool`, `str` \
-or `object` elements. The loop is \
+or `object` elements. #1435 lets an instance of a regular pycc class \
+(not an enum or an exception class) be a positional argument of a method \
+call, a direct call or a call of a subscript result, crossing as a \
+carrier of its run-time class. The loop is \
 admitted when the iterable is written as an attribute load \
 (`for x in o.attr:`), a method call (`for x in o.method(...):`) or a bare \
 name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
@@ -1466,8 +1469,9 @@ classes, a comparison chain with an object link (`a < o < b`), an \
 equality test against a bare `None`, a rich comparison with an operand \
 of any other type, a `match` subject, iterating over a subscript load \
 (`for x in o[k]:`) or inside a comprehension, \
-passing an argument of any other type to one of its methods, to the \
-object itself or to a subscript result, indexing or slicing with a key \
+passing an argument of any other type (an enum member, an exception \
+instance, a class method's `cls`) to one of its methods, to the object \
+itself or to a subscript result, indexing or slicing with a key \
 or bound of any other type, and testing membership of an item of any \
 other type in an object or of an `object` item in a native container \
 (membership between two native values keeps its `C0001`), and a list \

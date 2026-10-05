@@ -161,6 +161,7 @@ pub(crate) fn annotated_function_environment(hir: &HirModule) -> Environment {
         // walk; `check_function_in` sets this per function.
         returns_inside_finally: false,
         return_inferred: false,
+        in_classmethod: false,
         narrowed: HashMap::new(),
         // Overwritten at `check_with_environment_all`'s entry, the common
         // sink of both `Environment` constructors (#962).

@@ -1671,32 +1671,37 @@ fn an_exported_method_gets_a_method_table_a_slot_table_and_a_non_instantiable_sp
         ),
         "{inc}"
     );
+    // Every published type is a carrier type (#1435), so even one with no
+    // constructor carries the shared deallocator.
     assert!(
         inc.contains(
             "static PyType_Slot pycc_ext_type_slots_Grid[] = {\n    \
-             {Py_tp_methods, pycc_ext_type_methods_Grid},\n    {0, NULL},\n};\n"
+             {Py_tp_methods, pycc_ext_type_methods_Grid},\n    \
+             {Py_tp_dealloc, pycc_ext_instance_dealloc},\n    {0, NULL},\n};\n"
         ),
         "{inc}"
     );
-    // `basicsize = 0` and `itemsize = 0`: the type carries no instance
-    // layout, and `Py_TPFLAGS_DISALLOW_INSTANTIATION` plus
-    // `Py_TPFLAGS_IMMUTABLETYPE` are what make `mod.Grid()` and
-    // `mod.Grid.scale = ...` both `TypeError` while instance methods are
-    // unimplemented.
+    // `basicsize` is the carrier's, because an instance crossing as a call
+    // argument is boxed in this type (#1435); `Py_TPFLAGS_DISALLOW_INSTANTIATION`
+    // plus `Py_TPFLAGS_IMMUTABLETYPE` are what make `mod.Grid()` and
+    // `mod.Grid.scale = ...` both `TypeError`.
     assert!(
         inc.contains(
             "static PyType_Spec pycc_ext_type_spec_Grid = {\n    \
-             PYCC_EXT_MODULE_NAME_STR \".Grid\",\n    0,\n    0,\n    \
+             PYCC_EXT_MODULE_NAME_STR \".Grid\",\n    sizeof(PyccExtInstance),\n    0,\n    \
              Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION | \
              Py_TPFLAGS_IMMUTABLETYPE,\n    pycc_ext_type_slots_Grid,\n};\n"
         ),
         "{inc}"
     );
+    // The type enters the shim's carrier-type cache before the module
+    // attribute, and a failure of either releases the local reference.
     assert!(
         inc.contains(
             "    type = PyType_FromSpec(&pycc_ext_type_spec_Grid);\n    \
              if (type == NULL) {\n        return -1;\n    }\n    \
-             if (PyModule_AddObjectRef(module, \"Grid\", type) < 0) {\n        \
+             if (pycc_ext_carrier_register(\"Grid\", type) < 0\n        \
+             || PyModule_AddObjectRef(module, \"Grid\", type) < 0) {\n        \
              Py_DECREF(type);\n        return -1;\n    }\n    Py_DECREF(type);\n"
         ),
         "{inc}"
@@ -2026,7 +2031,7 @@ fn a_constructible_class_gets_a_tp_init_three_slots_and_a_carrier_sized_spec() {
             "    if (pycc_rt_ext_pending_type() >= 0) {\n        \
              pycc_ext_raise_pending();\n        pycc_ext_bridge_release_to(bridge_mark);\n        \
              return -1;\n    }\n    pycc_ext_bridge_release_to(bridge_mark);\n    \
-             ((PyccExtInstance *)self)->inst = inst;\n    return 0;\n}\n"
+             pycc_ext_carrier_bind(self, inst);\n    return 0;\n}\n"
         ),
         "{inc}"
     );
@@ -2040,8 +2045,7 @@ fn a_constructible_class_gets_a_tp_init_three_slots_and_a_carrier_sized_spec() {
         ),
         "{inc}"
     );
-    // `basicsize` grows to the carrier and `DISALLOW_INSTANTIATION` is gone,
-    // while `IMMUTABLETYPE` stays and `BASETYPE` is still absent: a host may
+    // `DISALLOW_INSTANTIATION` is gone, while `IMMUTABLETYPE` stays and `BASETYPE` is still absent: a host may
     // build an instance but may neither rebind the type's attributes nor
     // subclass it.
     assert!(
@@ -2137,25 +2141,28 @@ fn a_memoryview_constructor_releases_its_buffer_on_every_exit_past_the_acquire()
 }
 
 #[test]
-fn a_published_class_with_no_constructor_descriptor_keeps_part_ones_bytes() {
+fn a_published_class_with_no_constructor_descriptor_is_a_non_instantiable_carrier() {
     // The scope line: publication is decided by `publications` and
-    // constructibility by `ctors`, so a class absent from `ctors` must emit
-    // exactly what #1143 emitted -- no `tp_init`, no extra slots,
-    // `basicsize` zero and `DISALLOW_INSTANTIATION` intact.
+    // constructibility by `ctors`, so a class absent from `ctors` gets no
+    // `tp_init` and keeps `DISALLOW_INSTANTIATION` -- but since #1435 it is
+    // still a carrier type, with the carrier's `basicsize` and the shared
+    // deallocator, because its instances can cross as call arguments.
     let exports = [instance_export("Grid", "area", vec![], Ty::Int)];
     let without = generate_exports_inc("m", &exports, &[], &flat_publications(&exports), &[]);
     assert!(!without.contains("pycc_ext_tp_init_Grid"), "{without}");
     assert!(
         without.contains(
             "static PyType_Slot pycc_ext_type_slots_Grid[] = {\n    \
-             {Py_tp_methods, pycc_ext_type_methods_Grid},\n    {0, NULL},\n};\n"
+             {Py_tp_methods, pycc_ext_type_methods_Grid},\n    \
+             {Py_tp_dealloc, pycc_ext_instance_dealloc},\n    {0, NULL},\n};\n"
         ),
         "{without}"
     );
+    assert!(!without.contains("Py_tp_new"), "{without}");
     assert!(
         without.contains(
             "static PyType_Spec pycc_ext_type_spec_Grid = {\n    \
-             PYCC_EXT_MODULE_NAME_STR \".Grid\",\n    0,\n    0,\n    \
+             PYCC_EXT_MODULE_NAME_STR \".Grid\",\n    sizeof(PyccExtInstance),\n    0,\n    \
              Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION | \
              Py_TPFLAGS_IMMUTABLETYPE,\n    pycc_ext_type_slots_Grid,\n};\n"
         ),
@@ -2197,8 +2204,7 @@ fn the_shim_defines_the_carrier_and_the_shared_dealloc_above_the_generated_inclu
     // Dropping the `Py_DECREF(tp)` leaks the type object in silence.
     assert!(
         shim.contains(
-            "    PyTypeObject *tp = Py_TYPE(self);\n    \
-             freefunc tp_free = (freefunc)PyType_GetSlot(tp, Py_tp_free);\n    \
+            "    freefunc tp_free = (freefunc)PyType_GetSlot(tp, Py_tp_free);\n    \
              tp_free(self);\n    Py_DECREF(tp);\n"
         ),
         "{shim}"

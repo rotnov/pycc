@@ -47,14 +47,17 @@ pub(crate) const METHOD_TYPE_REGISTER_DECL: &str =
 ///
 /// [`collect_class_publications`]: super::collect_class_publications
 ///
-/// A class in `ctors` is **constructible**: its spec carries
-/// `basicsize = sizeof(PyccExtInstance)`, the slots `Py_tp_new`
-/// (`PyType_GenericNew` directly), the generated per-class
-/// `pycc_ext_tp_init_<Class>` below and the shim's shared
-/// `pycc_ext_instance_dealloc`, and it drops
-/// `Py_TPFLAGS_DISALLOW_INSTANTIATION`. Every other class keeps Part 1's
-/// shape byte for byte -- `basicsize` `0`, no slots but `Py_tp_methods`, and
-/// the flag that makes `mod.Class()` raise `TypeError: cannot create
+/// Every published type is a **carrier type** (#1435): its spec carries
+/// `basicsize = sizeof(PyccExtInstance)` and the shim's shared
+/// `pycc_ext_instance_dealloc`, and the registration enters it in the
+/// shim's carrier-type cache, so an instance of the class passed to a call
+/// on a CPython object crosses as an instance of this type.
+///
+/// A class in `ctors` is also **constructible**: its spec adds the slots
+/// `Py_tp_new` (`PyType_GenericNew` directly) and the generated per-class
+/// `pycc_ext_tp_init_<Class>` below, and it drops
+/// `Py_TPFLAGS_DISALLOW_INSTANTIATION`. Every other class keeps the flag
+/// that makes `mod.Class()` raise `TypeError: cannot create
 /// '<mod>.<Class>' instances`.
 ///
 /// Both shapes keep `Py_TPFLAGS_IMMUTABLETYPE` and neither adds
@@ -122,29 +125,28 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
             // refuses rather than one holding indeterminate storage.
             out.push_str(&format!(
                 "    {{Py_tp_new, PyType_GenericNew}},\n    \
-                 {{Py_tp_init, pycc_ext_tp_init_{class}}},\n    \
-                 {{Py_tp_dealloc, pycc_ext_instance_dealloc}},\n"
+                 {{Py_tp_init, pycc_ext_tp_init_{class}}},\n"
             ));
         }
-        out.push_str("    {0, NULL},\n};\n\n");
-        // A non-constructible class keeps `basicsize` `0` and the
-        // `DISALLOW_INSTANTIATION` flag Part 1 emitted; a constructible one
-        // needs room for the carrier and must not refuse its own
+        // Every published type is a carrier type (#1435): an instance of
+        // the class that crosses into CPython as a call argument is boxed
+        // in it by `pycc_ext_obj_pack_instance`, constructible or not, so
+        // each needs room for the carrier and the deallocator that unlinks
+        // it.
+        out.push_str("    {Py_tp_dealloc, pycc_ext_instance_dealloc},\n    {0, NULL},\n};\n\n");
+        // A non-constructible class keeps the `DISALLOW_INSTANTIATION` flag
+        // Part 1 emitted; a constructible one must not refuse its own
         // constructor.
-        let (basicsize, flags) = match ctor {
-            Some(_) => (
-                "sizeof(PyccExtInstance)",
-                "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_IMMUTABLETYPE",
-            ),
-            None => (
-                "0",
+        let flags = match ctor {
+            Some(_) => "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_IMMUTABLETYPE",
+            None => {
                 "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION | \
-                 Py_TPFLAGS_IMMUTABLETYPE",
-            ),
+                 Py_TPFLAGS_IMMUTABLETYPE"
+            }
         };
         out.push_str(&format!(
             "static PyType_Spec pycc_ext_type_spec_{class} = {{\n    \
-             PYCC_EXT_MODULE_NAME_STR \".{class}\",\n    {basicsize},\n    0,\n    \
+             PYCC_EXT_MODULE_NAME_STR \".{class}\",\n    sizeof(PyccExtInstance),\n    0,\n    \
              {flags},\n    pycc_ext_type_slots_{class},\n}};\n\n"
         ));
     }
@@ -155,13 +157,15 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
     }
     out.push_str("    PyObject *type;\n");
     for class in publications.iter().map(|published| &published.class) {
-        // `PyModule_AddObjectRef` takes its own reference, so the local one
-        // is released on both arms. Releasing it on the failing arm too is
-        // what keeps a failed registration from leaking the type.
+        // `PyModule_AddObjectRef` and the carrier-type cache (#1435) each
+        // take their own reference, so the local one is released on every
+        // arm. Releasing it on a failing arm too is what keeps a failed
+        // registration from leaking the type.
         out.push_str(&format!(
             "    type = PyType_FromSpec(&pycc_ext_type_spec_{class});\n    \
              if (type == NULL) {{\n        return -1;\n    }}\n    \
-             if (PyModule_AddObjectRef(module, \"{class}\", type) < 0) {{\n        \
+             if (pycc_ext_carrier_register(\"{class}\", type) < 0\n        \
+             || PyModule_AddObjectRef(module, \"{class}\", type) < 0) {{\n        \
              Py_DECREF(type);\n        return -1;\n    }}\n    Py_DECREF(type);\n"
         ));
     }
@@ -315,6 +319,8 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
         buffer_releases(&slots, "        "),
         buffer_releases(&slots, "    ")
     ));
-    out.push_str("    ((PyccExtInstance *)self)->inst = inst;\n    return 0;\n}\n\n");
+    // #1435: storing the instance also links it to `self`, so `self`
+    // handed out by one of its methods is this very object.
+    out.push_str("    pycc_ext_carrier_bind(self, inst);\n    return 0;\n}\n\n");
     out
 }

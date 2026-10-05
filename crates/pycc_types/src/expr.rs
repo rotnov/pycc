@@ -332,7 +332,7 @@ pub(crate) fn infer_expr_in(
                         .iter()
                         .map(|arg| infer_expr_in(env, local_names, arg))
                         .collect::<Result<Vec<_>, _>>()?;
-                    crate::foreign::check_object_call_args(&arg_tys, "call")?;
+                    crate::foreign::check_object_call_args(env, args, &arg_tys, "call")?;
                     return Ok(Ty::Object);
                 }
                 return Err(non_callable_binding(callee));
@@ -1687,13 +1687,14 @@ pub(crate) fn infer_expr_in(
             // `T0043` ("not a class instance") that this branch replaces.
             //
             // Only the packable operands can be marshalled: the four
-            // scalars and another `Ty::Object` (Part 2a of #1371), each with
-            // a `pycc_ext_obj_pack_*` helper in the shim. Anything else -- a
-            // container, an instance, `None` -- has no boundary
+            // scalars, another `Ty::Object` (Part 2a of #1371) and an
+            // instance of a regular user class (#1435), each with a
+            // `pycc_ext_obj_pack_*` helper in the shim. Anything else -- a
+            // container, an enum member, `None` -- has no boundary
             // representation yet and is refused here rather than reaching
             // codegen.
             if matches!(base_ty, Ty::Object) {
-                crate::foreign::check_object_call_args(&arg_tys, "method")?;
+                crate::foreign::check_object_call_args(env, args, &arg_tys, "method")?;
                 return Ok(Ty::Object);
             }
             // Part 1 of #1284: the instance form of the call above, placed
