@@ -291,6 +291,7 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              scalar operand, an identity test against an object or `None`, \
              a membership test of a scalar or object item in an object, \
              a list display of scalar or object elements bound to an object slot, \
+             `and`/`or` with an object or scalar operand, \
              `isinstance` against a foreign class or `int`/`float`/`bool`/`str`, `for` iteration, binding the \
              value to a name, returning it from and passing it to a pycc \
              function, printing it and f-string \
