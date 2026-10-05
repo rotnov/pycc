@@ -60,8 +60,9 @@ fn assert_one_error(tag: &str, body: &str, code: &str, needle: &str) {
 }
 
 /// The success program the hosted tests run: the from-import form is
-/// deliberate, since an attribute-form `operator.add` is claimed by the
-/// String-keyed `add` method (#1095).
+/// deliberate: it calls the imported function directly, keeping the program
+/// clear of the attribute-form `operator.add` method call that #1095's
+/// receiver dispatch handles.
 const SUCCESS: &str = "from operator import add, truth\n\
     print(int(add(2, 3)))\n\
     print(str(add(\"a\", \"b\")))\n\

@@ -30,9 +30,9 @@
 //! carries `__getitem__`, `__iter__` and a `sample` method that no arm here
 //! calls -- so that extending the probe to another producing shape needs a
 //! change to the loop, not to the fixture. `sample` avoids a
-//! container-protocol name deliberately: #1095 tracks container-named methods
-//! on a foreign object, and an arm added under such a name would measure that
-//! open issue instead of this one.
+//! container-protocol name deliberately: a container-named method on a
+//! foreign object goes through #1095's receiver dispatch, and an arm added
+//! under such a name would measure that seam instead of this one.
 //!
 //! The hosted tests contribute no line coverage (CI's coverage job runs
 //! `llvm-cov` without `--include-ignored`) and add no Rust lines outside

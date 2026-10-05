@@ -90,16 +90,18 @@
 //! call inherits the positional bound unchanged: the base is read through
 //! the same `HirExpr::Name` arm.
 //!
-//! The arm is not reached for four method names. `pycc_hir`'s container
-//! fast paths claim `append`, `pop`, `get` and `add` while lowering, so
-//! `gc.get(1, 2)` never becomes a plain `HirExpr::MethodCall` and is refused
-//! here through a different consumer. In a module that can see a user class
-//! defining one of those names, the call is a
-//! `HirExpr::ReceiverDispatchedCall` instead (issue #1188), but
-//! `pycc_hir::receiver_takes_method_path` sends a `Ty::Object` receiver down
-//! the container path all the same, so the refusal is unchanged.
-//! `docs/TYPE_SYSTEM.md`'s `object` row owns that statement, and #1095
-//! tracks routing them to foreign dispatch.
+//! Four method names reach this arm through a second node. `pycc_hir`'s
+//! container fast paths claim `append`, `pop`, `get` and `add` while
+//! lowering, from their spelling alone. Issue #1095: in a module that can
+//! hold a CPython object -- an `ext` module (D-258) or one that has bound a
+//! foreign import (D-244 rule 3) -- such a call is a
+//! `HirExpr::ReceiverDispatchedCall` keeping both readings (the node #1188
+//! introduced for user classes), and `pycc_hir::receiver_takes_method_path`
+//! sends a `Ty::Object` receiver to the method reading, which is this arm.
+//! So `gc.get(1, 2)`, `gc.get(1)` and `value_stack.append(x)` are the
+//! foreign method call whatever their arity, while a native `list`, `dict`
+//! or `set` receiver keeps the container reading and its diagnostics.
+//! `docs/TYPE_SYSTEM.md`'s `object` row owns that statement.
 //!
 //! **PR 3a of #1082 (Part 3 of #1026) added `len` and truth testing, and
 //! deleted a whole class of refusal.** `len(o)` type-checks to `Ty::Int`
@@ -485,6 +487,8 @@ pub(crate) mod subscript_call;
 mod binding_tests;
 #[cfg(test)]
 mod call_tests;
+#[cfg(test)]
+mod container_names_tests;
 #[cfg(test)]
 mod function_local_tests;
 #[cfg(test)]

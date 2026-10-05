@@ -1473,13 +1473,15 @@ subscript (`o[k] = v`) or a slice (`o[a:b] = v`) and \
 iterating a direct call's result (`for x in o(...):`) are still refused \
 too, but by their own pre-existing `C0001` diagnostics rather than by \
 this code; deleting a slice of an object (`del o[a:b]`) is admitted \
-since Part 2c of #1371, with the same bound rule as a slice load. A method named `append`, `pop`, \
-`get` or `add` is also still refused: container lowering claims those four \
-spellings before the foreign path sees them, so they do not reach it even \
-with admitted arguments. Since #1263 container lowering admits an \
-attribute receiver for `append`, `pop` and `get`, so one of those called on \
-an attribute of the object (`o.attr.append(v)`) is refused by this code; \
-`add` is still refused by `C0001`. In a module body every supported \
+since Part 2c of #1371, with the same bound rule as a slice load. Since \
+#1095 a method named `append`, `pop`, `get` or `add` is \
+an ordinary method call on the object too, whatever its arity \
+(`o.get(k)`, `o.attr.append(v)`): container lowering claims those four \
+spellings, but in a module that can hold an object it keeps the method \
+reading beside its own, and an object receiver takes that one. The one \
+exception is an object a module with no foreign import of its own imports \
+from a sibling project module (`from dep import g`): it keeps the container \
+reading and this code. In a module body every supported \
 operation is admitted only *below the import*. Since #1316 and Part 1 of #1333 each \
 one except the `for` loop is also admitted inside a function body, and a \
 function may bind the object to a local name, return it and pass it to \

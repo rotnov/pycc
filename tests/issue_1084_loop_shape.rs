@@ -78,9 +78,9 @@ fn stderr_of(output: &Output) -> String {
 /// was filed against.
 ///
 /// The methods are named `GetPoint`/`GetNumberOfPoints` rather than, say,
-/// `get`/`count` on purpose: #1095 tracks container-named methods on a
-/// foreign object, and a name that collides with a pycc builtin protocol
-/// would test that open issue instead of this one.
+/// `get`/`count` on purpose: a container-named method on a foreign object
+/// goes through #1095's receiver dispatch, and a name that collides with a
+/// pycc builtin protocol would test that seam instead of this one.
 const STUB: &str = "\
 class _Grid:
     def GetPoint(self, i):

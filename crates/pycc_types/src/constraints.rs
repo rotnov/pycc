@@ -1944,8 +1944,20 @@ pub(crate) fn collect_expr_constraints(
         // An admitted container reading is collected exactly as the
         // container node it would have been (so a `ListPop` still yields its
         // element type); a refused one is collected as the method call.
+        // Issue #1095: so is an admitted one whose bare-name receiver is
+        // bound to a concrete `object` term, so `o.pop()` answers `object`
+        // on the `MethodCall` arm's own reasoning.
         HirExpr::ReceiverDispatchedCall { call, container } => {
             let reading = match container {
+                pycc_hir::ContainerFallback::Admitted
+                    if matches!(
+                        call.method_receiver(),
+                        Some((HirExpr::Name(name), _))
+                            if matches!(env.bindings.get(name), Some(Ok(Ty::Object)))
+                    ) =>
+                {
+                    None
+                }
                 pycc_hir::ContainerFallback::Admitted => call.container_form(),
                 pycc_hir::ContainerFallback::Refused(_) => None,
             };
