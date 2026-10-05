@@ -14,6 +14,7 @@ mod expr;
 mod foreign;
 mod frozenset;
 mod hash;
+mod if_exp;
 mod inherited_copies;
 mod module;
 mod monomorphize;
@@ -615,6 +616,11 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
         | HirExpr::BoolOp { left, right, .. } => {
             collect_named_expr_names_in_expr(left, names);
             collect_named_expr_names_in_expr(right, names);
+        }
+        HirExpr::IfExp { test, body, orelse } => {
+            for part in [test, body, orelse] {
+                collect_named_expr_names_in_expr(part, names);
+            }
         }
         HirExpr::UnaryOp { operand, .. } => collect_named_expr_names_in_expr(operand, names),
         HirExpr::FString(parts) => {
@@ -1327,6 +1333,12 @@ fn collect_named_expr_bindings(
         | HirExpr::BoolOp { left, right, .. } => {
             collect_named_expr_bindings(env, local_names, left)?;
             collect_named_expr_bindings(env, local_names, right)
+        }
+        HirExpr::IfExp { test, body, orelse } => {
+            for part in [test, body, orelse] {
+                collect_named_expr_bindings(env, local_names, part)?;
+            }
+            Ok(())
         }
         HirExpr::UnaryOp { operand, .. } => collect_named_expr_bindings(env, local_names, operand),
         HirExpr::FString(parts) => {
@@ -3722,6 +3734,12 @@ fn reject_generic_calls_in_expr(
         | HirExpr::BoolOp { left, right, .. } => {
             reject_generic_calls_in_expr(module_env, own_name, left)?;
             reject_generic_calls_in_expr(module_env, own_name, right)
+        }
+        HirExpr::IfExp { test, body, orelse } => {
+            for part in [test, body, orelse] {
+                reject_generic_calls_in_expr(module_env, own_name, part)?;
+            }
+            Ok(())
         }
         HirExpr::FString(parts) => {
             for part in parts {

@@ -576,6 +576,11 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // that arm (`boolop.rs`), so the joined word is a fresh reference
         // whichever operand was selected.
         | MirExpr::BoolOp { .. }
+        // #1395: an `int`-typed conditional expression result is always
+        // owned. Each branch arm retains a duplicate branch value inside
+        // that arm (`if_exp.rs`), so the joined word is a fresh reference
+        // whichever branch ran.
+        | MirExpr::IfExp { .. }
         // #1212 (Part 4 of #1018): a chained comparison's `.ty()` is always
         // `Ty::Bool`, never `Ty::Int`, so like `Not` above it can never
         // reach this function; it joins the combined answer for the same
