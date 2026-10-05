@@ -69,6 +69,10 @@ fn a_nested_comprehension_renames_the_outer_variable_in_its_own_iterable() {
             "print(len([len([x for x in range(x)]) for x in range(4)]))\n",
             "0comp_42_x",
         ),
+        (
+            "print(len([len([y for y in x.keys()]) for x in o]))\n",
+            "0comp_42_x",
+        ),
     ] {
         let outer = inner_comprehension(source);
         assert_eq!(outer.var, outer_var, "{source}");
@@ -89,6 +93,15 @@ fn a_nested_comprehension_renames_the_outer_variable_in_its_own_iterable() {
             CompIter::Range { stop, .. } => {
                 assert_eq!(stop, &HirExpr::Name(outer_var.to_string()), "{source}")
             }
+            CompIter::Iterable(iterable) => assert_eq!(
+                **iterable,
+                HirExpr::MethodCall {
+                    base: Box::new(HirExpr::Name(outer_var.to_string())),
+                    method: "keys".to_string(),
+                    args: vec![],
+                },
+                "{source}"
+            ),
         }
         assert_eq!(
             inner.elt,

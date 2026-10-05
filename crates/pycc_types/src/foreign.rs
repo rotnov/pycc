@@ -288,7 +288,8 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              bounds, a rich comparison with an object or \
              scalar operand, an identity test against an object or `None`, \
              a membership test of a scalar or object item in an object, \
-             `isinstance` against a foreign class or `int`/`float`/`bool`/`str`, `for` iteration, binding the \
+             `isinstance` against a foreign class or `int`/`float`/`bool`/`str`, `for` iteration, a list \
+             or set comprehension over it unless it is a bare name, binding the \
              value to a name, returning it from and passing it to a pycc \
              function, printing it and f-string \
              interpolation, the `float`, \

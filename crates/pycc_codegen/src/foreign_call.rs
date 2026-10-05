@@ -18,7 +18,9 @@
 //! immediate branch to the innermost exception target inside any other
 //! function (#1316). `emit_iter_loop` alone keeps the
 //! `expect_module_exec_entry` assertion, because `pycc_types` still admits
-//! `for x in <object>:` only in a module body (Part 2 of #1333).
+//! `for x in <object>:` only in a module body (Part 2 of #1333); its two
+//! halves, which a comprehension over an object shares (Part 1 of #1255),
+//! take whichever edge the current function has.
 //! What is new here is *argument marshalling*: each already-evaluated pycc
 //! scalar becomes a `PyObject *` through one of the shim's
 //! `pycc_ext_obj_pack_*` helpers, the results go into a stack array, and
@@ -49,7 +51,7 @@
 
 use super::*;
 use crate::foreign_attr::{expect_module_exec_entry, expect_object_pointer};
-use crate::foreign_fail::{ForeignFailEdge, route_null};
+use crate::foreign_fail::{ForeignFailEdge, emit_failure, route_null};
 use crate::foreign_pack::{emit_pack, shim_fn};
 use inkwell::builder::Builder;
 
@@ -100,24 +102,28 @@ pub(super) struct ForeignIterLoop<'ctx> {
 ///
 /// # Shape
 ///
-/// The preheader calls [`EXT_OBJ_GET_ITER_SYMBOL`] once -- Python binds the
-/// iterator the `for` statement evaluated, so a body-level rebinding cannot
-/// retarget the loop, exactly the reasoning `MirStmt::ForList`'s own
-/// `list_ptr` read carries -- and routes a NULL through the module-exec
-/// failure edge. The header calls [`EXT_OBJ_ITER_NEXT_SYMBOL`] and
-/// **switches** on its three-valued result: `1` enters the body, `0` exits
-/// the loop, and anything else -- `-1` and, fail-closed, any value the shim
-/// could not produce -- takes a second failure edge of its own.
+/// The preheader calls [`EXT_OBJ_GET_ITER_SYMBOL`] once ([`emit_get_iter`])
+/// -- Python binds the iterator the `for` statement evaluated, so a
+/// body-level rebinding cannot retarget the loop, exactly the reasoning
+/// `MirStmt::ForList`'s own `list_ptr` read carries -- and routes a NULL
+/// through the failure edge. The header ([`emit_iter_header`]) calls
+/// [`EXT_OBJ_ITER_NEXT_SYMBOL`] and **switches** on its three-valued
+/// result: `1` enters the body, `0` exits the loop, and anything else --
+/// `-1` and, fail-closed, any value the shim could not produce -- takes a
+/// second failure edge of its own.
 ///
-/// Those two are the only new unconditional `EXT_MODULE_EXEC_FAILED`
-/// returns this PR adds; **exhaustion is deliberately not one of them**,
-/// which is the entire reason the shim helper is three-valued rather than
-/// NULL-signalling (see [`EXT_OBJ_ITER_NEXT_SYMBOL`]).
+/// Those two are the only failure edges the loop adds; **exhaustion is
+/// deliberately not one of them**, which is the entire reason the shim
+/// helper is three-valued rather than NULL-signalling (see
+/// [`EXT_OBJ_ITER_NEXT_SYMBOL`]).
 ///
-/// The out-parameter is a single `alloca` hoisted into the entry block via
-/// [`alloca_in_entry_block`], never the header: an `alloca` in a block that
-/// executes once per iteration grows the frame without bound, which is the
-/// defect that helper exists to prevent.
+/// `pycc_types` admits the statement only in a module body (Part 2 of
+/// #1333), so the edge is always the module-exec return there. A list or
+/// set comprehension over an object (Part 1 of #1255,
+/// `object_comprehension.rs`) shares the two halves in any function, which
+/// is why each takes its edge from [`ForeignFailEdge::for_current`]; inside
+/// `pycc_ext_module_exec` that edge emits the same `EXT_MODULE_EXEC_FAILED`
+/// return this loop always had.
 pub(super) fn emit_iter_loop<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -125,12 +131,24 @@ pub(super) fn emit_iter_loop<'ctx>(
     rt: &RtFns<'ctx>,
     iterable: Scalar<'ctx>,
 ) -> ForeignIterLoop<'ctx> {
-    let entry_fn = expect_module_exec_entry(builder);
+    expect_module_exec_entry(builder);
+    let iterator = emit_get_iter(context, builder, module, rt, iterable);
+    emit_iter_header(context, builder, module, rt, iterator)
+}
+
+/// The preheader half of [`emit_iter_loop`]: `iter(iterable)`, with its
+/// NULL routed to the current function's failure edge. Returns the
+/// iterator, a *new* reference that is deliberately never released (#1092).
+pub(super) fn emit_get_iter<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    iterable: Scalar<'ctx>,
+) -> PointerValue<'ctx> {
+    let edge = ForeignFailEdge::for_current(builder);
     let iterable_ptr = expect_object_pointer(iterable);
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
-
-    let out_slot = alloca_in_entry_block(context, builder, entry_fn, 1);
-
     let get_iter = shim_fn(
         module,
         EXT_OBJ_GET_ITER_SYMBOL,
@@ -147,15 +165,38 @@ pub(super) fn emit_iter_loop<'ctx>(
         builder,
         module,
         rt,
-        ForeignFailEdge::ModuleExec(entry_fn),
+        edge,
         iterator,
         "foreign_iter_get",
     );
+    iterator
+}
 
-    let header_bb = context.append_basic_block(entry_fn, "foreign_iter_header");
-    let body_bb = context.append_basic_block(entry_fn, "foreign_iter_body");
-    let after_bb = context.append_basic_block(entry_fn, "foreign_iter_after");
-    let next_fail_bb = context.append_basic_block(entry_fn, "foreign_iter_next_fail");
+/// The header half of [`emit_iter_loop`]: branches from the current block
+/// into a header that advances `iterator` and switches on the result, and
+/// leaves the builder at the start of the body with the item loaded.
+///
+/// The out-parameter is a single `alloca` hoisted into the entry block via
+/// [`alloca_in_entry_block`], never the header: an `alloca` in a block that
+/// executes once per iteration grows the frame without bound, which is the
+/// defect that helper exists to prevent.
+pub(super) fn emit_iter_header<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    iterator: PointerValue<'ctx>,
+) -> ForeignIterLoop<'ctx> {
+    let edge = ForeignFailEdge::for_current(builder);
+    let function = edge.function();
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+
+    let out_slot = alloca_in_entry_block(context, builder, function, 1);
+
+    let header_bb = context.append_basic_block(function, "foreign_iter_header");
+    let body_bb = context.append_basic_block(function, "foreign_iter_body");
+    let after_bb = context.append_basic_block(function, "foreign_iter_after");
+    let next_fail_bb = context.append_basic_block(function, "foreign_iter_next_fail");
 
     builder
         .build_unconditional_branch(header_bb)
@@ -189,13 +230,7 @@ pub(super) fn emit_iter_loop<'ctx>(
         .expect("build_switch should not fail for an i64 selector");
 
     builder.position_at_end(next_fail_bb);
-    builder
-        .build_return(Some(
-            &context
-                .i64_type()
-                .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
-        ))
-        .expect("build_return should not fail");
+    emit_failure(context, builder, module, rt, edge);
 
     builder.position_at_end(body_bb);
     let item = builder

@@ -39,6 +39,8 @@ mod object_binding;
 // Part 1 of #1333: passing a CPython object to a pycc function.
 mod object_argument;
 mod object_compare;
+// Part 1 of #1255: a list or set comprehension over a CPython object.
+mod object_comprehension;
 // Part 2b of #1371: membership in, and slices of, a CPython object.
 mod object_membership_slice;
 

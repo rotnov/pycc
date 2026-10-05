@@ -1436,8 +1436,9 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
 
 /// PEP 695 (#387): Traverses a `CompIter` for `GenericClassInstantiate`
 /// expressions. `CompIter::Range` carries three `HirExpr`s (`start`, `stop`,
-/// `step`) that can each contain a GCI (e.g. `range(C[int](0), 10)`).
-/// `CompIter::Name` holds only a bare `String`, so it cannot contain one.
+/// `step`) that can each contain a GCI (e.g. `range(C[int](0), 10)`), and
+/// `CompIter::Iterable` (Part 1 of #1255) carries one. `CompIter::Name`
+/// holds only a bare `String`, so it cannot contain one.
 pub(crate) fn collect_generic_class_instantiations_from_comp_iter(
     iter: &CompIter,
     out: &mut Vec<(String, Ty)>,
@@ -1447,6 +1448,9 @@ pub(crate) fn collect_generic_class_instantiations_from_comp_iter(
             for sub in [start, stop, step] {
                 collect_generic_class_instantiations_from_expr(sub, out);
             }
+        }
+        CompIter::Iterable(iterable) => {
+            collect_generic_class_instantiations_from_expr(iterable, out)
         }
         CompIter::Name(_) => {}
     }
@@ -2992,17 +2996,20 @@ fn rewrite_protocol_calls_in_comprehension(
     specializations: &mut Vec<HirItem>,
     seen: &mut HashSet<String>,
 ) {
-    if let CompIter::Range { start, stop, step } = iter {
-        for operand in [start, stop, step] {
-            rewrite_protocol_calls_in_expr(
-                operand,
-                protocol_funcs,
-                env,
-                local_names,
-                specializations,
-                seen,
-            );
-        }
+    let operands: Vec<&mut HirExpr> = match iter {
+        CompIter::Range { start, stop, step } => vec![start, stop, step],
+        CompIter::Iterable(iterable) => vec![iterable.as_mut()],
+        CompIter::Name(_) => vec![],
+    };
+    for operand in operands {
+        rewrite_protocol_calls_in_expr(
+            operand,
+            protocol_funcs,
+            env,
+            local_names,
+            specializations,
+            seen,
+        );
     }
     let mut scoped = env.clone();
     if let Ok(var_ty) = crate::comprehension::resolve_comp_iter(env, local_names, iter) {

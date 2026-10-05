@@ -824,14 +824,16 @@ pub struct HirComprehension {
 }
 
 impl HirComprehension {
-    /// Every sub-expression, in evaluation order: the range operands (in
-    /// the enclosing scope), then `cond`, then the element expressions (a
+    /// Every sub-expression, in evaluation order: the range operands or an
+    /// iterable expression (in the enclosing scope), then `cond`, then the element expressions (a
     /// dict's key before its value). For walkers that only need to visit
     /// each sub-expression once, whatever scope it is evaluated in.
     pub fn sub_exprs(&self) -> Vec<&HirExpr> {
         let mut out = Vec::new();
-        if let CompIter::Range { start, stop, step } = &self.iter {
-            out.extend([start, stop, step]);
+        match &self.iter {
+            CompIter::Range { start, stop, step } => out.extend([start, stop, step]),
+            CompIter::Iterable(iterable) => out.push(iterable),
+            CompIter::Name(_) => {}
         }
         out.extend(self.body_exprs());
         out
@@ -904,6 +906,14 @@ pub enum CompIter {
         step: HirExpr,
     },
     Name(String),
+    /// Any other iterable expression (Part 1 of #1255), such as
+    /// `o.keys()` or `d[k].values()`, lowered in the enclosing scope. Only
+    /// a CPython object (D-258) is iterable this way: `pycc_types` refuses
+    /// every other type, and the comprehension then produces a CPython
+    /// `list` or `set` object. A comprehension's statement form with this
+    /// source lowers to a plain `HirStmt::Assign` of a
+    /// [`HirExpr::Comprehension`], not to a `*CompAssign` statement.
+    Iterable(Box<HirExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

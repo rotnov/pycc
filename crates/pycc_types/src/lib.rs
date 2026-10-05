@@ -3633,7 +3633,8 @@ fn reject_generic_calls_in_block(
 }
 
 /// Pushes every expression position a comprehension's iterable can hold
-/// (`CompIter::Range`'s three bounds; `CompIter::Name` holds none).
+/// (`CompIter::Range`'s three bounds, `CompIter::Iterable`'s expression;
+/// `CompIter::Name` holds none).
 fn comp_iter_exprs<'a>(iter: &'a CompIter, exprs: &mut Vec<&'a HirExpr>) {
     match iter {
         CompIter::Range { start, stop, step } => {
@@ -3641,6 +3642,7 @@ fn comp_iter_exprs<'a>(iter: &'a CompIter, exprs: &mut Vec<&'a HirExpr>) {
             exprs.push(stop);
             exprs.push(step);
         }
+        CompIter::Iterable(iterable) => exprs.push(iterable),
         CompIter::Name(_) => {}
     }
 }

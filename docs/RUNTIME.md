@@ -1508,6 +1508,31 @@ inside a function and pins `sys.getrefcount` of the list and of a large `int`
 bound unchanged afterwards (`tests/issue_1371_object_slice_del.rs`). It
 shares the packers' `OverflowError` divergence.
 
+**A comprehension over an object produces a collection, its iterator and its
+items.** Part 1 of [#1255](https://github.com/rotnov/pycc/issues/1255) lowers
+`[e for x in o if c]` and `{e for x in o if c}` over a CPython object `o` to
+the iteration halves `for` uses (`PyObject_GetIter`, then `PyIter_Next` per
+item) around two helpers. `pycc_ext_obj_new_collection(kind)` returns a new,
+empty `list` (`kind` 0) or `set` (`kind` 1), or `NULL` with `SystemError` for
+any other kind. `pycc_ext_obj_collect(collection, kind, item)` appends or adds
+the packed element with `PyList_Append` or `PySet_Add`, answers a C `int`
+(`-1` on failure), borrows the collection and **consumes the packed element on
+every path**, including the one where its packer already failed with `NULL`
+-- the key slot's rule once more. Every `NULL` or `-1` routes to the
+operation's failure edge, so an iterable that is not one, a raising
+`__iter__` or `__next__`, a raising filter or element, and `set.add` of an
+unhashable item each surface CPython's own exception. The iterator, each loop
+item and the result are new references leaked under the
+[#1092](https://github.com/rotnov/pycc/issues/1092) leak-only rule, and the
+loop variable reads the item borrowed. `tests/issue_1255_object_comprehension.rs`
+pins it against a mortal item at two trip counts `n`: a list comprehension of
+`n` items raises the item's count by `2n` (the leaked loop item plus the
+leaked list's own reference), a set comprehension of `n` identical items by
+`n + 1`, and the iterated list's count by `0`, since its only new referrer is
+the leaked list iterator, which CPython makes drop its sequence once
+exhausted. When #1092 lands the leaked references are released and the
+deltas become CPython's.
+
 `len`, a truth test, Part 4's four conversions and Part 4's tuple unpack are
 the operations that add nothing to that leaked set. `pycc_ext_obj_len` answers a `Py_ssize_t` and
 `pycc_ext_obj_truthy` answers a C `int`; neither creates a reference and neither
