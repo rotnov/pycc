@@ -150,12 +150,15 @@ fn a_native_or_unpackable_slice_delete_is_refused() {
 /// surfaces that rejection: the solver's `DeleteSlice` arm propagates it.
 #[test]
 fn a_solver_error_in_a_slice_delete_operand_is_reported() {
-    let source = "def _h():\n    del numpy.pi[1 + \"a\":]\n\n\n_h()\n";
+    // `_identity` is inferred `int -> int` from its first call; the nested
+    // `str` call conflicts with it, which only the solver reports.
+    let source = "def _identity(value):\n    return value\n\n\n\
+                  def _sink(value: int) -> int:\n    return value\n\n\n\
+                  _identity(1)\n\n\n\
+                  def _probe():\n    del numpy.pi[_sink(_identity(\"wrong\")):]\n";
     let diagnostics = check_foreign(source).expect_err(source);
-    assert!(
-        diagnostics.iter().any(|d| d.code.starts_with('T')),
-        "{diagnostics:?}"
-    );
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, "T0021", "{diagnostics:?}");
 }
 
 /// A call of a protocol-parameter function in a slice `del` operand is
