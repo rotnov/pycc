@@ -774,7 +774,11 @@ twin. Four rules follow from that model:
   `==` on an exported instance compares identity rather than calling the
   compiled `__eq__`, a divergence from CPython tracked by
   [#1427](https://github.com/rotnov/pycc/issues/1427); an in-module
-  explicit `x.__eq__(y)` runs the compiled body.
+  explicit `x.__eq__(y)` runs the compiled body. Its argument must already
+  be the object: a native `y` (`3`, a pycc instance) is the `T0021`
+  argument mismatch below until #1387's boxing exists -- the same program
+  was `T0021` ("cannot infer type of parameter") before, so nothing that
+  compiled stops compiling.
 - **A mismatch is `T0021`, not `T0025`.** The def-site syntax resembles an
   annotated assignment, but by this model the default *is* a call-site
   argument, so it is checked with the call-argument rule and reported with

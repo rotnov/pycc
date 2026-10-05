@@ -120,6 +120,66 @@ fn a_native_program_returns_none_into_a_foreign_class_return() {
     );
 }
 
+/// The `pycc check` test above pins the type rule; this one builds and runs
+/// the same program as an embedded `native` executable, so the codegen path
+/// and the embedded runtime's `pycc_ext_obj_none` are exercised too.
+#[cfg(not(windows))]
+#[test]
+#[ignore = "needs a relocatable CPython 3.14.7 as python3.14 or PYCC_PYTHON; run with --include-ignored"]
+fn a_native_executable_returns_none_into_a_foreign_class_return() {
+    let dir = ScratchDir::new("1387_native_foreign_run").expect("scratch");
+    let source = write(
+        &dir,
+        "m.py",
+        "from json import JSONDecoder\n\n\ndef f(x: int) -> JSONDecoder:\n\
+         \x20   if x:\n        return\n    return None\n\n\n\
+         print(f(1) is None, f(0) is None)\n",
+    );
+    let build = pycc()
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(dir.join("app"))
+        .output()
+        .expect("pycc runs");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    let run = Command::new(dir.join("app"))
+        .env("PYTHONIOENCODING", "utf-8")
+        .output()
+        .expect("the embedded executable runs");
+    assert_eq!(run.status.code(), Some(0), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "True True\n");
+}
+
+/// In an `--ext` module the operand is the object, so an in-module explicit
+/// `__eq__` call with a native argument is a `T0021` argument mismatch until
+/// the boxing #1387 still owns; before Part 1 the same program was refused
+/// as an uninferable parameter, so no program that compiled stops compiling.
+#[test]
+fn an_explicit_eq_call_with_a_native_argument_is_refused_under_ext() {
+    let class = "class C:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\
+                 \x20   def __eq__(self, other) -> bool:\n        return other is None\n\n\n";
+    assert_refused(
+        "1387_eq_int_arg",
+        &format!("{class}def run() -> bool:\n    return C(1).__eq__(3)\n"),
+        true,
+        "error[T0021]: argument 1 of `__eq__` expects `object`, got `int`",
+    );
+    assert_refused(
+        "1387_eq_instance_arg",
+        &format!("{class}def run() -> bool:\n    return C(1).__eq__(C(2))\n"),
+        true,
+        "error[T0021]: argument 1 of `__eq__` expects `object`, got `C`",
+    );
+    // The `native` build of the same call still cannot infer the operand.
+    assert_refused(
+        "1387_eq_int_arg_native",
+        &format!("{class}def run() -> bool:\n    return C(1).__eq__(3)\n"),
+        false,
+        "error[T0021]: cannot infer type of parameter `other`",
+    );
+}
+
 #[test]
 fn a_native_build_keeps_t0021_for_an_unannotated_equality_operand() {
     // `object` is not a type a `native` program can spell, so the operand
