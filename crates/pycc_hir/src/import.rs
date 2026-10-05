@@ -292,6 +292,19 @@ impl<'a> ResolvedImports<'a> {
         self.by_span.get(&span)
     }
 
+    /// Whether the `from ... import` statement spanning `range` resolved to
+    /// a project module (Part 2a of #1371, `SignatureTable`'s class-like
+    /// names).
+    pub(crate) fn resolves_to_project_module<R>(&self, range: R) -> bool
+    where
+        std::ops::Range<u32>: From<R>,
+    {
+        matches!(
+            self.get(statement_span(range)),
+            Some(ResolvedImport::Module(_))
+        )
+    }
+
     /// The module a `Project` binding's `module_path` names. Every such
     /// binding was created from a module already registered here (the
     /// driver loads and registers a dependency before the module importing

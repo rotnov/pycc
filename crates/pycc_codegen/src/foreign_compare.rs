@@ -11,7 +11,7 @@
 //! **A rich comparison** is `PyObject_RichCompare` behind
 //! [`EXT_OBJ_RICHCOMPARE_SYMBOL`]. A scalar operand is boxed by the same
 //! `pycc_ext_obj_pack_*` helper a method-call argument uses
-//! (`foreign_call::packer_for`), and the shim helper consumes every packed
+//! (`foreign_pack::packer_for`), and the shim helper consumes every packed
 //! operand on every path -- the packer contract `foreign_call.rs` records --
 //! so a failed packer needs no edge of its own and the operation has
 //! exactly one: `foreign_fail.rs`'s, on a `NULL` result. The result is a
@@ -24,8 +24,8 @@
 
 use super::*;
 use crate::foreign_attr::expect_object_pointer;
-use crate::foreign_call::{packer_for, shim_fn};
 use crate::foreign_fail::{ForeignFailEdge, route_negative, route_null};
+use crate::foreign_pack::{emit_pack, shim_fn};
 use inkwell::builder::Builder;
 use inkwell::values::PointerValue;
 use pycc_mir::CmpOpKind;
@@ -72,22 +72,10 @@ fn operand_pointer<'ctx>(
     match operand {
         None => (none_pointer(context, builder, module), false),
         Some(Scalar::Object(pointer)) => (pointer, false),
-        Some(scalar) => {
-            let ptr = context.ptr_type(inkwell::AddressSpace::default());
-            let (symbol, value) = packer_for(scalar);
-            let packer = shim_fn(
-                module,
-                symbol,
-                ptr.fn_type(&[value.get_type().into()], false),
-            );
-            let packed = builder
-                .build_call(packer, &[value.into()], "foreign_compare_operand")
-                .unwrap_or_else(|_| panic!("build_call should not fail for {symbol}"))
-                .try_as_basic_value()
-                .expect_basic("a pycc_ext_obj_pack_* helper returns PyObject *")
-                .into_pointer_value();
-            (packed, true)
-        }
+        Some(scalar) => (
+            emit_pack(context, builder, module, scalar, "foreign_compare_operand"),
+            true,
+        ),
     }
 }
 

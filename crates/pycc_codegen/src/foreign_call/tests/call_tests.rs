@@ -126,3 +126,131 @@ fn a_non_object_callee_is_an_internal_error() {
         }))],
     );
 }
+
+/// `product` as a loaded module global.
+fn product() -> MirExpr {
+    MirExpr::Name {
+        name: "product".to_string(),
+        ty: Ty::Object,
+    }
+}
+
+/// `from itertools import product` followed by one discarded
+/// `callee(args)` call with an arbitrary callee (Part 2a of #1371).
+fn computed_call(callee: MirExpr, args: Vec<MirExpr>) -> Vec<MirItem> {
+    let mut items = direct_call(Vec::new());
+    items[1] = MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ObjCall {
+        callee: Box::new(callee),
+        args,
+    }));
+    items
+}
+
+/// Part 2a of #1371: a subscript result is a new reference the shim
+/// produced, so the call goes to the *consuming* entry point, which
+/// releases it -- the borrowing one would leak it on every call.
+#[test]
+fn a_subscript_callee_reaches_the_consuming_shim() {
+    let callee = MirExpr::ObjSubscript {
+        base: Box::new(product()),
+        index: Box::new(MirExpr::StringLiteral("k".to_string())),
+    };
+    let ir = entry_ir(
+        "foreign_subscript_callee",
+        computed_call(callee, vec![MirExpr::IntLiteral(1)]),
+    );
+    assert!(ir.contains(EXT_OBJ_GETITEM_SYMBOL), "{ir}");
+    assert!(ir.contains(&format!("@{EXT_OBJ_CALL_SYMBOL}(")), "{ir}");
+    assert!(
+        !ir.contains(&format!("@{EXT_OBJ_CALL_BORROWED_SYMBOL}(")),
+        "{ir}"
+    );
+    let getitem_at = ir.find(EXT_OBJ_GETITEM_SYMBOL).expect("asserted above");
+    let pack_at = ir
+        .find(EXT_OBJ_PACK_INT_SYMBOL)
+        .expect("the argument is packed");
+    assert!(getitem_at < pack_at, "the callee is evaluated first: {ir}");
+}
+
+/// A second `object` argument is packed with `pycc_ext_obj_pack_object`,
+/// which takes the new reference the call array consumes.
+#[test]
+fn an_object_argument_is_packed_with_the_object_packer() {
+    let ir = entry_ir("foreign_object_argument", direct_call(vec![product()]));
+    assert!(ir.contains(EXT_OBJ_PACK_OBJECT_SYMBOL), "{ir}");
+}
+
+/// The routing allowlist: exactly the shim's own new-reference producers
+/// are consumed; a name read, a scalar and every other node are borrowed.
+///
+/// The pycc-side calls matter most among the borrowed ones: a pycc
+/// `__class_getitem__` (`Reg["x"]`), and any pycc function or method
+/// returning `object`, lowers to `MirExpr::Call` and hands back a borrowed
+/// pointer (`docs/RUNTIME.md`), so consuming it would underflow the
+/// refcount. A pycc instance's `object` slot read (`MirExpr::AttrGet`) is
+/// borrowed the same way.
+#[test]
+fn only_shim_producers_are_consumed_callees() {
+    let produced = [
+        MirExpr::ObjSubscript {
+            base: Box::new(product()),
+            index: Box::new(MirExpr::IntLiteral(0)),
+        },
+        MirExpr::ObjAttrGet {
+            base: Box::new(product()),
+            attr: "a".to_string(),
+            ty: Ty::Object,
+        },
+        MirExpr::ObjMethodCall {
+            base: Box::new(product()),
+            method: "m".to_string(),
+            args: Vec::new(),
+        },
+        MirExpr::ObjCall {
+            callee: Box::new(product()),
+            args: Vec::new(),
+        },
+    ];
+    for callee in &produced {
+        assert!(callee_is_produced(callee), "{callee:?}");
+    }
+    let borrowed = [
+        product(),
+        MirExpr::IntLiteral(1),
+        MirExpr::Call {
+            callee: "Reg.__class_getitem__.static".to_string(),
+            args: vec![MirExpr::StringLiteral("x".to_string())],
+            ty: Ty::Object,
+        },
+        MirExpr::AttrGet {
+            base: Box::new(MirExpr::Name {
+                name: "self".to_string(),
+                ty: Ty::Instance(Box::new("C".to_string())),
+            }),
+            slot: 0,
+            ty: Ty::Object,
+        },
+    ];
+    for callee in borrowed {
+        assert!(!callee_is_produced(&callee), "{callee:?}");
+    }
+}
+
+/// A call of a call result (`f()(x)`) consumes the inner call's result,
+/// while the inner call still borrows the global.
+#[test]
+fn a_call_result_callee_reaches_the_consuming_shim() {
+    let inner = MirExpr::ObjCall {
+        callee: Box::new(product()),
+        args: Vec::new(),
+    };
+    let ir = entry_ir(
+        "foreign_call_result_callee",
+        computed_call(inner, Vec::new()),
+    );
+    assert!(
+        ir.contains(&format!("@{EXT_OBJ_CALL_BORROWED_SYMBOL}(ptr %load")),
+        "{ir}"
+    );
+    assert!(ir.contains(&format!("@{EXT_OBJ_CALL_SYMBOL}(")), "{ir}");
+}

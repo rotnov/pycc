@@ -50,6 +50,10 @@ mod abstract_without_abc_base;
 // the class-body declaration position to the advising set.
 mod bare_container_advice;
 
+// Part 2a of #1371: which `X[Y](args)` calls stay a generic class
+// instantiation and which lower to a call of a subscript result.
+mod subscript_call;
+
 fn assert_capability_error(source: &str, expected_message: &str, expected_span: Span) {
     let module = pycc_parser_test_helper::parse(source);
     let diagnostic = lower_checked(&module).unwrap_err();
@@ -4697,15 +4701,8 @@ fn generic_class_instantiation_rejects_an_unrecognized_type_arg_name() {
     );
 }
 
-#[test]
-fn generic_class_instantiation_rejects_a_non_name_subscript_base() {
-    // `(1 + 2)[int](args)` — the subscript base is a BinOp, not a bare
-    // name, so the "calling a subscript expression" rejection fires.
-    assert_capability_error_message(
-        "(1 + 2)[int](1)\n",
-        "calling a subscript expression is not supported yet",
-    );
-}
+// `(1 + 2)[int](args)` -- a non-name subscript base -- lowers to a call of a
+// subscript result since Part 2a of #1371; `tests/subscript_call.rs` pins it.
 
 #[test]
 fn generic_class_instantiation_propagates_an_arg_lowering_error() {

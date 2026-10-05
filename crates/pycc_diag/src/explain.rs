@@ -1438,7 +1438,10 @@ other evaluates CPython's own `PyObject_RichCompare` and yields an \
 `object` result usable as a condition or printed; an identity test \
 (`is`, `is not`) compares the object with another object or `None`; and \
 `isinstance(o, C)` is admitted when `C` is `int`, `float`, `bool`, `str` \
-or itself a CPython object. The loop is \
+or itself a CPython object. Part 2a of #1371 lets a second CPython \
+object be a method or direct call's argument or a subscript key, and \
+admits a call of a subscript result (`callbacks[k](tok)`) under the same \
+argument rule; the result is another CPython object. The loop is \
 admitted when the iterable is written as an attribute load \
 (`for x in o.attr:`), a method call (`for x in o.method(...):`) or a bare \
 name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
@@ -1449,8 +1452,11 @@ classes, a comparison chain with an object link (`a < o < b`), an \
 equality test against a bare `None`, a rich comparison with an operand \
 of any other type, a `match` subject, iterating over a subscript load \
 (`for x in o[k]:`) or inside a comprehension, \
-passing an argument of any other type to one of its methods or to the \
-object itself, and indexing with a key of any other type. Storing through a \
+passing an argument of any other type to one of its methods, to the \
+object itself or to a subscript result, and indexing with a key of any \
+other type. A subscript call whose base is a bare name and whose key is \
+`int`, `float`, `bool` or `str` (`handlers[int](x)`) is still read as a \
+generic class instantiation and refused by that path's own diagnostic. Storing through a \
 subscript (`o[k] = v`), slicing (`o[a:b]`) and iterating a direct \
 call's result (`for x in o(...):`) are still refused too, but by their own \
 pre-existing diagnostics rather than by this code -- `C0001`, `T0033` and \

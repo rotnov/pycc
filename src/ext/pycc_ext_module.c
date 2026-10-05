@@ -1733,6 +1733,31 @@ PyObject *pycc_ext_obj_pack_str(void *value)
 }
 
 /*
+ * Part 2a of #1371: the packer for an argument (or subscript key) whose
+ * static type is itself the opaque `object`, as in `copy.deepcopy(o)` or
+ * `table[k]` with an object `k`. Borrowing like its scalar neighbours: the
+ * operand stays owned by whatever produced it (a pycc local, or a result
+ * the leak-only rule never releases), and the consuming helper that
+ * receives the packed value -- `pycc_ext_obj_call` or `pycc_ext_obj_getitem`
+ * -- releases exactly the one new reference taken here, so the operand's
+ * net refcount is unchanged. `Py_INCREF` rather than `Py_NewRef` keeps the
+ * shape of the rest of this file. A NULL operand cannot be produced by
+ * checked code (every object producer routes its own NULL to a failure
+ * edge first); it is answered with a `SystemError`, which the consuming
+ * helpers already tolerate, rather than a crash.
+ */
+PyObject *pycc_ext_obj_pack_object(PyObject *value)
+{
+    if (value == NULL) {
+        PyErr_SetString(PyExc_SystemError,
+                        "an object argument to a CPython object's call was NULL");
+        return NULL;
+    }
+    Py_INCREF(value);
+    return value;
+}
+
+/*
  * Part 2 of #1026, PR 2b of #1081: the method-call helper compiled code
  * calls for `gc.disable()` on a value whose static type is the opaque
  * `object`.

@@ -48,10 +48,10 @@ fn check(dir: &Path, body: &str) -> Output {
 /// admitted, and zero arguments are too.
 ///
 /// The zero-argument row is the acceptance shape (`gc.disable()`); the
-/// other four are the marshalling surface. Asserted through `pycc check`
+/// other five are the marshalling surface. Asserted through `pycc check`
 /// rather than a build so the row set stays readable and fast -- the
 /// emitted code for each packer is asserted at the IR level in
-/// `crates/pycc_codegen/src/foreign_call.rs`.
+/// `crates/pycc_codegen/src/foreign_call/tests.rs`.
 #[test]
 fn every_marshallable_argument_type_is_admitted() {
     let dir = ScratchDir::new("foreign_call_arg_types").expect("scratch");
@@ -61,6 +61,9 @@ fn every_marshallable_argument_type_is_admitted() {
         "import json\n\njson.dumps(2.0)\n",
         "import gc\n\ngc.set_debug(True)\n",
         "import json\n\njson.dumps(\"x\")\n",
+        // A second CPython object, packed by `pycc_ext_obj_pack_object`
+        // since Part 2a of #1371.
+        "import json\nimport gc\n\ngc.set_debug(json.dumps)\n",
         // Several arguments at once, and a name rather than a literal.
         "import gc\n\nx: int = 1\ngc.set_threshold(700, x)\n",
     ] {
@@ -77,19 +80,16 @@ fn every_marshallable_argument_type_is_admitted() {
 /// An argument whose type has no boundary representation is refused with
 /// `I0404`, naming the type.
 ///
-/// The `Ty::Object` row is the one that matters most: `gc.foo(math.pi)`
-/// would otherwise reach codegen with a `Scalar::Object` argument the
-/// packer table has no entry for, and the refusal is what makes
-/// `foreign_call::packer_for`'s panic a front-end-defect assertion rather
-/// than a reachable failure.
+/// A second CPython object is no longer among them: since Part 2a of #1371
+/// it is packed by `pycc_ext_obj_pack_object` (the `json.dumps` row of
+/// `every_marshallable_argument_type_is_admitted` above, and
+/// `tests/issue_1371_object_calls.rs`). The refusal of every other type is
+/// what makes `foreign_pack::packer_for`'s panic a front-end-defect
+/// assertion rather than a reachable failure.
 #[test]
 fn an_unmarshallable_argument_is_refused_with_i0404() {
     let dir = ScratchDir::new("foreign_call_bad_arg").expect("scratch");
     for (body, ty) in [
-        (
-            "import json\nimport gc\n\ngc.set_debug(json.dumps)\n",
-            "object",
-        ),
         ("import gc\n\ngc.set_debug([1])\n", "list[int]"),
         ("import gc\n\ngc.set_debug(None)\n", "None"),
     ] {
