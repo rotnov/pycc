@@ -10,6 +10,7 @@ mod exception;
 mod expr;
 mod func;
 mod hir_module;
+mod if_exp;
 mod import;
 mod int_boundary;
 mod module;
@@ -50,6 +51,7 @@ pub use hir_module::{
     foreign_bound_object, foreign_import_statement, killed_names, opens_foreign_statement,
     top_level_bound_names,
 };
+pub use if_exp::if_exp_result_ty;
 pub use import::{
     ProjectImportRequest, ResolvedImport, ResolvedImports, ResolvedModule, project_import_requests,
 };
@@ -445,6 +447,22 @@ pub enum HirExpr {
         left: Box<HirExpr>,
         right: Box<HirExpr>,
         truth_only: bool,
+    },
+    /// `body if test else orelse` (#1395).
+    ///
+    /// `test` is evaluated exactly once, first, and only for its truth:
+    /// lowering marks it a truth position (`crate::boolop::mark_truth_context`),
+    /// so an `and`/`or` directly inside it is typed `bool`. Then exactly one
+    /// of `body` (truthy) or `orelse` (falsy) is evaluated, and the node
+    /// yields that branch's value, typed by [`if_exp_result_ty`].
+    ///
+    /// A walrus is admitted in `test`, which always runs, and refused in
+    /// either branch, which may not: every binding walker binds a walrus
+    /// target unconditionally (see `HirExpr::BoolOp`'s lowering).
+    IfExp {
+        test: Box<HirExpr>,
+        body: Box<HirExpr>,
+        orelse: Box<HirExpr>,
     },
     FString(Vec<FStringPart>),
     /// `[e1, e2, ...]`. Element homogeneity is `pycc_types`' job, not this

@@ -1054,6 +1054,65 @@ temporary, and a discarded owned `Optional[int]` left operand. An
 End-to-end tests are in `tests/issue_1211_bool_ops.rs`, and the byte-exact
 oracle fixture is `tests/fixtures/bool_ops.py`.
 
+### Conditional expressions
+
+This is the canonical statement of the rule; other documents cross-reference
+it ([#1395](https://github.com/rotnov/pycc/issues/1395)). `body if test else
+orelse` evaluates `test` exactly once, for its truth, then exactly one
+branch, and yields that branch's value, as in CPython. A nested
+`a if p else b if q else c` is the right-nested `HirExpr::IfExp` CPython
+parses.
+
+**Branch join.** The result type is the join of the two branch types,
+computed by one function, `pycc_hir::if_exp_result_ty`, that the checker and
+MIR lowering share.
+
+| Branches | Result |
+|---|---|
+| equal: `bool`, `int`, `float`, `str`, `Optional[...]`, a `list`/`dict`/`set`/`frozenset`/`tuple`, the same class instance, two CPython objects, or a generic function's own type parameter `T` (substituted per call site) | that type |
+| `T` and `None`, or `T` and `Optional[T]`, or `Optional[T]` and `None`, either order, for `T` in `int`/`float`/`bool` | `Optional[T]` |
+| anything else | `T0021` "conditional expression branches have no common type: int and bool (pycc has no union types)" |
+
+Unlike the `and`/`or` join, `bool` with `int` is refused rather than widened:
+`True if c else 2` selects the `bool` `True`, which prints `True`, while an
+`int` result would print `1`. `int` with `float` is refused for the same
+reason. A `str` or container with `None` is refused, because `Optional` holds
+only `int`, `float` or `bool` (`T0049`). An empty `[]`/`{}` literal in a
+branch has no element type to join; it is refused with the same `T0003` an
+unannotated empty literal gets ("an empty list literal has no inferable
+element type"), even when the assignment target is annotated.
+
+**Condition.** The condition must be truth-testable: what `not` admits
+(`pycc_types::unop::is_truth_testable`), a CPython object (its own
+`__bool__`/`__len__` runs, as for `if obj:`), or a `set`/`frozenset`. A
+`list`, `dict`, `tuple`, `memoryview` or `Protocol`-typed condition is
+`T0021` ("conditional expression condition of type `list[int]` has no truth
+value pycc can test"). A class instance whose class or any base class defines
+`__bool__` or `__len__` is `T0021` too, naming the dunder, as for an
+`and`/`or` operand. The condition is a truth context in the `and`/`or` sense:
+an `and`/`or` directly in it yields `bool`.
+
+**Walrus.** A walrus in the condition always executes and follows the
+ordinary positional rule for a walrus (for example, it is admitted inside an
+`if`/`while` test). A walrus anywhere in either branch would bind only
+conditionally, so it is refused at HIR lowering with `C0001` "a walrus
+assignment (`:=`) in a conditional expression branch is not supported".
+
+**No narrowing.** The condition does not narrow the branches:
+`x if x is not None else 0` with `x: int | None` is `Optional[int]` and
+`int`, which joins as `Optional[int]`, not `int`. This is the D-205 scope cut
+described under "Narrowing & flow typing" above.
+
+**Ownership.** An `int` or `str` result is always owned: each branch takes
+its own reference (a retain, an incref) in its own arm, so a selected name or
+attribute read stays valid after its source is rebound. An `int` temporary
+produced only for the condition's truth is released at once. A CPython-object
+result follows #1092's leak-only rule unchanged: the selected value aliases
+its source with no refcount traffic, exactly as `y = x` does.
+
+End-to-end tests are in `tests/issue_1395_if_exp.rs`, and the byte-exact
+oracle fixture is `tests/fixtures/if_exp.py`.
+
 ### Chained comparisons
 
 This is the canonical statement of the rule; other documents cross-reference
