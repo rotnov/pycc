@@ -981,6 +981,51 @@ static PyObject *pycc_ext_pack_str(void *result)
 }
 
 /*
+ * Unpacks one argument at a parameter whose type is the opaque CPython
+ * object (D-258 rule 5, #1397): an `Any` or `object` annotation, a container
+ * of objects, or a foreign-imported class (interim, pending #1386). Returns
+ * 0; there is no type to refuse, because the declared type admits every
+ * object -- which is also why `fn_name` and `index` are unused, kept only so
+ * every scalar unpack helper shares one call shape.
+ *
+ * The compiled body receives a *strong* reference it never releases:
+ * RUNTIME.md's #1092 rule has a function body add no reference-count
+ * traffic, and a body may store the parameter somewhere that outlives this
+ * call (`self.x = x`), so a borrowed pointer would dangle once the host
+ * dropped its own reference. The reference is deliberately leaked, exactly
+ * as every other object the body produces is, until the object lifetime
+ * model lands; nothing is owed on a later argument's bail path either.
+ */
+static int pycc_ext_unpack_object(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                                  void **out)
+{
+    (void)fn_name;
+    (void)index;
+    *out = Py_NewRef(obj);
+    return 0;
+}
+
+/*
+ * Packs an object-typed result (D-258 rule 5, #1397): the very `PyObject *`
+ * the compiled body returned, so identity survives the round trip
+ * (`f(x) is x`). Under #1092 a compiled return hands the pointer through
+ * unchanged with no reference of its own, so the boundary takes the new
+ * reference the CPython calling convention requires of a return value.
+ *
+ * `result` is never NULL on this path -- the generated wrapper checks for a
+ * pending pycc exception first -- but the guard, as in `pycc_ext_pack_str`,
+ * turns a would-be crash into a `SystemError`.
+ */
+static PyObject *pycc_ext_pack_object(void *result)
+{
+    if (result == NULL) {
+        PyErr_SetString(PyExc_SystemError, "object result was NULL");
+        return NULL;
+    }
+    return Py_NewRef((PyObject *)result);
+}
+
+/*
  * The `{ ptr, len }` pair a `memoryview` parameter crosses into compiled
  * code as (Part 1 of #1027, D-244). Declared here rather than derived from
  * `Py_buffer` on purpose, and it is the *whole* of what the compiled body

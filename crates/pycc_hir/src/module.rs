@@ -258,6 +258,16 @@ pub fn lower_module(
     state
         .signatures
         .inherit_container_method_names(resolved.container_method_names().iter().copied());
+    // D-258 (#1397): an `ext` module records the marker entry that tells
+    // `annotation_to_ty` to lower `Any`, `object` and an object container to
+    // `Ty::Object` (see `func::EXT_MODULE_MARKER`). Recorded as imported, so
+    // `strip_imported` keeps it out of `HirModule::type_aliases`.
+    if resolved.ext_module() {
+        state.imported_alias_indices.push(state.aliases.len());
+        state
+            .aliases
+            .push((crate::func::EXT_MODULE_MARKER.to_string(), Ty::Object));
+    }
     let container_method_names = state.signatures.container_method_names().clone();
     // Part 1 of #541 (extending D-173): give the builtin exception
     // hierarchy a real presence in the class table, seeded *before* any

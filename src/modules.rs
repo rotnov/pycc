@@ -148,7 +148,7 @@ pub(crate) fn load(
     entry: &Path,
     entry_module_name: Option<&str>,
 ) -> Result<LoadedProgram, FrontendFailure> {
-    load_with(entry, entry_module_name, RelativeImports::Project)
+    load_with(entry, entry_module_name, RelativeImports::Project, false)
 }
 
 /// Loads the whole program reachable from `entry`.
@@ -163,10 +163,18 @@ pub(crate) fn load(
 /// `relative_imports` is how the entry module's relative imports resolve
 /// (#1366): [`RelativeImports::Project`] everywhere but a `pycc build --ext
 /// --foreign-relative-imports`.
+///
+/// `ext_module` is whether the program is compiled into an `ext` artifact
+/// (D-258 rule 1, #1397). It reaches every module the program loads, the
+/// entry and each dependency alike, through
+/// [`ResolvedImports::set_ext_module`]: `Any`, `object` and the
+/// object-carrying container annotations lower to the CPython object in
+/// every module of an `ext` artifact and keep their refusals everywhere else.
 pub(crate) fn load_with(
     entry: &Path,
     entry_module_name: Option<&str>,
     relative_imports: RelativeImports,
+    ext_module: bool,
 ) -> Result<LoadedProgram, FrontendFailure> {
     let display = entry.to_string_lossy().into_owned();
     let canonical = canonicalize(entry, &display)?;
@@ -184,6 +192,7 @@ pub(crate) fn load_with(
         manifest: None,
         entry_module_name: entry_module_name.map(str::to_string),
         relative_imports,
+        ext_module,
     };
     loader.load_module(&canonical, display, true)?;
     Ok(LoadedProgram {
@@ -211,6 +220,8 @@ struct Loader {
     entry_module_name: Option<String>,
     /// How the entry module's relative imports are answered (#1366).
     relative_imports: RelativeImports,
+    /// Whether every module is lowered for an `ext` artifact (D-258, #1397).
+    ext_module: bool,
 }
 
 impl Loader {
@@ -248,6 +259,7 @@ impl Loader {
         self.in_progress.pop();
 
         let mut resolved = ResolvedImports::default();
+        resolved.set_ext_module(self.ext_module);
         for loaded in &self.modules {
             resolved.add_module(
                 loaded.display_path.clone(),

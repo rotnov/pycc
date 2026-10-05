@@ -164,7 +164,8 @@ pub enum StdSymbolKind {
     /// `typing.Any` and `typing.Generic`. Like `Final`, the container
     /// aliases and `Any` are resolved by their bare spelling in annotation
     /// position (`pycc_hir::func::annotation_to_ty` lowers `Dict[K, V]` as
-    /// `dict[K, V]`, and `Any` keeps its by-design `T0002`) whether or not
+    /// `dict[K, V]`, and `Any` keeps its by-design `T0002` -- or, in an
+    /// `ext` module, lowers to the CPython object, D-258) whether or not
     /// this registry entry exists; registering the symbols here only makes
     /// `from typing import Dict, List, Any, Generic, ...` itself resolve
     /// instead of failing with `C0002`. `Generic` is import-only: nothing

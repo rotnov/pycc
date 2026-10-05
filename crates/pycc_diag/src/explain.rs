@@ -278,14 +278,17 @@ def add(a: int, b: int) -> int:
         severity: Severity::Error,
         summary: "`Any` outside interop boundary",
         explanation: "\
-The bare name `Any` is rejected as a type annotation everywhere in pycc \
-code today: \"`Any` is not permitted in pycc code outside a declared interop \
-boundary\" is the literal message HIR lowering's annotation resolver \
-produces. pycc's static, whole-function type checking has no way to make \
-`Any` sound without an explicit escape hatch, and that escape hatch (a \
-declared CPython interop boundary) is part of the planned v0.7 transparent \
-interop work, not yet implemented -- so for now, every occurrence of `Any` \
-in an annotation is rejected outright, regardless of position.",
+The bare name `Any` is rejected as a type annotation in every module of a \
+`native` program: \"`Any` is not permitted in pycc code outside a declared \
+interop boundary\" is the literal message HIR lowering's annotation \
+resolver produces. pycc's static, whole-function type checking has no way \
+to make `Any` sound without an explicit escape hatch. A module compiled into \
+a `pycc build --ext` artifact is one such boundary (D-258, #1397): there \
+`Any` is the opaque CPython object -- a top type, not PEP 484's gradual \
+`Any` -- and crosses the export boundary unchanged, so this code is never \
+reported by an `--ext` build. Everywhere else every occurrence of `Any` in \
+an annotation is rejected outright, regardless of position; the general \
+compiler-classified boundary is the planned v0.7 transparent interop work.",
         example: "\
 from typing import Any
 
@@ -758,7 +761,10 @@ nameable type at all: a PEP 695 type parameter (`T[int]`), a builtin scalar \
 memoryview` then `Arr[float]` resolves to the carrier and is accepted, \
 #1130) -- where the type argument used to be silently discarded. A \
 `type A = C` alias to a class behaves exactly as `C[...]` would; an \
-undefined base keeps its `C0001`; `Any[...]` keeps `T0002`.",
+undefined base keeps its `C0001`; `Any[...]` keeps `T0002` in a `native` \
+program, and in a `pycc build --ext` module, where `Any` and `object` are \
+the opaque CPython object (D-258), `Any[...]` and `object[...]` are this \
+code, since neither is generic.",
         example: "\
 class Point:
     def __init__(self, x: int) -> None:
