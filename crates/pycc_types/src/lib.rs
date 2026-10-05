@@ -685,6 +685,12 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
                 collect_named_expr_names_in_expr(arg, names);
             }
         }
+        HirExpr::ExprCall { callee, args } => {
+            collect_named_expr_names_in_expr(callee, names);
+            for arg in args {
+                collect_named_expr_names_in_expr(arg, names);
+            }
+        }
     }
 }
 
@@ -1404,6 +1410,13 @@ fn collect_named_expr_bindings(
             collect_named_expr_bindings(env, local_names, call)
         }
         HirExpr::GenericClassInstantiate { args, .. } => {
+            for arg in args {
+                collect_named_expr_bindings(env, local_names, arg)?;
+            }
+            Ok(())
+        }
+        HirExpr::ExprCall { callee, args } => {
+            collect_named_expr_bindings(env, local_names, callee)?;
             for arg in args {
                 collect_named_expr_bindings(env, local_names, arg)?;
             }
@@ -3809,6 +3822,13 @@ fn reject_generic_calls_in_expr(
         // `class` is a bare name (not an expression), and `type_arg` is a
         // compile-time `Ty`, so neither needs generic-call rejection.
         HirExpr::GenericClassInstantiate { args, .. } => {
+            for arg in args {
+                reject_generic_calls_in_expr(module_env, own_name, arg)?;
+            }
+            Ok(())
+        }
+        HirExpr::ExprCall { callee, args } => {
+            reject_generic_calls_in_expr(module_env, own_name, callee)?;
             for arg in args {
                 reject_generic_calls_in_expr(module_env, own_name, arg)?;
             }

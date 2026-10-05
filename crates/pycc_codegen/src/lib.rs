@@ -56,6 +56,7 @@ mod foreign_compare;
 mod foreign_fail;
 mod foreign_import;
 mod foreign_len;
+mod foreign_pack;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
 mod hash;
@@ -100,8 +101,8 @@ use ext::{
     EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
     EXT_OBJ_ISINSTANCE_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_NONE_SYMBOL,
     EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL,
-    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL, EXT_OBJ_TO_FLOAT_SYMBOL,
-    EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
+    EXT_OBJ_PACK_OBJECT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL,
+    EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
     EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
@@ -3740,12 +3741,12 @@ fn emit_expr_unchecked<'ctx>(
             foreign_call::emit_call(context, builder, module, rt, bound, &arg_scalars)
         }
         // #1313: `callee(args)` on an `object`-typed name (a foreign
-        // binding or a `for` loop target). CPython's order -- the callee,
-        // then each argument left to right -- and no lookup step: the
-        // callee is read as a borrow of a reference the caller keeps (a
-        // retained module global, or the loop target's slot), which is why
-        // `foreign_call::emit_call_borrowed` hands it to the shim helper
-        // that takes its own reference.
+        // binding or a `for` loop target), or since Part 2a of #1371 on an
+        // object subscript result (`table[k](args)`). CPython's order -- the
+        // callee, then each argument left to right -- and no lookup step.
+        // `foreign_call::emit_object_call` decides from the callee's MIR
+        // shape whether it is a borrow (a name read; the shim helper takes
+        // its own reference) or a produced new reference the call consumes.
         MirExpr::ObjCall { callee, args } => {
             let callee_scalar =
                 emit_expr(context, builder, module, rt, user_functions, locals, callee);
@@ -3753,11 +3754,12 @@ fn emit_expr_unchecked<'ctx>(
                 .iter()
                 .map(|arg| emit_expr(context, builder, module, rt, user_functions, locals, arg))
                 .collect();
-            foreign_call::emit_call_borrowed(
+            foreign_call::emit_object_call(
                 context,
                 builder,
                 module,
                 rt,
+                callee,
                 callee_scalar,
                 &arg_scalars,
             )

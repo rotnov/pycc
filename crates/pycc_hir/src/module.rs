@@ -253,7 +253,9 @@ pub fn lower_module(
         imported_class_indices: Vec::new(),
         imported_alias_indices: Vec::new(),
         definition_spans: Vec::new(),
-        signatures: SignatureTable::collect(&module.body),
+        signatures: SignatureTable::collect(&module.body, |import| {
+            resolved.resolves_to_project_module(import.range)
+        }),
         // No import is known yet, so only the unaliased `TYPE_CHECKING`
         // guards are recognized; a binding under an aliased guard counts,
         // which can only refuse a program, never admit one.

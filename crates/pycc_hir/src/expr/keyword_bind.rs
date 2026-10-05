@@ -48,9 +48,9 @@
 //! (D-222); `pycc_types`' positional-arity twin cannot, because HIR carries no
 //! spans by the time it runs.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
-use pycc_ast::{Expr, ExprCall, Parameters, Stmt};
+use pycc_ast::{Expr, ExprCall, Parameters, Stmt, StmtImportFrom};
 use pycc_diag::{Diagnostic, Span};
 
 use crate::HirExpr;
@@ -100,6 +100,21 @@ pub(crate) struct SignatureTable {
     /// It lives here because this table is already threaded to every
     /// expression-lowering site of the module.
     container_method_names: BTreeSet<&'static str>,
+    /// Part 2a of #1371: the *class-like* names of the module -- each bound
+    /// exactly once in module scope (the same [`rebound::binding_counts`]
+    /// rule `by_name` uses), by either a top-level `class` statement or a
+    /// top-level `from M import X` whose `M` resolved to a project module.
+    /// A call `X[Y](args)` whose base is one of these keeps lowering to
+    /// `HirExpr::GenericClassInstantiate` with its located type-argument
+    /// diagnostics; with any other base it is a call of a subscript result
+    /// (`HirExpr::ExprCall`), which `pycc_types` admits only on a CPython
+    /// object (see `expr::subscript_call`).
+    ///
+    /// A name imported from a project module that is not a class (a
+    /// function, or an `object` global) is counted too: the driver's answer
+    /// says only that the module resolved. That can only turn a call into a
+    /// refused generic instantiation, never into wrong code.
+    class_like_names: HashSet<String>,
 }
 
 impl SignatureTable {
@@ -115,19 +130,42 @@ impl SignatureTable {
     /// signatures. A keyword call to it keeps `C0001` and a short call gets
     /// the ordinary arity error (`docs/TYPE_SYSTEM.md`, "Keyword arguments
     /// and default parameter values on a redefined name").
-    pub(crate) fn collect(body: &[Stmt]) -> Self {
+    ///
+    /// `is_project_import` answers whether a top-level `from ... import`
+    /// statement resolved to a project module; it feeds
+    /// [`Self::is_class_like`] only.
+    pub(crate) fn collect(
+        body: &[Stmt],
+        is_project_import: impl Fn(&StmtImportFrom) -> bool,
+    ) -> Self {
         let counts = rebound::binding_counts(body);
+        let bound_once = |name: &str| counts.get(name) == Some(&1);
         let mut by_name = HashMap::new();
+        let mut class_like_names = HashSet::new();
         for stmt in body {
-            if let Stmt::FunctionDef(def) = stmt
-                && counts.get(def.name.as_str()) == Some(&1)
-                && let Some(signature) = signature_of(&def.parameters)
-            {
-                by_name.insert(def.name.as_str().to_string(), signature);
+            match stmt {
+                Stmt::FunctionDef(def) if bound_once(def.name.as_str()) => {
+                    if let Some(signature) = signature_of(&def.parameters) {
+                        by_name.insert(def.name.as_str().to_string(), signature);
+                    }
+                }
+                Stmt::ClassDef(def) if bound_once(def.name.as_str()) => {
+                    class_like_names.insert(def.name.as_str().to_string());
+                }
+                Stmt::ImportFrom(import) if is_project_import(import) => {
+                    for alias in &import.names {
+                        let bound = alias.asname.as_ref().unwrap_or(&alias.name).as_str();
+                        if bound_once(bound) {
+                            class_like_names.insert(bound.to_string());
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         Self {
             by_name,
+            class_like_names,
             container_method_names: crate::expr::receiver_dispatch::defined_container_method_names(
                 body,
             )
@@ -143,6 +181,12 @@ impl SignatureTable {
         names: impl IntoIterator<Item = &'static str>,
     ) {
         self.container_method_names.extend(names);
+    }
+
+    /// Part 2a of #1371: whether `name` is one of the module's class-like
+    /// names (see the field's own documentation).
+    pub(crate) fn is_class_like(&self, name: &str) -> bool {
+        self.class_like_names.contains(name)
     }
 
     /// Issue #1188: every container method name some class reachable from

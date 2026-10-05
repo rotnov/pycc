@@ -370,6 +370,12 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
                 collect_named_expr_targets_in_expr(arg, killed);
             }
         }
+        HirExpr::ExprCall { callee, args } => {
+            collect_named_expr_targets_in_expr(callee, killed);
+            for arg in args {
+                collect_named_expr_targets_in_expr(arg, killed);
+            }
+        }
     }
 }
 

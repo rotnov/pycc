@@ -210,6 +210,12 @@ pub const EXT_OBJ_PACK_BOOL_SYMBOL: &str = "pycc_ext_obj_pack_bool";
 /// independent CPython `str` out.
 pub const EXT_OBJ_PACK_STR_SYMBOL: &str = "pycc_ext_obj_pack_str";
 
+/// The shim's `object` argument packer (Part 2a of #1371): a borrowed
+/// `PyObject *` in, one new reference to the same object out (`Py_INCREF`),
+/// so a consuming helper can release it without touching the operand's own
+/// reference.
+pub const EXT_OBJ_PACK_OBJECT_SYMBOL: &str = "pycc_ext_obj_pack_object";
+
 /// The fixed C shim's `len` helper (Part 3 of #1026): it takes a borrowed
 /// `PyObject *` and an out-pointer, writes the D-141 encoded `int` word for
 /// `PyObject_Size(o)` through it and returns `0`, or returns `-1` with a

@@ -85,7 +85,8 @@
 //! no keyword arguments at all) whose types are `int`, `float`, `bool` or
 //! `str` -- the four scalars the shim has a `pycc_ext_obj_pack_*` helper
 //! for -- and refuses every other argument type with
-//! [`object_operation_unsupported`], including a second `Ty::Object`. The
+//! [`object_operation_unsupported`]; Part 2a of #1371 widened the admitted
+//! set with a second `Ty::Object` (packed by `pycc_ext_obj_pack_object`). The
 //! call inherits the positional bound unchanged: the base is read through
 //! the same `HirExpr::Name` arm.
 //!
@@ -121,9 +122,9 @@
 //! `AttrGet` arm does), so a key is now a fourth place a foreign value can
 //! be consumed. The admitted keys are the same four scalars a method call's
 //! arguments are -- `int`, `float`, `bool`, `str`, the ones with a
-//! `pycc_ext_obj_pack_*` helper -- and every other key type, including a
-//! second [`Ty::Object`], is refused with
-//! [`object_operation_unsupported`] naming the key's type.
+//! `pycc_ext_obj_pack_*` helper -- and every other key type is refused with
+//! [`object_operation_unsupported`] naming the key's type. Part 2a of #1371
+//! widened the admitted keys with a second [`Ty::Object`].
 //!
 //! Only the **load** is admitted. `o[k] = v` stays refused: it is a
 //! different HIR shape, which `pycc_hir` rejects with `C0001` ("only
@@ -279,9 +280,10 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
         format!(
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
              value and implements attribute access, positional \
-             scalar-argument method calls and direct calls, `len`, truth \
+             scalar- or object-argument method calls and direct calls \
+             (including a call of a subscript result), `len`, truth \
              testing, a \
-             scalar-key subscript load, a rich comparison with an object or \
+             scalar- or object-key subscript load, a rich comparison with an object or \
              scalar operand, an identity test against an object or `None`, \
              `isinstance` against a foreign class or `int`/`float`/`bool`/`str`, `for` iteration, binding the \
              value to a name, returning it from and passing it to a pycc \
@@ -295,20 +297,32 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
     )
 }
 
-/// `Err(I0404)` unless every argument of a call on a CPython object is one
-/// of the four packable scalars -- `int`, `float`, `bool` or `str`, each of
-/// which has a `pycc_ext_obj_pack_*` helper in the shim.
+/// Whether a value of type `ty` can be handed to the shim as a call
+/// argument or a subscript key: the four scalars -- `int`, `float`, `bool`
+/// and `str` -- and, since Part 2a of #1371, a second `object`, each of
+/// which has a `pycc_ext_obj_pack_*` helper in the shim
+/// (`pycc_ext_obj_pack_object` takes one new reference to the operand).
 ///
-/// The one statement of the argument rule both object-call shapes share: a
-/// method call (`o.method(args)`, PR 2b of #1081, `what` = `"method"`) and
-/// a direct call of an `object`-typed name (`product(args)`, #1313, `what` =
-/// `"call"`). Anything else -- a container, an instance, `None`, or a
-/// second `Ty::Object` -- has no boundary representation yet and is
-/// refused here rather than reaching codegen, naming the first offending
-/// argument's type.
+/// The one statement of the operand rule [`check_object_call_args`] and the
+/// `Ty::Object` subscript arm in `expr.rs` share.
+pub(crate) fn is_packable_operand(ty: &Ty) -> bool {
+    matches!(ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Object)
+}
+
+/// `Err(I0404)` unless every argument of a call on a CPython object is
+/// packable ([`is_packable_operand`]).
+///
+/// The one statement of the argument rule every object-call shape shares: a
+/// method call (`o.method(args)`, PR 2b of #1081, `what` = `"method"`), a
+/// direct call of an `object`-typed name (`product(args)`, #1313, `what` =
+/// `"call"`) and a call of an `object`-typed subscript result
+/// (`table[k](args)`, Part 2a of #1371, also `"call"`). Anything else -- a
+/// container, an instance or `None` -- has no boundary representation yet
+/// and is refused here rather than reaching codegen, naming the first
+/// offending argument's type.
 pub(crate) fn check_object_call_args(arg_tys: &[Ty], what: &str) -> Result<(), Diagnostic> {
     for arg_ty in arg_tys {
-        if !matches!(arg_ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str) {
+        if !is_packable_operand(arg_ty) {
             return Err(object_operation_unsupported(&format!(
                 "passing a `{}` argument to a CPython object's {what}",
                 arg_ty.name()
@@ -461,6 +475,7 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
 
 pub(crate) mod compare;
 pub(crate) mod for_loop;
+pub(crate) mod subscript_call;
 
 #[cfg(test)]
 mod binding_tests;
@@ -470,5 +485,7 @@ mod call_tests;
 mod function_local_tests;
 #[cfg(test)]
 mod in_function_tests;
+#[cfg(test)]
+mod subscript_call_tests;
 #[cfg(test)]
 mod tests;
