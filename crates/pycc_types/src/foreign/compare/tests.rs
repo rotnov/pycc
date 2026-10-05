@@ -113,8 +113,10 @@ fn a_rich_comparison_on_an_object_is_an_object_not_a_bool() {
 /// not coerce it with `PyObject_IsTrue` (D-258's #1419 amendment) -- and
 /// the `T0022`/`T0025` refusal's `help` names the explicit `bool(...)`
 /// conversion: a `-> bool` return (module function and method) and an
-/// annotated binding at module level and in a function. An `and` whose
-/// operand is an object comparison keeps its own `I0404`. Other refusals of
+/// annotated binding at module level and in a function. Since #1423 an
+/// `and` with an object comparison operand is itself the object, so the
+/// #1207 subject's `return ... and self.position == other.position` shape
+/// meets the same refusal and help. Other refusals of
 /// an object in a `bool` slot (`T0026` after a value-less declaration,
 /// `T0021` for a `bool` call argument) keep their generic help.
 #[test]
@@ -146,6 +148,11 @@ fn a_bool_slot_refuses_an_object_comparison_and_suggests_bool() {
             "T0025",
             "cannot assign `object` to `b: bool`",
         ),
+        (
+            "def f(n: int) -> bool:\n    return n == 1 and numpy.pi == n\n",
+            "T0022",
+            "expected `bool`, found `object`",
+        ),
     ] {
         let diagnostics = check_foreign(source).expect_err(source);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?} for {source}");
@@ -160,13 +167,6 @@ fn a_bool_slot_refuses_an_object_comparison_and_suggests_bool() {
             "{diagnostics:?} for {source}"
         );
     }
-    // An `and`/`or` with an object comparison operand is not coerced
-    // either: it keeps its own `I0404` until #1423, whatever slot holds it.
-    assert_refused(
-        "def f(n: int) -> bool:\n    return n == 1 and numpy.pi == n\n",
-        "I0404",
-        "as an `and` operand",
-    );
 }
 
 /// The same `help` names the matching conversion for each of the other
