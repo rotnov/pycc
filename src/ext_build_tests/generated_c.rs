@@ -2628,3 +2628,79 @@ fn a_source_level_default_does_not_reach_the_generated_wrapper() {
         "{inc}"
     );
 }
+
+/// D-258 rule 5 (#1397): an `Any`/`object`/container-of-objects signature
+/// lowered from real source by the `--ext` frontend crosses as the
+/// `PyObject *` itself -- one `void *` slot, unpacked by
+/// `pycc_ext_unpack_object` and packed by `pycc_ext_pack_object` -- and the
+/// shim's two helpers take a new reference in both directions. Not
+/// `#[ignore]`d, so the lines reached only through the hosted tests in
+/// `tests/issue_1397_ext_any_object.rs` are also executed here.
+#[test]
+fn an_object_signature_crosses_the_boundary_as_the_pyobject_itself() {
+    let dir = pycc_scratch::ScratchDir::new("ext_any_object").expect("scratch");
+    let src = dir.join("m.py");
+    std::fs::write(
+        &src,
+        "from typing import Any, Dict\n\
+         def ident(x: Any, d: Dict[str, Any]) -> Any:\n    return x\n\
+         def keep(xs: list) -> object:\n    return xs\n",
+    )
+    .expect("write source");
+    let module = crate::frontend::resolve_frontend_with(
+        &src,
+        Some("m"),
+        crate::modules::RelativeImports::Project,
+    )
+    .unwrap_or_else(|_| panic!("the fixture must type-check in an ext build"));
+    let exports = collect_exports(&module).expect("an object signature is carriable");
+    assert_eq!(exports.len(), 2, "{exports:?}");
+    assert_eq!(exports[0].params, vec![Ty::Object, Ty::Object]);
+    assert_eq!(exports[0].return_ty, Ty::Object);
+    let inc = generate_exports_inc("m", &exports, &[], &flat_publications(&exports), &[]);
+    for needle in [
+        "pycc_ext_unpack_object(args[0], \"ident\", 0, &a0)",
+        "pycc_ext_unpack_object(args[1], \"ident\", 1, &a1)",
+        "pycc_ext_unpack_object(args[0], \"keep\", 0, &a0)",
+        "return pycc_ext_pack_object(result);",
+    ] {
+        assert!(inc.contains(needle), "{needle}\n{inc}");
+    }
+    let shim = shim_c();
+    for (signature, body_needle) in [
+        (
+            "static int pycc_ext_unpack_object(PyObject *obj",
+            "*out = Py_NewRef(obj);",
+        ),
+        (
+            "static PyObject *pycc_ext_pack_object(void *result)",
+            "return Py_NewRef((PyObject *)result);",
+        ),
+    ] {
+        let body = &shim[shim.find(signature).expect(signature)..];
+        let body = &body[..body.find("\n}\n").expect("the helper's end")];
+        assert!(body.contains(body_needle), "{body}");
+    }
+}
+
+/// The same source through the `native` test frontend keeps `T0002`: the
+/// ext flag is set only by `resolve_frontend_with`.
+#[test]
+fn the_native_frontend_keeps_t0002_for_the_same_source() {
+    let dir = pycc_scratch::ScratchDir::new("ext_any_native").expect("scratch");
+    let src = dir.join("m.py");
+    std::fs::write(
+        &src,
+        "from typing import Any\ndef ident(x: Any) -> Any:\n    return x\n",
+    )
+    .expect("write source");
+    // No panicking `else` arm: every line runs when the test passes, so the
+    // diff-coverage gate sees no failure-only line.
+    let mut first_code = None;
+    if let Err(crate::frontend::FrontendFailure::Compile { files }) =
+        crate::frontend::resolve_frontend(&src, Some("m"))
+    {
+        first_code = Some(files[0].diagnostics[0].code.to_string());
+    }
+    assert_eq!(first_code.as_deref(), Some("T0002"));
+}

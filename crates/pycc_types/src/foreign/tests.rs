@@ -268,8 +268,9 @@ const HELPER_SHAPE: &str = "a private helper returning `object`";
 /// `snippet` in each of the two producer shapes: literally, and with every
 /// `numpy.pi` replaced by a call to a private helper that returns one.
 ///
-/// The helper carries no return annotation on purpose: `object` is
-/// unspellable in one (`docs/TYPE_SYSTEM.md`'s `object` row), and `numpy.pi`
+/// The helper carries no return annotation on purpose: in a native build
+/// `object` is unspellable in one (`docs/TYPE_SYSTEM.md`'s `object` row;
+/// D-258 admits it only in an `--ext` module), and `numpy.pi`
 /// is no class a foreign import binds that could name it (Part 1 of #1367),
 /// so a solver-inferred return is how this helper's call gets the type.
 ///
