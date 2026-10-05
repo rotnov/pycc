@@ -183,12 +183,19 @@ fn a_quoted_optional_lowers_to_the_optional_type() {
 fn a_quoted_type_alias_value_keeps_its_refusal() {
     // A type alias's value is an expression, not an annotation, so a quoted
     // one is refused exactly as before Part 1 of #889, in both spellings.
-    for source in ["type X = \"int\"\n", "X: TypeAlias = \"int\"\n"] {
+    // A quoted bare container (`"list"`) gets no bare-container advice: the
+    // advice would see through the quotes.
+    for (source, literal) in [
+        ("type X = \"int\"\n", "\"int\""),
+        ("X: TypeAlias = \"int\"\n", "\"int\""),
+        ("type X = \"list\"\n", "\"list\""),
+        ("X: TypeAlias = \"dict\"\n", "\"dict\""),
+    ] {
         let diagnostic = lower_err(source);
         assert_eq!(diagnostic.code, "C0001", "{source:?}");
         assert_eq!(
             diagnostic.span,
-            Some(span_of(source, "\"int\"")),
+            Some(span_of(source, literal)),
             "{source:?}"
         );
         assert!(
@@ -211,5 +218,33 @@ fn a_string_nested_in_a_type_alias_value_resolves() {
         let aliases = lower_ok(quoted).type_aliases;
         assert_eq!(aliases, lower_ok(unquoted).type_aliases, "{quoted:?}");
         assert_eq!(aliases.len(), 1, "{quoted:?}");
+    }
+}
+
+#[test]
+fn a_quoted_pep_591_nesting_fails_like_the_unquoted_one() {
+    // `lower_class_attr`'s two nesting checks match by shape; a string
+    // nested in the wrapper must fail exactly as the unquoted spelling does.
+    let prelude = "from typing import ClassVar, Final\nclass C:\n    ";
+    let tail = "\n    def __init__(self) -> None:\n        self.n = 0\n";
+    for (quoted, unquoted) in [
+        (
+            "X: ClassVar[\"Final[int]\"] = 1",
+            "X: ClassVar[Final[int]] = 1",
+        ),
+        (
+            "X: Final[\"ClassVar[int]\"] = 1",
+            "X: Final[ClassVar[int]] = 1",
+        ),
+    ] {
+        let quoted_error = lower_err(&format!("{prelude}{quoted}{tail}"));
+        let unquoted_error = lower_err(&format!("{prelude}{unquoted}{tail}"));
+        assert_eq!(quoted_error.code, "C0001", "{quoted:?}");
+        assert!(
+            quoted_error.message.contains("PEP 591 forbids nesting"),
+            "{quoted:?}: {}",
+            quoted_error.message
+        );
+        assert_eq!(quoted_error.message, unquoted_error.message, "{quoted:?}");
     }
 }

@@ -130,16 +130,18 @@ fn alias_value_to_ty(
     aliases: &[(String, Ty)],
     class_defs: &[ClassAnnotationInfo],
 ) -> Result<Ty, Diagnostic> {
-    let resolved = if value.is_string_literal_expr() {
-        Err(crate::unsupported(
+    if value.is_string_literal_expr() {
+        // No bare-container advice: it would see through the quotes and
+        // suggest `list[int]` for `type X = "list"`, a spelling that is
+        // refused here as well.
+        return Err(crate::unsupported(
             format!(
                 "only a bare name type annotation is supported so far, got {}",
                 pycc_ast::expr_kind_name(value)
             ),
             pycc_ast::expr_range(value),
-        ))
-    } else {
-        annotation_to_ty(value, None, None, aliases, class_defs)
-    };
-    resolved.map_err(|error| crate::with_bare_container_advice(error, value))
+        ));
+    }
+    annotation_to_ty(value, None, None, aliases, class_defs)
+        .map_err(|error| crate::with_bare_container_advice(error, value))
 }
