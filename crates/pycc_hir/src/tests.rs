@@ -2033,7 +2033,7 @@ fn a_param_spec_type_parameter_is_rejected() {
 }
 
 #[test]
-fn a_keyword_call_argument_is_rejected_instead_of_being_erased() {
+fn a_keyword_call_argument_is_kept_instead_of_being_erased() {
     // Part 1 of #884 (#1125) made a keyword call to a module-level `def`
     // bind by name, so this regression needs a callee the signature table
     // cannot answer for. An undefined name is the simplest such callee, and

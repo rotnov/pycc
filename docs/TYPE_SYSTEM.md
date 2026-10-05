@@ -697,7 +697,8 @@ evaluation order" below). Every other
 shape — a method call, `super().m()`, a container or stdlib-intrinsic call,
 a class instantiation, `range(stop=3)`, and `**kwargs` unpacking — keeps the
 unchanged `C0001` rejection "keyword call arguments are not supported yet",
-because pycc has no signature to bind against there yet.
+because pycc has no signature to bind against there yet, unless the callee
+is a CPython object (Part 8 of #1371; see the `object` row).
 
 Default parameter values (`def f(a: int, b: int = 2)`, Part 2 of
 [#884](https://github.com/rotnov/pycc/issues/884) /

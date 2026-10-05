@@ -763,7 +763,7 @@ mod tests {
     }
 
     #[test]
-    fn every_call_shape_outside_the_bindable_one_keeps_the_capability_rejection() {
+    fn every_call_shape_outside_the_bindable_one_is_refused_or_deferred() {
         // `false`: deferred to `pycc_types` since Part 8 of #1371, because
         // the callee could be a CPython object (`keyword_call_refused_here`).
         for (source, refused_here) in [

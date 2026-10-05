@@ -113,3 +113,13 @@ fn a_keyword_value_that_fails_to_lower_reports_its_own_error() {
     );
     assert_eq!(diagnostic.code, "C0001", "{diagnostic:?}");
 }
+
+/// A keyword call inside a comprehension has the loop variable renamed in
+/// its positional half and in its keyword values alike.
+#[test]
+fn a_keyword_call_in_a_comprehension_renames_the_loop_variable() {
+    let hir = lower("ys = [f(x, k=x) for x in range(3)]\n").expect("lowers");
+    let debug = format!("{hir:?}");
+    assert!(debug.contains("KeywordCall"), "{debug}");
+    assert!(!debug.contains("Name(\"x\")"), "{debug}");
+}

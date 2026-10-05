@@ -149,7 +149,7 @@ fn a_call_to_a_redefined_enum_class_is_suppressed_with_the_duplicate() {
 }
 
 #[test]
-fn a_keyword_call_keeps_exactly_the_keyword_diagnostic() {
+fn a_keyword_call_is_deferred_with_no_lowering_diagnostic() {
     // Since Part 8 of #1371 the keyword call lowers to a
     // `HirExpr::KeywordCall` and `pycc_types` reports its one `C0001`, so
     // the skipped scan leaves lowering with no diagnostic at all.

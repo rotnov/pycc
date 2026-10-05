@@ -182,7 +182,7 @@ fn a_foreign_imported_name_is_not_class_like() {
 /// a CPython object), and a call of a call result is not a subscript callee
 /// at all.
 #[test]
-fn keyword_and_call_result_callees_stay_refused() {
+fn a_keyword_call_is_deferred_and_a_call_result_callee_stays_refused() {
     let HirExpr::KeywordCall { call, .. } = last_expr("t = {}\nt['a'](x=1)\n") else {
         panic!("a keyword call of a subscript result is deferred to pycc_types");
     };

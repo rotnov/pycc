@@ -1476,14 +1476,9 @@ pub(super) fn lower_expr(
         // `ObjMethodCall` through the arms above, and the keyword values
         // ride beside it.
         HirExpr::KeywordCall { call, keywords, .. } => {
+            // Any other positional half is a front-end defect that
+            // `pycc_codegen::foreign_call_emit::emit_keyword_call` reports.
             let call = lower_expr(call, scopes, classes, current_class);
-            debug_assert!(
-                matches!(
-                    call,
-                    MirExpr::ObjCall { .. } | MirExpr::ObjMethodCall { .. }
-                ),
-                "pycc_types admits a keyword call only on a CPython object, got {call:?}"
-            );
             let (names, values) = keywords
                 .iter()
                 .map(|(name, value)| {

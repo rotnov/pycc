@@ -11,7 +11,7 @@
 //! covered by the unit tests in
 //! `crates/pycc_hir/src/expr/object_keyword_call_tests.rs`,
 //! `crates/pycc_types/src/foreign/keyword_call_tests.rs`,
-//! `crates/pycc_mir/src/tests/` and
+//! `crates/pycc_mir/src/tests/obj_keyword_call.rs` and
 //! `crates/pycc_codegen/src/foreign_call/tests/keyword_tests.rs`.
 
 use pycc_scratch::ScratchDir;

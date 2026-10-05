@@ -31,7 +31,7 @@ pub(crate) fn keyword_call_unsupported(span: Span) -> Diagnostic {
 /// half would (a pycc method's arity mismatch, say). A receiver or
 /// subscript callee whose own inference fails is not an object; the
 /// keyword refusal is the diagnostic then too.
-fn calls_an_object(env: &Environment, local_names: &[&str], call: &HirExpr) -> bool {
+pub(super) fn calls_an_object(env: &Environment, local_names: &[&str], call: &HirExpr) -> bool {
     match call {
         HirExpr::Call { callee, .. } => {
             matches!(env.lookup(callee), Some(Ty::Object)) && !env.def_rebound.contains(callee)

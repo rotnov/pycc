@@ -126,3 +126,55 @@ fn a_keyword_call_of_a_non_object_keeps_the_c0001() {
     refused("t = {\"a\": 1}\nt[\"a\"](k=1)\n", "C0001", KEYWORD);
     refused("missing.m(k=1)\n", "C0001", KEYWORD);
 }
+
+/// The monomorphization walkers reach both halves of a keyword call: a
+/// generic-function call, a generic-class instantiation and a
+/// protocol-parameter call in the positional half or a keyword value are
+/// each rewritten or collected, in every call shape.
+#[test]
+fn the_generic_and_protocol_walkers_reach_a_keyword_call() {
+    let ident = "def ident[T](x: T) -> T:\n    return x\n\n\n";
+    admitted(&format!("{ident}product(ident(1), repeat=ident(2))\n"));
+    admitted(&format!(
+        "{ident}s = builtins.str(\"a,b\")\nt = s.split(ident(\",\"), maxsplit=ident(1))\n"
+    ));
+    admitted(&format!(
+        "{ident}builtins.__dict__[ident(\"int\")](\"11\", base=ident(2))\n"
+    ));
+    admitted(
+        "class Box[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\n    \
+         def n(self) -> int:\n        return 1\n\n\n\
+         product(Box[int](1).n(), repeat=Box[int](2).n())\n",
+    );
+    admitted(
+        "from typing import Protocol\n\n\nclass P(Protocol):\n    def m(self) -> int: ...\n\n\n\
+         class C:\n    def m(self) -> int:\n        return 1\n\n\n\
+         def use(p: P) -> int:\n    return p.m()\n\n\n\
+         product(use(C()), repeat=use(C()))\n",
+    );
+}
+
+/// A generic function's body is walked for calls to generic functions into
+/// a keyword value; a keyword call with none passes the walk.
+#[test]
+fn a_generic_call_in_a_keyword_value_in_a_generic_function_is_refused() {
+    refused(
+        "def g[T](x: T) -> T:\n    return x\n\n\n\
+         def f[T](x: T) -> T:\n    product(1, repeat=g(2))\n    return x\n",
+        "T0042",
+        "generic function `f` calls generic function `g`",
+    );
+    admitted("def f[T](x: T) -> T:\n    product(1, repeat=2)\n    return x\n");
+}
+
+/// Only the three call shapes HIR defers can call an object; any other
+/// node handed to the predicate is not one.
+#[test]
+fn only_a_call_shape_calls_an_object() {
+    let env = crate::Environment::new();
+    assert!(!super::keyword_call::calls_an_object(
+        &env,
+        &[],
+        &pycc_hir::HirExpr::IntLiteral(1)
+    ));
+}

@@ -851,12 +851,6 @@ pub enum InstanceHashVia {
     Method,
 }
 
-/// `MirExpr::Instantiate`'s payload, boxed (not inlined into that variant
-/// directly) to keep `MirExpr`'s own size close to its other variants --
-/// `ctor: String` + the slot count + `args: Vec<MirExpr>` + `ty: Ty`
-/// inlined directly measured large enough to trip clippy's
-/// `large_enum_variant` lint (`-D warnings`) on `MirItem` (whose
-/// `TopLevelStmt(MirStmt)` variant embeds `MirExpr` several layers deep,
 /// The payload of [`MirExpr::ObjKeywordCall`] (Part 8 of #1371).
 ///
 /// `call` is the positional half of the call, exactly the node the same
@@ -876,6 +870,12 @@ pub struct ObjKeywordCall {
     pub values: Vec<MirExpr>,
 }
 
+/// `MirExpr::Instantiate`'s payload, boxed (not inlined into that variant
+/// directly) to keep `MirExpr`'s own size close to its other variants --
+/// `ctor: String` + the slot count + `args: Vec<MirExpr>` + `ty: Ty`
+/// inlined directly measured large enough to trip clippy's
+/// `large_enum_variant` lint (`-D warnings`) on `MirItem` (whose
+/// `TopLevelStmt(MirStmt)` variant embeds `MirExpr` several layers deep,
 /// e.g. via `MirStmt::AttrSet`'s two raw `MirExpr` fields and
 /// `CompSource::Range`'s three), the same reasoning `Ty::Tuple(Box<Vec<Ty>>)`
 /// and `Ty::Dict(Box<(Ty, Ty)>)` already apply one crate over.

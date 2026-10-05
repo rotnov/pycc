@@ -92,7 +92,7 @@ fn an_unmarshallable_argument_is_refused_with_i0404() {
     for (body, ty) in [
         ("import gc\n\ngc.set_debug([1])\n", "list[int]"),
         // A `None` argument is admitted since Part 8 of #1371.
-        ("import gc\n\ngc.set_debug({1: 2})\n", "dict[int, int]"),
+        ("import gc\n\ngc.set_debug({\"a\": 1})\n", "dict[str, int]"),
     ] {
         let output = check(&dir, body);
         assert_eq!(
