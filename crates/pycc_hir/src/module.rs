@@ -36,6 +36,7 @@
 //! checker (`src/frontend.rs`), so no partial module is ever type-checked.
 
 mod poison;
+mod type_var;
 
 pub(crate) use poison::{
     bare_container_annotation_message, builtin_base_message, cascade_name, poisonable_names,
@@ -117,6 +118,9 @@ struct ModuleState<'a> {
     /// Whether the module body binds `staticmethod` anywhere (#1345),
     /// computed once before the item loop and handed to every class.
     staticmethod_rebound: bool,
+    /// The module-level `T = TypeVar("T")` declarations so far (#1394),
+    /// handed to every class for its `Generic[...]` base.
+    type_vars: Vec<String>,
 }
 
 /// One module's lowering, before `program::link`/`program::finalize`
@@ -254,6 +258,7 @@ pub fn lower_module(
         // guards are recognized; a binding under an aliased guard counts,
         // which can only refuse a program, never admit one.
         staticmethod_rebound: class::foreign_static::binds_name(&module.body, &[], "staticmethod"),
+        type_vars: Vec::new(),
     };
     state
         .signatures
@@ -504,6 +509,7 @@ pub fn lower_module(
         definition_spans,
         signatures: _,
         staticmethod_rebound: _,
+        type_vars: _,
     } = state;
     // The imported copies were pushed after the synthetic set, so
     // stripping them leaves the synthetic entries still at the front.
@@ -609,6 +615,9 @@ fn lower_top_level_item<'a>(
         state.aliases.push((name, ty));
         return Ok(());
     }
+    if type_var::lower_type_var_decl(stmt, state)? {
+        return Ok(());
+    }
     // Part 1 of #1026: `state.items.len()` at this exact point is the
     // number of `HirItem`s the preceding module statements produced, which
     // is the interleaving position an `ImportBinding::Foreign` records.
@@ -695,6 +704,7 @@ fn lower_top_level_item<'a>(
             &state.items,
             &state.class_asts,
             &state.imports,
+            &state.type_vars,
             &state.signatures,
             state.staticmethod_rebound,
         )?;
