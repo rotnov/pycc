@@ -682,8 +682,9 @@ export with no default keeps the exact check and byte-identical C. An
 on a method as `state_stack: Any = None`, `deepcopy_values=True` as
 `deepcopy_values: bool = True` -- and generates byte-identical C to that
 annotated twin, so it is unpacked by the table's row for that type below: a
-`bool`, `int`, `float` or `str` default's parameter refuses a host value of
-another type with the row's `TypeError`, where CPython would accept it.
+`bool`, `int`, `float` or `str` default's parameter refuses exactly the host
+values that row refuses (an `int` parameter still accepts a `bool`) with the
+row's `TypeError`, where CPython would accept them.
 
 | Annotation | As a parameter | As a return type |
 |---|---|---|

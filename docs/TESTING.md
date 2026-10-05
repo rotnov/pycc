@@ -890,8 +890,9 @@ defaults row's line 40:75 (#1140). Since the method part of #1140 it was
 copy; annotating the defaulted parameters moved it to row 8's string
 annotation (59:53, #889). Since [#1409](https://github.com/rotnov/pycc/issues/1409)
 the unannotated defaulted parameters are typed from their defaults in an
-`--ext` build, so the unedited subject itself reaches row 8's string annotation
-(59:45, #889), and no D-252 annotation is needed for them.
+`--ext` build, and no D-252 annotation is needed for them: a probe-grade
+measurement on a vendored copy of the subject (not the pinned digest; see the
+defaults row) reaches row 8's string annotation (59:45, #889).
 A seventeenth row, the false `T0022` on the `while True:` loop at line 74
 (left only by `return` or `raise`), was removed by
 [#1370](https://github.com/rotnov/pycc/issues/1370): a constant-true loop
