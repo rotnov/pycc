@@ -219,7 +219,19 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
     } else {
         format!("void *, {carried}")
     };
-    let slot_count = ctor.slot_count;
+    let slot_count = ctor.slot_names.len();
+    // #1388: the layout descriptor `pycc_rt_instance_new` words an unassigned
+    // slot's `AttributeError` with -- the class name, then each slot name,
+    // NUL-separated. `\000` rather than `\0`, so a following character can
+    // never extend the octal escape; the length is passed explicitly, since
+    // the descriptor holds NULs.
+    let mut layout = ctor.class.clone();
+    for name in &ctor.slot_names {
+        layout.push('\0');
+        layout.push_str(name);
+    }
+    let layout_len = layout.len();
+    let layout_literal = layout.replace('\0', "\\000");
     let mut out = format!("extern void *fnptr_{symbol};\n");
     out.push_str(&format!(
         "static int pycc_ext_tp_init_{class}(PyObject *self, PyObject *args, PyObject *kwds)\n\
@@ -243,7 +255,9 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
         &|index| format!("PyTuple_GetItem(args, {index})"),
         "        return -1;\n",
     ));
-    out.push_str(&format!("    inst = pycc_rt_instance_new({slot_count});\n"));
+    out.push_str(&format!(
+        "    inst = pycc_rt_instance_new({slot_count}, \"{layout_literal}\", {layout_len});\n"
+    ));
     let mut call_args = vec!["inst".to_string()];
     for (index, slot) in slots.iter().enumerate() {
         // Deliberately two arms where `wrapper_for` has three.

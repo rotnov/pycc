@@ -3,7 +3,7 @@
 //! module drive.
 
 use super::class::{
-    class_def_of, lower_isinstance, lower_issubclass, mro_attr_count, mro_attrs,
+    class_def_of, class_source_name, lower_isinstance, lower_issubclass, mro_attrs,
     rewrite_exception_to_message, rewrite_instance_to_repr, self_expr,
 };
 use super::{
@@ -272,9 +272,13 @@ pub(super) fn lower_expr(
                 let ctor = exact_callee(callee, owner, ctor, scopes, classes);
                 return MirExpr::Instantiate(Box::new(InstantiateExpr {
                     ctor,
+                    class_name: class_source_name(callee, classes),
                     // #432: allocate slots for all unique attributes across the
                     // MRO, not just this class's own declared attributes.
-                    attr_count: mro_attr_count(class_def, classes),
+                    slot_names: mro_attrs(class_def, classes)
+                        .into_iter()
+                        .map(|(name, _)| name)
+                        .collect(),
                     args,
                     ty: Ty::Instance(Box::new(callee.clone())),
                 }));
@@ -1049,7 +1053,7 @@ pub(super) fn lower_expr(
             // codegen outright when the two declared types differ.
             //
             // A class attribute still deliberately never enters
-            // `mro_attrs`/`mro_attr_count`, so it occupies no instance slot
+            // `mro_attrs`, so it occupies no instance slot
             // and changes no other attribute's slot index or the allocation
             // size of the class's instances. The one cost of the order is
             // that `mro_attrs` now runs for a class-attribute read too,

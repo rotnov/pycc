@@ -3632,9 +3632,10 @@ fn emit_expr_unchecked<'ctx>(
             build_int_set_add(builder, rt, set_ptr, encoded);
             Scalar::Bool(context.i8_type().const_int(0, false))
         }
-        // `ClassName(args)` (D-154, Part 1 of #375): allocate a fresh,
-        // zero-initialized instance (`pycc_rt_instance_new`, given the
-        // class's own already-resolved `attr_count`), then call the
+        // `ClassName(args)` (D-154, Part 1 of #375): allocate a fresh
+        // instance whose slots are all unassigned (`pycc_rt_instance_new`,
+        // given the class's own already-resolved slot count and, since
+        // #1388, its interned layout descriptor), then call the
         // mangled `__init__` with that pointer as `self`, followed by
         // `args` -- see `MirExpr::Instantiate`'s own doc comment for why
         // this needs `build_call_to_with_leading_args` rather than the
@@ -3642,13 +3643,20 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::Instantiate(inst) => {
             let pycc_mir::InstantiateExpr {
                 ctor,
-                attr_count,
+                class_name,
+                slot_names,
                 args,
                 ..
             } = inst.as_ref();
-            let count = context.i64_type().const_int(*attr_count as u64, false);
+            let count = context.i64_type().const_int(slot_names.len() as u64, false);
+            let (layout, layout_len) =
+                attr_slot::instance_layout_constant(context, module, class_name, slot_names);
             let instance_ptr = builder
-                .build_call(rt.instance_new, &[count.into()], "instance_new")
+                .build_call(
+                    rt.instance_new,
+                    &[count.into(), layout.into(), layout_len.into()],
+                    "instance_new",
+                )
                 .expect("build_call should not fail for a well-formed instance allocation")
                 .try_as_basic_value()
                 .expect_basic("pycc_rt_instance_new returns a non-void pointer")
@@ -3675,8 +3683,10 @@ fn emit_expr_unchecked<'ctx>(
             Scalar::Instance(instance_ptr)
         }
         // `base.attr` (D-154, Part 1 of #375): read the raw slot word via
-        // the opaque `pycc_rt_instance_get_slot` accessor (never a direct
-        // `GEP`, per the class-instance-layout ADR), then reinterpret it as
+        // the opaque `pycc_rt_instance_get_slot_checked` accessor (never a
+        // direct `GEP`, per the class-instance-layout ADR) -- which raises
+        // `AttributeError` for a slot not yet assigned (#1388), the raise
+        // `expression_can_set_exception` guards -- then reinterpret it as
         // the attribute's own declared `Ty` -- see `slot_word_to_scalar`'s
         // own doc comment for the conversion and its own reachable-`Ty`
         // scope.
@@ -3686,13 +3696,13 @@ fn emit_expr_unchecked<'ctx>(
             let slot_index = context.i64_type().const_int(*slot as u64, false);
             let raw = builder
                 .build_call(
-                    rt.instance_get_slot,
+                    rt.instance_get_slot_checked,
                     &[base_ptr.into(), slot_index.into()],
                     "instance_get_slot",
                 )
                 .expect("build_call should not fail for a well-formed attribute read")
                 .try_as_basic_value()
-                .expect_basic("pycc_rt_instance_get_slot returns a non-void i64")
+                .expect_basic("pycc_rt_instance_get_slot_checked returns a non-void i64")
                 .into_int_value();
             slot_word_to_scalar(context, builder, raw, ty)
         }
@@ -5506,7 +5516,8 @@ pub fn compile_to_object_with_options(
 /// member is a compile-time singleton instance that must be alive before
 /// any top-level code reads it. For each enum class with members, and each
 /// member in source order, allocate a fresh 2-slot instance
-/// (`pycc_rt_instance_new(2)`), set slot 0 to the member's `int` or `str`
+/// (`pycc_rt_instance_new(2, NULL, 0)` -- no layout descriptor, since both
+/// slots are assigned right here, before any code can read them), set slot 0 to the member's `int` or `str`
 /// value per its `EnumMemberValue` (#892 widened this from `int` alone),
 /// set slot 1 to a string pointer containing the member name, and store
 /// the instance pointer into the synthetic global
@@ -5527,8 +5538,16 @@ fn emit_enum_member_inits<'ctx>(
             let slot = &module_globals[&global_name];
             // Allocate a fresh 2-slot instance.
             let count = context.i64_type().const_int(2, false);
+            let no_layout = context
+                .ptr_type(inkwell::AddressSpace::default())
+                .const_null();
+            let no_layout_len = context.i64_type().const_zero();
             let instance_ptr = builder
-                .build_call(rt.instance_new, &[count.into()], "enum_instance_new")
+                .build_call(
+                    rt.instance_new,
+                    &[count.into(), no_layout.into(), no_layout_len.into()],
+                    "enum_instance_new",
+                )
                 .expect("build_call should not fail for a well-formed enum member allocation")
                 .try_as_basic_value()
                 .expect_basic("pycc_rt_instance_new returns a non-void pointer")

@@ -309,9 +309,9 @@ fn a_module_with_more_user_exception_classes_than_tags_is_rejected() {
     // #1292 appended `ImportError`/`ModuleNotFoundError`, shrinking it to 228;
     // #1316 reserved tag 255 for a bridged non-`Exception` `BaseException`,
     // shrinking it to 227; #1369 appended `AssertionError`, shrinking it to
-    // 226.
+    // 226; #1388 appended `AttributeError`, shrinking it to 225.
     assert!(
-        text.contains("at most 226"),
+        text.contains("at most 225"),
         "unexpected diagnostic: {text}"
     );
 }

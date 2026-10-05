@@ -2098,7 +2098,8 @@ mod tests {
                     target: "h".to_string(),
                     value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
                         ctor: "Holder.__init__".to_string(),
-                        attr_count: 1,
+                        class_name: "C".to_string(),
+                        slot_names: vec!["s0".to_string()],
                         args: vec![MirExpr::IntLiteral(0)],
                         ty: self_ty.clone(),
                     })),

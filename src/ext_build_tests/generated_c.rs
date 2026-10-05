@@ -1395,7 +1395,7 @@ fn a_constructor_buffer_parameter_its_body_stores_into_is_acquired_writable() {
             name: "Grid.__init__".to_string(),
             params: vec![Ty::MemoryView],
             param_writable: vec![true],
-            slot_count: 1,
+            slot_names: vec!["w".to_string()],
         }],
     );
     assert!(
@@ -1881,13 +1881,13 @@ fn instance_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) ->
     }
 }
 
-fn grid_ctor(params: Vec<Ty>, slot_count: usize) -> ExtCtor {
+fn grid_ctor(params: Vec<Ty>, slot_names: &[&str]) -> ExtCtor {
     ExtCtor {
         class: "Grid".to_string(),
         name: "Grid.__init__".to_string(),
         param_writable: vec![false; params.len()],
         params,
-        slot_count,
+        slot_names: slot_names.iter().map(ToString::to_string).collect(),
     }
 }
 
@@ -1930,7 +1930,7 @@ fn a_constructible_class_gets_a_tp_init_three_slots_and_a_carrier_sized_spec() {
         &[instance_export("Grid", "area", vec![], Ty::Int)],
         &[],
         &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
-        &[grid_ctor(vec![Ty::Int, Ty::Int], 2)],
+        &[grid_ctor(vec![Ty::Int, Ty::Int], &["w", "h"])],
     );
     assert!(
         inc.contains(
@@ -1980,7 +1980,7 @@ fn a_constructible_class_gets_a_tp_init_three_slots_and_a_carrier_sized_spec() {
     // instance first -- the same shape `MirExpr::Instantiate` emits.
     assert!(
         inc.contains(
-            "    inst = pycc_rt_instance_new(2);\n    \
+            "    inst = pycc_rt_instance_new(2, \"Grid\\000w\\000h\", 8);\n    \
              Py_ssize_t bridge_mark = pycc_ext_bridge_mark();\n    \
              ((void (*)(void *, long long, long long))fnptr_0m4_Grid8___init__)\
              (inst, a0, a1);\n"
@@ -2035,7 +2035,7 @@ fn a_zero_argument_constructor_declares_a_receiver_only_parameter_list() {
         &[instance_export("Grid", "area", vec![], Ty::Int)],
         &[],
         &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
-        &[grid_ctor(Vec::new(), 0)],
+        &[grid_ctor(Vec::new(), &[])],
     );
     assert!(
         inc.contains(
@@ -2047,7 +2047,7 @@ fn a_zero_argument_constructor_declares_a_receiver_only_parameter_list() {
     );
     assert!(
         inc.contains(
-            "    inst = pycc_rt_instance_new(0);\n    \
+            "    inst = pycc_rt_instance_new(0, \"Grid\", 4);\n    \
              Py_ssize_t bridge_mark = pycc_ext_bridge_mark();\n    \
              ((void (*)(void *))fnptr_0m4_Grid8___init__)(inst);\n"
         ),
@@ -2062,7 +2062,7 @@ fn a_one_argument_constructor_says_argument_in_the_singular() {
         &[instance_export("Grid", "area", vec![], Ty::Int)],
         &[],
         &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
-        &[grid_ctor(vec![Ty::Int], 1)],
+        &[grid_ctor(vec![Ty::Int], &["w"])],
     );
     assert!(
         inc.contains("takes exactly 1 argument (%zd given)"),
@@ -2080,7 +2080,7 @@ fn a_memoryview_constructor_releases_its_buffer_on_every_exit_past_the_acquire()
         &[instance_export("Grid", "area", vec![], Ty::Int)],
         &[],
         &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
-        &[grid_ctor(vec![Ty::MemoryView], 1)],
+        &[grid_ctor(vec![Ty::MemoryView], &["w"])],
     );
     assert!(
         inc.contains("    Py_buffer b0;\n    PyccExtBufferView a0;\n"),
@@ -2137,7 +2137,7 @@ fn a_constructor_descriptor_for_an_unpublished_class_emits_nothing() {
     // The class list is `publications` alone, so a constructor descriptor
     // whose class publishes no method must not conjure a type object -- the
     // two sets are deliberately not the same set.
-    let inc = generate_exports_inc("m", &[], &[], &[], &[grid_ctor(vec![Ty::Int], 1)]);
+    let inc = generate_exports_inc("m", &[], &[], &[], &[grid_ctor(vec![Ty::Int], &["w"])]);
     assert!(!inc.contains("pycc_ext_tp_init_Grid"), "{inc}");
     assert!(!inc.contains("PyType_FromSpec"), "{inc}");
 }
@@ -2173,7 +2173,10 @@ fn the_shim_defines_the_carrier_and_the_shared_dealloc_above_the_generated_inclu
         "{shim}"
     );
     assert!(
-        shim.contains("extern void *pycc_rt_instance_new(long long slot_count);"),
+        shim.contains(
+            "extern void *pycc_rt_instance_new(long long slot_count, const char *layout, \
+             size_t layout_len);"
+        ),
         "{shim}"
     );
 }

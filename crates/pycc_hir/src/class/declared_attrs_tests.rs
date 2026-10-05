@@ -125,13 +125,72 @@ fn a_type_parameter_and_a_concrete_type_never_meet_in_one_slot() {
     );
 }
 
+/// #1388: a declaration admits any right-hand side the body lowers -- the
+/// declared type is the slot's, whatever the expression -- including a read
+/// of a slot `__init__` assigned earlier, and one it has not assigned yet,
+/// which raises `AttributeError` at run time instead.
 #[test]
-fn the_rhs_shape_gate_still_applies_under_a_declaration() {
-    let message = c0001(&declared("int", ", n: int", "n + 1"));
+fn a_declaration_admits_any_establishing_expression() {
+    for (params, value) in [
+        (", n: int", "n + 1"),
+        (", n: int", "abs(n)"),
+        (", d: dict[str, int], k: str", "d[k]"),
+        ("", "self.x"),
+    ] {
+        assert_eq!(
+            attrs(&declared("int", params, value)),
+            x(Ty::Int),
+            "{value}"
+        );
+    }
+    assert_eq!(
+        attrs(
+            "class C:\n    a: int\n    b: int\n\n    def __init__(self, n: int) -> None:\n        \
+             self.a = n\n        self.b = self.a * 2\n"
+        ),
+        vec![("a".to_string(), Ty::Int), ("b".to_string(), Ty::Int)]
+    );
+}
+
+/// #1388: inside a PEP 695 generic class the shape gate stays, in both
+/// directions the checker cannot judge -- a concrete declaration assigned an
+/// expression and a type-parameter declaration assigned one.
+#[test]
+fn the_rhs_shape_gate_still_applies_in_a_generic_class() {
+    for (annotation, value) in [("int", "k + 1"), ("T", "v if k else v")] {
+        let message = c0001(&format!(
+            "class Box[T]:\n    x: {annotation}\n\n    def __init__(self, v: T, k: int) -> None:\n        \
+             self.x = {value}\n"
+        ));
+        assert!(
+            message.starts_with("an instance attribute's first assignment inside `__init__` must"),
+            "{value}: {message}"
+        );
+    }
+}
+
+/// #1388: an undeclared attribute keeps the gate, and its message names the
+/// declaration that lifts it.
+#[test]
+fn an_undeclared_attribute_keeps_the_gate_and_names_the_declaration() {
+    let message =
+        c0001("class C:\n    def __init__(self, n: int) -> None:\n        self.x = n + 1\n");
     assert!(
-        message.starts_with("an instance attribute's first assignment inside `__init__` must"),
+        message.ends_with(
+            "is known at compile time -- or declare it in the class body (`x: <type>`), which \
+             admits any expression"
+        ),
         "{message}"
     );
+}
+
+/// In a PEP 695 generic class a declaration keeps the gate, so the
+/// diagnostic does not suggest one.
+#[test]
+fn an_undeclared_attribute_of_a_generic_class_gets_no_declaration_hint() {
+    let message =
+        c0001("class Box[T]:\n    def __init__(self, n: int) -> None:\n        self.x = n + 1\n");
+    assert!(message.ends_with("is known at compile time"), "{message}");
 }
 
 #[test]

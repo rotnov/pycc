@@ -571,6 +571,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
                 &DeclaredAttrs {
                     attrs: &declared,
                     class_name,
+                    generic: type_param.is_some(),
                 },
                 &|annotation| {
                     crate::annotation_to_ty(

@@ -170,7 +170,7 @@ pub(super) fn self_expr(scopes: &[HashMap<String, Ty>]) -> MirExpr {
 ///
 /// The resulting flat `(name, ty)` list's indices are the slot indices used
 /// at runtime -- the instance is allocated with exactly this many slots
-/// (`mro_attr_count`), and every `AttrGet`/`AttrSet` resolves its slot index
+/// (`InstantiateExpr::slot_names`), and every `AttrGet`/`AttrSet` resolves its slot index
 /// against this flat layout, not the individual class's own `attrs` list.
 /// `pycc_hir`'s #969 layout gate computes the same layout to reject a
 /// multiple-inheritance shape whose bases' layouts cannot all be embedded
@@ -191,14 +191,28 @@ pub(super) fn mro_attrs(
     pycc_hir::flat_attr_layout(&mro_defs)
 }
 
-/// #432: Returns the total number of attribute slots for a class, computed
-/// from its MRO's flat attribute layout. Used by `Instantiate` to allocate
-/// the correct number of slots.
-pub(super) fn mro_attr_count(
-    class_def: &HirClassDef,
-    classes: &HashMap<String, HirClassDef>,
-) -> usize {
-    mro_attrs(class_def, classes).len()
+/// #1388: the source name of class `name`, as CPython's `type(x).__name__`
+/// spells it. A class `pycc_types` monomorphised from a generic one is named
+/// `0gen_<G>__<T>_<concrete>`; its source name is the generic class `G`
+/// whose own type parameter `T` that mangling starts with. When several
+/// generic classes match (`G` and a `G__T_x` that happens to share the
+/// prefix), the longest name wins -- two matches of equal length are
+/// prefixes of the same string and so the same name -- and the answer does
+/// not depend on map order. Every other class is its own source name.
+pub(super) fn class_source_name(name: &str, classes: &HashMap<String, HirClassDef>) -> String {
+    let Some(mangled) = name.strip_prefix("0gen_") else {
+        return name.to_string();
+    };
+    classes
+        .iter()
+        .filter(|(generic, def)| {
+            def.type_param
+                .as_deref()
+                .is_some_and(|param| mangled.starts_with(&format!("{generic}__{param}_")))
+        })
+        .map(|(generic, _)| generic)
+        .max_by_key(|generic| generic.len())
+        .map_or_else(|| mangled.to_string(), Clone::clone)
 }
 
 // ---------------------------------------------------------------------------

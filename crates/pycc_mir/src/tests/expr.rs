@@ -1032,7 +1032,8 @@ fn collect_named_expr_bindings_walks_into_dict_get_or_default_key_and_default() 
 fn collect_named_expr_bindings_walks_into_every_instantiate_arg() {
     let mir = MirExpr::Instantiate(Box::new(InstantiateExpr {
         ctor: "C.__init__".to_string(),
-        attr_count: 1,
+        class_name: "C".to_string(),
+        slot_names: vec!["s0".to_string()],
         args: vec![MirExpr::NamedExpr {
             name: "a".to_string(),
             value: Box::new(MirExpr::IntLiteral(1)),
