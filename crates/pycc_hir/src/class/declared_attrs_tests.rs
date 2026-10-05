@@ -242,18 +242,22 @@ fn a_declared_type_without_a_slot_representation_is_refused() {
         c0001("class C:\n    x: None\n"),
         "instance attribute `x` declared in class `C` has type `None`, which has no \
          instance-slot representation -- a class-body declaration admits only `int`, `float`, \
-         `bool`, `str`, a type parameter, `list[int]`, `dict[str, int]`, or a class a foreign \
-         import binds"
+         `bool`, `str`, a type parameter, `list[int]`, `dict[str, int]`, a class of this \
+         program, or a class a foreign import binds"
     );
     for annotation in [
         "set[int]",
         "tuple[int, int]",
         "int | None",
-        "D",
+        "P",
         "memoryview",
     ] {
+        // `P` is a protocol: a protocol-typed value has no one concrete
+        // representation for a slot word to hold (#1389 admits only a
+        // concrete class).
         let message = c0001(&format!(
-            "class D:\n    pass\n\n\nclass C:\n    x: {annotation}\n"
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    def f(self) -> int: \
+             ...\n\n\nclass C:\n    x: {annotation}\n"
         ));
         assert!(
             message.starts_with("instance attribute `x` declared in class `C` has type `"),

@@ -897,15 +897,15 @@ fn an_implicitly_rebound_dunder_still_requires_self() {
 
 /// `collect_init_attrs`' companion: `slot_ty_from_init_rhs` resolves an RHS
 /// naming the receiver through the *source* spelling, so a renamed receiver
-/// reaches the same "cannot establish an attribute of type `C`" rejection its
-/// `self`-spelled twin does -- not the unresolvable-name one -- and the
+/// establishes the same instance-typed slot its `self`-spelled twin does
+/// (#1389) -- not the unresolvable-name rejection -- and an unknown name's
 /// message quotes the receiver as the user spelled it.
 #[test]
-fn an_init_rhs_naming_a_renamed_receiver_reports_the_receivers_own_type() {
-    refused(
+fn an_init_rhs_naming_a_renamed_receiver_resolves_to_the_receivers_own_type() {
+    twins_agree(
         "1181_init_rhs_receiver",
-        "class C:\n    def __init__(this, v: int) -> None:\n        this.x = this\n",
-        "`this.<attr> = this` cannot establish an attribute of type `C`",
+        "class C:\n    def __init__(this, v: int) -> None:\n        this.v = v\n        \
+         this.x = this\nc = C(4)\nprint(c.x.x.v)\n",
     );
     refused(
         "1181_init_rhs_unknown",
