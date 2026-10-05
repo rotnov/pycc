@@ -409,10 +409,11 @@ pub enum MirExpr {
     /// object never becomes a pycc value and the whole operation has one
     /// failure edge instead of two.
     ///
-    /// `args` are already-checked scalars (`pycc_types`' `HirExpr::MethodCall`
-    /// arm admits `int`/`float`/`bool`/`str` and refuses everything else with
-    /// `I0404`); codegen marshals each one into a `PyObject *` before the
-    /// call.
+    /// `args` are already-checked packable operands (`pycc_types`'
+    /// `HirExpr::MethodCall` arm admits `int`/`float`/`bool`/`str` and, since
+    /// Part 2a of #1371, another object, and refuses everything else with
+    /// `I0404`); codegen marshals each one into a new `PyObject *` reference
+    /// before the call.
     ///
     /// The call can fail -- a missing method, or a method that raises --
     /// which is why `pycc_codegen::exception::expression_can_set_exception`

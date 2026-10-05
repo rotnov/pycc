@@ -143,6 +143,28 @@ fn a_project_imported_name_keeps_its_located_type_argument_diagnostics() {
     assert!(diagnostic.span.is_some());
 }
 
+/// The class-like rule asks only whether the `from` import resolved to a
+/// project module, not what the name is: a table a sibling module binds
+/// (`from dep import TABLE`, here a dict; an `object` table under `--ext` is
+/// the same name to this rule) is read as a class too, so `TABLE[k](x)`
+/// takes the generic-instantiation path and is refused there -- the
+/// documented residual, a refusal and never wrong code.
+#[test]
+fn a_project_imported_object_table_is_read_as_class_like() {
+    let diagnostic = lower_importing(
+        Some("TABLE = {\"len\": 1}\n"),
+        "from dep import TABLE\n\nk = 'len'\nTABLE[k](1)\n",
+    )
+    .expect_err("a project-imported name is class-like");
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic
+            .message
+            .contains("a generic class type argument `k` is not supported yet"),
+        "{diagnostic:?}"
+    );
+}
+
 /// The same `from` import answered as a CPython module binds no class-like
 /// name, so `Reg[k](x)` on it lowers to a call of a subscript result.
 #[test]

@@ -182,6 +182,13 @@ fn an_object_argument_is_packed_with_the_object_packer() {
 
 /// The routing allowlist: exactly the shim's own new-reference producers
 /// are consumed; a name read, a scalar and every other node are borrowed.
+///
+/// The pycc-side calls matter most among the borrowed ones: a pycc
+/// `__class_getitem__` (`Reg["x"]`), and any pycc function or method
+/// returning `object`, lowers to `MirExpr::Call` and hands back a borrowed
+/// pointer (`docs/RUNTIME.md`), so consuming it would underflow the
+/// refcount. A pycc instance's `object` slot read (`MirExpr::AttrGet`) is
+/// borrowed the same way.
 #[test]
 fn only_shim_producers_are_consumed_callees() {
     let produced = [
@@ -207,7 +214,24 @@ fn only_shim_producers_are_consumed_callees() {
     for callee in &produced {
         assert!(callee_is_produced(callee), "{callee:?}");
     }
-    for callee in [product(), MirExpr::IntLiteral(1)] {
+    let borrowed = [
+        product(),
+        MirExpr::IntLiteral(1),
+        MirExpr::Call {
+            callee: "Reg.__class_getitem__.static".to_string(),
+            args: vec![MirExpr::StringLiteral("x".to_string())],
+            ty: Ty::Object,
+        },
+        MirExpr::AttrGet {
+            base: Box::new(MirExpr::Name {
+                name: "self".to_string(),
+                ty: Ty::Instance(Box::new("C".to_string())),
+            }),
+            slot: 0,
+            ty: Ty::Object,
+        },
+    ];
+    for callee in borrowed {
         assert!(!callee_is_produced(&callee), "{callee:?}");
     }
 }

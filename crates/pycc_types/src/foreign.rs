@@ -85,7 +85,8 @@
 //! no keyword arguments at all) whose types are `int`, `float`, `bool` or
 //! `str` -- the four scalars the shim has a `pycc_ext_obj_pack_*` helper
 //! for -- and refuses every other argument type with
-//! [`object_operation_unsupported`], including a second `Ty::Object`. The
+//! [`object_operation_unsupported`]; Part 2a of #1371 widened the admitted
+//! set with a second `Ty::Object` (packed by `pycc_ext_obj_pack_object`). The
 //! call inherits the positional bound unchanged: the base is read through
 //! the same `HirExpr::Name` arm.
 //!
@@ -121,9 +122,9 @@
 //! `AttrGet` arm does), so a key is now a fourth place a foreign value can
 //! be consumed. The admitted keys are the same four scalars a method call's
 //! arguments are -- `int`, `float`, `bool`, `str`, the ones with a
-//! `pycc_ext_obj_pack_*` helper -- and every other key type, including a
-//! second [`Ty::Object`], is refused with
-//! [`object_operation_unsupported`] naming the key's type.
+//! `pycc_ext_obj_pack_*` helper -- and every other key type is refused with
+//! [`object_operation_unsupported`] naming the key's type. Part 2a of #1371
+//! widened the admitted keys with a second [`Ty::Object`].
 //!
 //! Only the **load** is admitted. `o[k] = v` stays refused: it is a
 //! different HIR shape, which `pycc_hir` rejects with `C0001` ("only

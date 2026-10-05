@@ -1667,11 +1667,12 @@ pub(crate) fn infer_expr_in(
             // `resolve_method_call`, whose `Ty::Object` base reports the
             // `T0043` ("not a class instance") that this branch replaces.
             //
-            // Only the already-admitted scalars can be marshalled: each has
-            // a `pycc_ext_obj_pack_*` helper in the shim. Anything else --
-            // a container, an instance, `None`, or a second `Ty::Object` --
-            // has no boundary representation yet and is refused here rather
-            // than reaching codegen.
+            // Only the packable operands can be marshalled: the four
+            // scalars and another `Ty::Object` (Part 2a of #1371), each with
+            // a `pycc_ext_obj_pack_*` helper in the shim. Anything else -- a
+            // container, an instance, `None` -- has no boundary
+            // representation yet and is refused here rather than reaching
+            // codegen.
             if matches!(base_ty, Ty::Object) {
                 crate::foreign::check_object_call_args(&arg_tys, "method")?;
                 return Ok(Ty::Object);

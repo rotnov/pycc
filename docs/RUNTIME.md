@@ -1161,7 +1161,9 @@ module-body statements never run.
 the whole operation: the helper tolerates a `NULL` key and answers `NULL`
 itself, so a failed key packer needs no branch of its own, the same fusing
 `pycc_ext_obj_len`'s encode arm uses for the same reason. The key is restricted
-to the four packable scalars, so the packer choice is total. In a function
+to the packable operands -- the four scalars and, since Part 2a of #1371,
+another `object` (`pycc_ext_obj_pack_object`, below) -- so the packer choice is
+total. In a function
 body the load takes the bridged edge (#1316).
 
 **A `for` loop fails on that same edge twice, and stays module-body only.**
@@ -1400,7 +1402,9 @@ consumes that reference on every path. A `NULL` operand raises `SystemError`
 and yields `NULL`, which the consuming helper passes straight to its failure
 edge. Part 2a also admits a *computed* callee, `callbacks[k](x)`. The callee
 is chosen by allowlist: when it is a reference the shim has just produced
-(a subscript load, an attribute load, a method call or another call), codegen
+(a subscript load, which is the only such callee the source language can spell today; the
+allowlist also names an attribute load, a method call and another call so
+that a later part admitting them inherits the right ownership), codegen
 calls the consuming `pycc_ext_obj_call`, which releases the callee after the
 call on every path, so a `callbacks[k](x)` inside a loop is refcount-neutral
 on the callee. Any other callee (a name, a loop target, a pycc
