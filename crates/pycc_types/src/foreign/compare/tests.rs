@@ -176,6 +176,17 @@ fn isinstance_against_a_local_shadowing_a_compiled_class_tests_the_local() {
     );
 }
 
+/// A local spelled like a builtin class shadows it too: a native `list`
+/// local is then a `list[int]` class argument, which stays refused.
+#[test]
+fn isinstance_against_a_local_shadowing_a_builtin_class_tests_the_local() {
+    assert_refused(
+        "def f() -> bool:\n    list = [1]\n    return isinstance(numpy.e, list)\n",
+        "I0404",
+        "against a `list[int]` value",
+    );
+}
+
 /// Part 7 of #1371: the compiled classes that have no exported CPython type
 /// object of their own kind are refused, each naming its kind.
 #[test]

@@ -112,17 +112,16 @@ pub(super) fn lower_object_isinstance(
     classes: &HashMap<String, HirClassDef>,
     current_class: Option<&str>,
 ) -> MirExpr {
-    let builtin = match class_arg {
-        HirExpr::Name(name) => ObjBuiltinClass::from_name(name),
+    // A local or parameter spelled like a builtin or a compiled class
+    // shadows it, as in CPython: it is then the evaluated class argument.
+    let unshadowed = match class_arg {
+        HirExpr::Name(name) if !scopes.iter().any(|scope| scope.contains_key(name)) => Some(name),
         _ => None,
     };
-    let class = match (builtin, class_arg) {
+    let builtin = unshadowed.and_then(|name| ObjBuiltinClass::from_name(name));
+    let class = match (builtin, unshadowed) {
         (Some(builtin), _) => ObjIsInstanceClass::Builtin(builtin),
-        // A local or parameter spelled like a compiled class shadows it.
-        (None, HirExpr::Name(name))
-            if classes.contains_key(name)
-                && !scopes.iter().any(|scope| scope.contains_key(name)) =>
-        {
+        (None, Some(name)) if classes.contains_key(name) => {
             ObjIsInstanceClass::Compiled(name.clone())
         }
         (None, _) => ObjIsInstanceClass::Object(Box::new(lower_expr(

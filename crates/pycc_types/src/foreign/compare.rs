@@ -183,14 +183,15 @@ pub(crate) fn check_object_isinstance(
             "testing a CPython object with `isinstance` against a tuple of classes",
         ));
     }
-    if let HirExpr::Name(name) = class_arg {
+    // A local or parameter spelled like a builtin or a compiled class
+    // shadows it, as in CPython: it is then the evaluated operand below.
+    if let HirExpr::Name(name) = class_arg
+        && !local_names.contains(&name.as_str())
+    {
         if is_object_isinstance_builtin(name) {
             return Ok(Ty::Bool);
         }
-        // A local or parameter spelled like a compiled class shadows it, as
-        // in CPython: it is then the evaluated `object` operand below.
-        let shadowed = local_names.contains(&name.as_str());
-        if let Some(class_def) = env.lookup_class(name).filter(|_| !shadowed) {
+        if let Some(class_def) = env.lookup_class(name) {
             return match compiled_class_refusal(class_def) {
                 None => Ok(Ty::Bool),
                 Some(kind) => Err(object_operation_unsupported(&format!(

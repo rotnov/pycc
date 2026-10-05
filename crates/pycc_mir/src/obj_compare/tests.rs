@@ -231,6 +231,29 @@ fn a_local_shadowing_a_compiled_class_is_an_evaluated_object_class() {
     );
 }
 
+/// A local spelled like a builtin class shadows it in the same way.
+#[test]
+fn a_local_shadowing_a_builtin_class_is_an_evaluated_object_class() {
+    let scopes = vec![[("list".to_string(), Ty::Object)].into_iter().collect()];
+    let lowered = lower_object_isinstance(
+        lower_discarded(numpy_attr("pi")),
+        &HirExpr::Name("list".to_string()),
+        &scopes,
+        &HashMap::new(),
+        None,
+    );
+    assert!(
+        matches!(
+            &lowered,
+            MirExpr::ObjIsInstance {
+                class: ObjIsInstanceClass::Object(_),
+                ..
+            }
+        ),
+        "{lowered:?}"
+    );
+}
+
 /// A walrus can hide in either operand of a comparison, and in either
 /// argument of `isinstance`; a binding missed there is a local codegen
 /// never allocates storage for.
