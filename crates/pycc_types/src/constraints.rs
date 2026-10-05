@@ -1962,6 +1962,18 @@ pub(crate) fn collect_expr_constraints(
             }
             Ok(Some(Ok(Ty::Instance(Box::new(class.clone())))))
         }
+        // Part 2a of #1371: `table[k](args)`. A callee whose term is a
+        // concrete `object` answers `object`, on the `MethodCall` arm's own
+        // reasoning; any other callee yields no term and the check phase
+        // refuses it (`foreign::subscript_call`).
+        HirExpr::ExprCall { callee, args } => {
+            let callee_term =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, callee)?;
+            for arg in args {
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, arg)?;
+            }
+            Ok(object_lift::method_call_on_object(callee_term.as_ref()))
+        }
         // #433: `Super` carries no sub-expressions to recurse into and
         // produces no unification term — it is a compile-time marker only
         // meaningful as the base of a `MethodCall`/`AttrGet`, which the
@@ -2202,6 +2214,13 @@ fn bind_named_expr_targets(
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, call)
         }
         HirExpr::GenericClassInstantiate { args, .. } => {
+            for arg in args {
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, arg)?;
+            }
+            Ok(())
+        }
+        HirExpr::ExprCall { callee, args } => {
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, callee)?;
             for arg in args {
                 bind_named_expr_targets(signatures, parents, concrete, deferred, env, arg)?;
             }

@@ -439,14 +439,22 @@ pub enum MirExpr {
     /// `callee(args)` where `callee` is any name typed `Ty::Object` (#1313)
     /// -- `product("ab", "cd")` after `from itertools import product`, or a
     /// call of a `for` loop target bound to an object -- the direct-call
-    /// sibling of [`MirExpr::ObjMethodCall`] directly above. `callee` is a
-    /// plain [`MirExpr::Name`] read, which codegen loads as a *borrow* of a
-    /// reference the caller keeps (a retained module global, or a `for`
-    /// loop target's slot); the shim's `pycc_ext_obj_call_borrowed`
-    /// therefore takes its own reference before delegating to the consuming
-    /// `pycc_ext_obj_call`.
+    /// sibling of [`MirExpr::ObjMethodCall`] directly above -- or, since
+    /// Part 2a of #1371, a call of an `object`-typed subscript result
+    /// (`callbacks[k](tok)`, from `pycc_hir`'s `HirExpr::ExprCall`).
     ///
-    /// `args` are already-checked scalars under the method call's rule
+    /// The callee's shape decides who owns it
+    /// (`pycc_codegen::foreign_call::callee_is_produced`): a shim producer
+    /// ([`MirExpr::ObjSubscript`], [`MirExpr::ObjAttrGet`],
+    /// [`MirExpr::ObjMethodCall`] or another `ObjCall`) yields a new
+    /// reference the consuming `pycc_ext_obj_call` releases; every other
+    /// callee -- a [`MirExpr::Name`] read, which codegen loads as a *borrow*
+    /// of a reference the caller keeps (a retained module global, or a `for`
+    /// loop target's slot) -- goes to `pycc_ext_obj_call_borrowed`, which
+    /// takes its own reference first.
+    ///
+    /// `args` are already-checked packable operands (scalars or `object`)
+    /// under the method call's rule
     /// (`pycc_types`' `check_object_call_args`). The call can fail -- the
     /// object is not callable, or the call raises -- which is why
     /// `pycc_codegen::exception::expression_can_set_exception` answers
@@ -1173,8 +1181,9 @@ impl MirExpr {
             // hide in an argument (`numpy.seed((n := 1))`) just as easily as
             // in the base, and a binding missed here is a name codegen never
             // allocates storage for.
-            // #1313: a direct call's callee is a plain `Name`, but its
-            // arguments can hide a walrus exactly as a method call's can.
+            // #1313: a direct call's arguments can hide a walrus exactly as
+            // a method call's can, and since Part 2a of #1371 so can its
+            // callee (`t[(k := 1)](x)`).
             MirExpr::ObjMethodCall { base, args, .. }
             | MirExpr::ObjCall { callee: base, args } => {
                 base.collect_named_expr_bindings(out);

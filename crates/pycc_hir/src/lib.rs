@@ -732,6 +732,16 @@ pub enum HirExpr {
         type_arg: Ty,
         args: Vec<HirExpr>,
     },
+    /// Part 2a of #1371: a positional call whose callee is a subscript
+    /// result, `table[k](args)`, when the subscript is not a generic class
+    /// instantiation (`expr::subscript_call` owns the rule). `callee` is
+    /// always a lowered [`HirExpr::Subscript`]. `pycc_types` admits it only
+    /// when the callee is a CPython object (`Ty::Object`), and MIR lowers it
+    /// to `MirExpr::ObjCall` with the subscript as the callee.
+    ExprCall {
+        callee: Box<HirExpr>,
+        args: Vec<HirExpr>,
+    },
     /// Zero-arg `super()` (PEP 3135, #433): represents the implicit
     /// `super(__class__, self)` reference available inside a method body.
     /// Only ever appears as the `base` of a `HirExpr::MethodCall` or

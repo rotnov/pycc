@@ -40,6 +40,7 @@ mod container_call;
 pub(crate) mod keyword_bind;
 pub(crate) mod receiver_dispatch;
 mod std_receiver;
+mod subscript_call;
 pub(crate) mod unobservable;
 
 pub(crate) use bin_op_kind::bin_op_kind;
@@ -612,34 +613,19 @@ pub(crate) fn lower_expr(
                     signatures,
                 );
             }
-            // PEP 695 (#387): `C[int](args)` — a generic class instantiation.
-            // The call's func is a `Subscript` with a bare-name base (the
-            // class name) and a bare-name slice (the type argument). The
-            // type argument is resolved to a `Ty` here, at HIR-lowering
-            // time, using the same bare-name-to-`Ty` mapping
-            // `annotation_to_ty` uses for scalar types (int/float/bool/str)
-            // — no `aliases` context is needed since PEP 695 generic class
-            // instantiation is scoped to scalar-only types (D-133/D-134).
+            // PEP 695 (#387): `C[int](args)` — a generic class
+            // instantiation — or, since Part 2a of #1371, a call of a
+            // subscript result (`table[k](args)`). `subscript_call` owns the
+            // rule that tells the two apart.
             if let Expr::Subscript(sub) = call.func.as_ref() {
-                let Expr::Name(gen_class_name) = sub.value.as_ref() else {
-                    return Err(unsupported(
-                        "calling a subscript expression is not supported yet \
-                         (only a generic class instantiation `C[type](args)` is)",
-                        pycc_ast::expr_range(&call.func),
-                    ));
-                };
-                let type_arg = type_arg_name_to_ty(&sub.slice)?;
-                let args = call
-                    .arguments
-                    .args
-                    .iter()
-                    .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
-                    .collect::<Result<Vec<_>, _>>()?;
-                return Ok(HirExpr::GenericClassInstantiate {
-                    class: gen_class_name.id.as_str().to_string(),
-                    type_arg,
-                    args,
-                });
+                return subscript_call::lower(
+                    call,
+                    sub,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                );
             }
             // #433: a bare `super()` not used as a method-call or
             // attribute-access base (e.g. `x = super()`) has no useful
@@ -1051,6 +1037,9 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
         }
         HirExpr::ReceiverDispatchedCall { call, .. } => contains_named_expr(call),
         HirExpr::GenericClassInstantiate { args, .. } => args.iter().any(contains_named_expr),
+        HirExpr::ExprCall { callee, args } => {
+            contains_named_expr(callee) || args.iter().any(contains_named_expr)
+        }
         HirExpr::Comprehension(comp) => comprehension::comprehension_contains_named_expr(comp),
     }
 }

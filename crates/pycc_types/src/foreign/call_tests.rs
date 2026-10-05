@@ -59,17 +59,25 @@ fn a_zero_argument_call_is_admitted() {
 }
 
 #[test]
-fn a_non_scalar_argument_is_refused() {
+fn a_non_packable_argument_is_refused() {
     refused(
         &format!("{FROM_FORM}product([1])\n"),
         "I0404",
         "passing a `list[int]` argument to a CPython object's call",
     );
     refused(
-        &format!("{FROM_FORM}product(product)\n"),
+        &format!("{FROM_FORM}product(None)\n"),
         "I0404",
-        "passing a `object` argument to a CPython object's call",
+        "argument to a CPython object's call",
     );
+}
+
+/// Part 2a of #1371: a second CPython object is packable
+/// (`pycc_ext_obj_pack_object`), so passing one as an argument is admitted.
+#[test]
+fn an_object_argument_is_admitted() {
+    admitted(&format!("{FROM_FORM}product(product)\n"));
+    admitted(&format!("{FROM_FORM}product(1, product, \"ab\")\n"));
 }
 
 /// #1316: a direct call of a module-level foreign name is admitted in an

@@ -1393,6 +1393,27 @@ pub(super) fn lower_expr(
                 ty,
             }
         }
+        // Part 2a of #1371: `table[k](args)`. `pycc_types` admits the node
+        // only when the callee is a CPython object, so it is the existing
+        // `ObjCall` with a computed callee rather than a `Name` read; the
+        // callee is lowered before the arguments, CPython's order. Codegen
+        // decides from the callee's MIR shape whether the shim borrows or
+        // consumes it (`pycc_codegen::foreign_call::callee_is_produced`).
+        HirExpr::ExprCall { callee, args } => {
+            let callee = lower_expr(callee, scopes, classes, current_class);
+            debug_assert_eq!(
+                callee.ty(),
+                Ty::Object,
+                "pycc_types admits a call of a subscript result only on a CPython object"
+            );
+            MirExpr::ObjCall {
+                callee: Box::new(callee),
+                args: args
+                    .iter()
+                    .map(|a| lower_expr(a, scopes, classes, current_class))
+                    .collect(),
+            }
+        }
         // PEP 695 (#387): `GenericClassInstantiate` should never reach MIR
         // — `pycc_types::monomorphize` rewrites every
         // `GenericClassInstantiate` expression to an ordinary
@@ -1653,6 +1674,12 @@ pub(super) fn pre_bind_named_expr_targets(
             pre_bind_named_expr_targets(call, scopes, classes, current_class)
         }
         HirExpr::GenericClassInstantiate { args, .. } => {
+            for arg in args {
+                pre_bind_named_expr_targets(arg, scopes, classes, current_class);
+            }
+        }
+        HirExpr::ExprCall { callee, args } => {
+            pre_bind_named_expr_targets(callee, scopes, classes, current_class);
             for arg in args {
                 pre_bind_named_expr_targets(arg, scopes, classes, current_class);
             }

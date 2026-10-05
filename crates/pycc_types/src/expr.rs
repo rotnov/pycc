@@ -1221,11 +1221,12 @@ pub(crate) fn infer_expr_in(
                 // diagnostic rather than this one, exactly as the
                 // `MethodCall` arm below orders the same two concerns.
                 //
-                // Only the already-admitted scalars can be marshalled into
-                // a key: each has a `pycc_ext_obj_pack_*` helper in the
-                // shim, and the packer contract is the same one a method
-                // call's arguments use. Anything else -- a container, an
-                // instance, `None`, or a second `Ty::Object` -- has no
+                // Only a packable operand can be marshalled into a key
+                // (`foreign::is_packable_operand`: the four scalars and,
+                // since Part 2a of #1371, a second `object`): each has a
+                // `pycc_ext_obj_pack_*` helper in the shim, and the packer
+                // contract is the same one a call's arguments use. Anything
+                // else -- a container, an instance or `None` -- has no
                 // boundary representation yet and is refused here rather
                 // than reaching codegen.
                 //
@@ -1237,7 +1238,7 @@ pub(crate) fn infer_expr_in(
                 // `docs/TYPE_SYSTEM.md`'s `object` row records the
                 // asymmetry.
                 Ty::Object => {
-                    if !matches!(index_ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str) {
+                    if !crate::foreign::is_packable_operand(&index_ty) {
                         return Err(crate::foreign::object_operation_unsupported(&format!(
                             "indexing a CPython object with a `{}` key",
                             index_ty.name()
@@ -1708,6 +1709,10 @@ pub(crate) fn infer_expr_in(
         // `T` with `type_arg` in the class's methods) happens later in
         // `pycc_types`' `instantiate_generic_call` / `monomorphize`
         // pipeline, reusing PR-13's generic-function infrastructure.
+        // Part 2a of #1371: `table[k](args)`, a call of a subscript result.
+        HirExpr::ExprCall { callee, args } => {
+            crate::foreign::subscript_call::infer_expr_call(env, local_names, callee, args)
+        }
         HirExpr::GenericClassInstantiate { class, .. } => {
             // Verify the class exists. Genericity (the class has a type
             // parameter) is checked later during monomorphization's rewrite

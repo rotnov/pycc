@@ -383,6 +383,12 @@ impl<'a> Walker<'a> {
                     self.expr(arg);
                 }
             }
+            HirExpr::ExprCall { callee, args } => {
+                self.expr(callee);
+                for arg in args {
+                    self.expr(arg);
+                }
+            }
             HirExpr::NamedExpr { name, value } => {
                 self.name_use(name);
                 self.expr(value);

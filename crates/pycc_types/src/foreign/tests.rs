@@ -570,26 +570,28 @@ fn a_module_scope_subscript_of_a_cpython_object_is_admitted() {
     }
 }
 
-/// Only the four scalars with a `pycc_ext_obj_pack_*` helper may be a key.
-///
-/// The second row is the one the plan singles out: a second `Ty::Object`
-/// key looks like an ordinary foreign value and would reach codegen with no
-/// packer at all, so it is refused here by the same rule a second
-/// `Ty::Object` *argument* to a method call is.
+/// Only an operand with a `pycc_ext_obj_pack_*` helper may be a key: the
+/// four scalars and, since Part 2a of #1371, a second CPython object
+/// (`foreign::is_packable_operand`). Everything else is refused here rather
+/// than reaching codegen with no packer.
 #[test]
-fn a_subscript_key_outside_the_packable_scalars_is_refused() {
-    for snippet in [
-        "numpy.pi[None]\n",
-        "numpy.pi[numpy.e]\n",
-        "numpy.pi[[1]]\n",
-        "numpy.pi[(1, 2)]\n",
-    ] {
+fn a_subscript_key_outside_the_packable_operands_is_refused() {
+    for snippet in ["numpy.pi[None]\n", "numpy.pi[[1]]\n", "numpy.pi[(1, 2)]\n"] {
         assert_refused(
             "`numpy.pi`",
             snippet,
             "I0404",
             "indexing a CPython object with a",
         );
+    }
+}
+
+/// Part 2a of #1371: a second CPython object is a packable key, in both
+/// producer shapes of the key.
+#[test]
+fn an_object_subscript_key_is_admitted() {
+    for (shape, source) in both_producer_shapes("numpy.e[numpy.pi]\n") {
+        assert!(check_foreign(&source).is_none(), "{shape}: {source}");
     }
 }
 
