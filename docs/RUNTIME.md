@@ -1495,6 +1495,19 @@ one divergence: an `int` item or bound outside the inline range reaching
 membership or slice normally, until
 [#1040](https://github.com/rotnov/pycc/issues/1040) widens the packer.
 
+**`and`/`or` boxes a selected native operand and leaks it.** Part 6 of
+[#1371](https://github.com/rotnov/pycc/issues/1371) types `n or o` and
+`o and n` (`n` an `int`, `float`, `bool` or `str`) as `object`
+(`docs/TYPE_SYSTEM.md`, "`and` and `or`"). An object operand passes through
+borrowed, with no reference-count traffic, and its truth test is
+`pycc_ext_obj_truthy`. The native operand is packed by the same packers as an
+argument, on the arm that selects it only; the packer's new reference is the
+node's result and is leaked once per evaluation, as every producer's is. A
+packer `NULL` -- the `OverflowError` for an `int` outside the inline range,
+until [#1040](https://github.com/rotnov/pycc/issues/1040) -- takes the node's
+foreign failure edge. The hosted test runs the object-operand shapes 200 times
+inside a function and pins `sys.getrefcount` of each object operand unchanged.
+
 `len`, a truth test, Part 4's four conversions and Part 4's tuple unpack are
 the operations that add nothing to that leaked set. `pycc_ext_obj_len` answers a `Py_ssize_t` and
 `pycc_ext_obj_truthy` answers a C `int`; neither creates a reference and neither

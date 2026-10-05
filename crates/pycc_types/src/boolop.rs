@@ -19,8 +19,15 @@
 //!   `or` would pick the wrong operand. (A subclass that adds the dunder
 //!   behind a base-typed value is unreachable today: an upcast is refused at
 //!   the call.)
-//! * the opaque CPython object (`I0404`): `if obj:` is admitted, but joining a
-//!   foreign object as a value has no representation yet.
+//!
+//! The opaque CPython object (Part 6 of #1371) is an admitted operand in
+//! both contexts: its truth test is `PyObject_IsTrue` (`pycc_ext_obj_truthy`,
+//! whose raising `__bool__` takes the foreign failure edge), and in value
+//! context it joins an `object` or a boxable `bool`/`int`/`float`/`str` to
+//! `object` ([`bool_op_result_ty`]). Any other pairing with an `object` is
+//! refused with `I0404`, naming the construct, rather than with the `T0021`
+//! "no common type", because a boxing for it is a capability gap, not a
+//! missing union type.
 //!
 //! Value context also refuses a `None`-typed operand, which has no value
 //! pycc can join.
@@ -52,8 +59,28 @@ pub(crate) fn infer_bool_op(
     if truth_only {
         return Ok(Ty::Bool);
     }
-    bool_op_result_ty(op, &left_ty, &right_ty)
-        .ok_or_else(|| no_common_type(op, &left_ty, &right_ty))
+    bool_op_result_ty(op, &left_ty, &right_ty).ok_or_else(|| {
+        if matches!(left_ty, Ty::Object) || matches!(right_ty, Ty::Object) {
+            object_join_unsupported(op, &left_ty, &right_ty)
+        } else {
+            no_common_type(op, &left_ty, &right_ty)
+        }
+    })
+}
+
+/// The `I0404` for an `and`/`or` joining a CPython object with a value
+/// pycc cannot box into one (Part 6 of #1371).
+fn object_join_unsupported(op: BoolOpKind, left: &Ty, right: &Ty) -> Diagnostic {
+    let other = if matches!(left, Ty::Object) {
+        right
+    } else {
+        left
+    };
+    object_operation_unsupported(&format!(
+        "joining a CPython object with a `{}` value in an `{}`",
+        other.name(),
+        op.as_str()
+    ))
 }
 
 /// `Ok(())` when a value of type `ty` may be an operand of `op` in the given
@@ -64,11 +91,10 @@ fn admit_operand(
     ty: &Ty,
     truth_only: bool,
 ) -> Result<(), Diagnostic> {
+    // Part 6 of #1371: an object's truth is `PyObject_IsTrue`; its join is
+    // decided by `bool_op_result_ty` in `infer_bool_op`.
     if matches!(ty, Ty::Object) {
-        return Err(object_operation_unsupported(&format!(
-            "using a CPython object as an `{}` operand",
-            op.as_str()
-        )));
+        return Ok(());
     }
     if !is_truth_testable(ty) {
         return Err(operand_error(format!(

@@ -1451,7 +1451,11 @@ admits a membership test (`k in o`, `k not in o`) of an `int`, `float`, \
 `PySequence_Contains` with a `bool` result, and a slice load \
 (`o[a:b:c]`, any bound omitted) whose bounds are of those same types, \
 answered by the object's own `__getitem__` with a `slice` key; the result \
-is another CPython object. The loop is \
+is another CPython object. Part 6 of #1371 admits `and`/`or` with an \
+object operand: as a condition the object's truth is `PyObject_IsTrue`, \
+and as a value the result is an `object` when the other operand is an \
+`object`, `int`, `float`, `bool` or `str`, a native operand boxed only \
+when it is the one selected. The loop is \
 admitted when the iterable is written as an attribute load \
 (`for x in o.attr:`), a method call (`for x in o.method(...):`) or a bare \
 name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
@@ -1464,7 +1468,8 @@ of any other type, a `match` subject, iterating over a subscript load \
 (`for x in o[k]:`) or inside a comprehension, \
 passing an argument of any other type to one of its methods, to the \
 object itself or to a subscript result, indexing or slicing with a key \
-or bound of any other type, and testing membership of an item of any \
+or bound of any other type, joining an object with a value of any other \
+type in an `and`/`or`, and testing membership of an item of any \
 other type in an object or of an `object` item in a native container \
 (membership between two native values keeps its `C0001`). A subscript call whose base is a bare name and whose key is \
 `int`, `float`, `bool` or `str` (`handlers[int](x)`) is still read as a \
@@ -1491,7 +1496,7 @@ parameter would be inferred as the object and then used as a method-call \
 receiver or called reports `T0021` instead (Part 3 of #1333). The \
 refusal narrows as the later parts of #1026 (the boundary conversions) and \
 of #1371 (calls, subscripts and `raise` on an object, `isinstance` against \
-a pycc class, comparison chains and `and`/`or` over an object) land, and \
+a pycc class, comparison chains over an object) land, and \
 this code is retired when they have.",
         example: "\
 import numpy

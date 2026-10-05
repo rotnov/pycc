@@ -244,7 +244,11 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // #1211 (Part 3 of #1018): `and`/`or` is a truth test, a branch
         // and a join, all infallible. Each operand is emitted through
         // `emit_expr` inside its own arm, which guards that operand where
-        // it is evaluated, so this node adds no edge of its own.
+        // it is evaluated, so this node adds no edge of its own. (Part 6 of
+        // #1371: an `object` operand's truth test raises through
+        // `foreign_len::emit_truthy`'s own failure edge, and boxing a native
+        // operand into an `object` node routes a packer `NULL` through
+        // `foreign_fail::route_null`, both branching immediately.)
         | MirExpr::BoolOp { .. }
         // #1395: a conditional expression is a truth test, a branch and a
         // join, all infallible; `test` and each branch are guarded by their
