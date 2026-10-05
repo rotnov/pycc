@@ -24,10 +24,13 @@
 //! both contexts: its truth test is `PyObject_IsTrue` (`pycc_ext_obj_truthy`,
 //! whose raising `__bool__` takes the foreign failure edge), and in value
 //! context it joins an `object` or a boxable `bool`/`int`/`float`/`str` to
-//! `object` ([`bool_op_result_ty`]). Any other pairing with an `object` is
-//! refused with `I0404`, naming the construct, rather than with the `T0021`
-//! "no common type", because a boxing for it is a capability gap, not a
-//! missing union type.
+//! `object` ([`bool_op_result_ty`]). An operand `admit_operand` refuses on
+//! its own -- `None` in value context, a container, an instance with a truth
+//! dunder -- keeps its `T0021` whatever it is paired with. Of the operands
+//! that pass, an `Optional[T]` or a dunder-free instance paired with an
+//! `object` fails the join and is refused with `I0404`, naming the
+//! construct, rather than with the `T0021` "no common type", because a
+//! boxing for it is a capability gap, not a missing union type.
 //!
 //! Value context also refuses a `None`-typed operand, which has no value
 //! pycc can join.

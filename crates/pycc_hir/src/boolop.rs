@@ -70,7 +70,10 @@ impl BoolOpKind {
 /// scalar `pycc_codegen` can box (`pycc_ext_obj_pack_*`) have one
 /// representation in common -- the CPython object. An `Optional`, `None`, a
 /// container or an instance paired with an `object` has no such boxing, so
-/// it is refused, and `pycc_types` reports that refusal as `I0404`.
+/// this function returns `None`. `pycc_types` refuses a `None`, a container
+/// or an instance whose class defines `__bool__`/`__len__` earlier, with its
+/// operand `T0021`; only an `Optional[T]` or a dunder-free instance reaches
+/// the join and is reported as `I0404`.
 pub fn bool_op_result_ty(op: BoolOpKind, left: &Ty, right: &Ty) -> Option<Ty> {
     if matches!(left, Ty::Object) || matches!(right, Ty::Object) {
         return (is_object_joinable(left) && is_object_joinable(right)).then_some(Ty::Object);
