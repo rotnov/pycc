@@ -4549,6 +4549,141 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  # Pages rewrite, stage 1 (#802): the "Pages gates retired" shape removes both Lighthouse
+  # jobs together with their ci-gate needs and truth-table clauses.
+  def d171_pages_retired_workflow
+    d171_workflow do |workflow|
+      jobs = workflow.fetch("jobs")
+      D171_PAGES_JOBS.each { |job_name| jobs.delete(job_name) }
+      gate = jobs.fetch("ci-gate")
+      gate["needs"] = D171_PAGES_RETIRED_CI_GATE_NEEDS.dup
+      gate.fetch("steps").first["if"] = D171_PAGES_RETIRED_CI_GATE_FAILURE_CONDITION.dup
+      yield workflow if block_given?
+    end
+  end
+
+  def test_d259_pages_retired_constants_drop_only_the_pages_jobs
+    assert_equal D171_CI_GATE_NEEDS - D171_PAGES_JOBS, D171_PAGES_RETIRED_CI_GATE_NEEDS
+    D171_PAGES_JOBS.each do |job_name|
+      refute_includes D171_PAGES_RETIRED_CI_GATE_FAILURE_CONDITION, "needs.#{job_name}."
+    end
+    D171_COMPILER_JOBS.each do |job_name|
+      assert_includes D171_PAGES_RETIRED_CI_GATE_FAILURE_CONDITION,
+                      "needs.#{job_name}.result != 'success'"
+    end
+    assert_includes D171_PAGES_RETIRED_CI_GATE_FAILURE_CONDITION,
+                    "needs.classify-changes.outputs.pages != 'true'"
+  end
+
+  def test_d259_accepts_the_pages_retired_shape
+    assert_d171_routing_accepted(d171_pages_retired_workflow, "pages-retired")
+  end
+
+  def test_d259_still_accepts_the_full_pages_shape
+    assert_d171_routing_accepted(d171_workflow, "pages-present")
+  end
+
+  def test_d259_rejects_a_retired_shape_whose_ci_gate_still_needs_pages_jobs
+    workflow = d171_pages_retired_workflow do |candidate|
+      candidate.dig("jobs", "ci-gate")["needs"] = D171_CI_GATE_NEEDS.dup
+    end
+    assert_d171_routing_rejected(
+      workflow,
+      "retired jobs still in ci-gate needs",
+      expected_context: "ci-gate needs"
+    )
+  end
+
+  def test_d259_rejects_a_retired_shape_whose_truth_table_still_names_pages_jobs
+    workflow = d171_pages_retired_workflow do |candidate|
+      candidate.dig("jobs", "ci-gate", "steps").first["if"] =
+        D171_CI_GATE_FAILURE_CONDITION.dup
+    end
+    assert_d171_routing_rejected(
+      workflow,
+      "retired jobs still in ci-gate truth table",
+      expected_context: "ci-gate truth table"
+    )
+  end
+
+  def test_d259_rejects_a_hybrid_with_only_one_pages_job_removed
+    D171_PAGES_JOBS.each do |removed|
+      workflow = d171_pages_retired_workflow do |candidate|
+        kept = (D171_PAGES_JOBS - [removed]).first
+        candidate.fetch("jobs")[kept] = d171_workflow.dig("jobs", kept)
+      end
+      assert_d171_routing_rejected(
+        workflow,
+        "only #{removed} removed",
+        expected_context: removed
+      )
+    end
+  end
+
+  def test_d259_rejects_pages_jobs_present_but_dropped_from_ci_gate
+    workflow = d171_workflow do |candidate|
+      gate = candidate.dig("jobs", "ci-gate")
+      gate["needs"] = D171_PAGES_RETIRED_CI_GATE_NEEDS.dup
+      gate.fetch("steps").first["if"] = D171_PAGES_RETIRED_CI_GATE_FAILURE_CONDITION.dup
+    end
+    assert_d171_routing_rejected(
+      workflow,
+      "pages jobs present but not required",
+      expected_context: "ci-gate needs"
+    )
+  end
+
+  def test_d259_retired_shape_still_delegates_coverage_and_provenance_checks
+    workflow = d171_pages_retired_workflow
+    step = workflow.dig("jobs", "build-test-coverage", "steps").find do |candidate|
+      candidate["name"] == COVERAGE_STEP
+    end
+    step["run"] = step.fetch("run").sub("--fail-under-lines 100", "--fail-under-lines 99")
+    assert_d171_routing_rejected(
+      workflow,
+      "retired-shape line threshold",
+      expected_context: "coverage"
+    )
+
+    workflow = d171_pages_retired_workflow
+    checkout = workflow.dig("jobs", "frontend-perf-measure", "steps").find do |candidate|
+      candidate["name"] == "Check out candidate"
+    end
+    checkout.fetch("with")["ref"] = "${{ github.event.pull_request.head.sha }}"
+    assert_d171_routing_rejected(
+      workflow,
+      "retired-shape candidate performance provenance",
+      expected_context: "source-aware measurement job"
+    )
+  end
+
+  def test_d259_retired_shape_still_requires_every_compiler_job_and_pages_literal
+    D171_COMPILER_JOBS.each do |job_name|
+      workflow = d171_pages_retired_workflow do |candidate|
+        candidate.fetch("jobs").delete(job_name)
+      end
+      assert_d171_routing_rejected(
+        workflow,
+        "retired shape missing #{job_name}",
+        expected_context: job_name
+      )
+    end
+
+    workflow = d171_pages_retired_workflow do |candidate|
+      step = candidate.dig("jobs", "ci-gate", "steps").first
+      step["if"] = step.fetch("if").sub(
+        " || (needs.classify-changes.outputs.pages != 'true' && " \
+        "needs.classify-changes.outputs.pages != 'false')",
+        ""
+      )
+    end
+    assert_d171_routing_rejected(
+      workflow,
+      "retired shape without the pages literal-boolean clause",
+      expected_context: "ci-gate truth table"
+    )
+  end
+
   def test_d171_rejects_conditioned_pages_proof_steps
     {
       "pages-performance" => [

@@ -1490,6 +1490,50 @@ D171_CI_GATE_FAILURE_CONDITION = [
     ]
   end
 ].join(" || ").freeze
+# Pages rewrite, stage 1 (umbrella #802): the "Pages gates retired" D-171
+# shape. The rewrite's activation pull request retires the hermetic
+# Lighthouse performance budget (D-161) and accessibility gate (D-162)
+# together with the rest of the Pages machinery. A ci.yml that carries
+# NEITHER pages job is validated against this reduced routing table; a ci.yml
+# that carries EITHER job is validated against the full table above, so a
+# half-removed hybrid (one job only, or jobs present but dropped from ci-gate)
+# still fails closed. A ci.yml with no pages jobs whose ci-gate still names
+# them fails the reduced needs/truth-table comparison below. The classifier's
+# `pages` output stays pinned in D171_CLASSIFIER_OUTPUTS and in the ci-gate
+# literal-boolean clause in both shapes.
+D171_PAGES_GATE_JOBS = %w[pages-performance pages-accessibility].freeze
+D171_PAGES_RETIRED_OPTIONAL_ROUTING = D171_OPTIONAL_ROUTING.reject do |job_name, _routing|
+  D171_PAGES_GATE_JOBS.include?(job_name)
+end.freeze
+D171_PAGES_RETIRED_JOB_NAMES = (D171_JOB_NAMES - D171_PAGES_GATE_JOBS).freeze
+D171_PAGES_RETIRED_CANDIDATE_CHECKOUT_JOBS =
+  (D171_CANDIDATE_CHECKOUT_JOBS - D171_PAGES_GATE_JOBS).freeze
+D171_PAGES_RETIRED_CI_GATE_NEEDS = [
+  "classify-changes",
+  "governance",
+  *D171_PAGES_RETIRED_OPTIONAL_ROUTING.keys
+].freeze
+D171_PAGES_RETIRED_CI_GATE_FAILURE_CONDITION = [
+  "needs.classify-changes.result != 'success'",
+  "needs.governance.result != 'success'",
+  *D171_CLASSIFIER_OUTPUTS.keys.map do |output|
+    "(needs.classify-changes.outputs.#{output} != 'true' && " \
+      "needs.classify-changes.outputs.#{output} != 'false')"
+  end,
+  *D171_PAGES_RETIRED_OPTIONAL_ROUTING.flat_map do |job_name, (output, _needs)|
+    [
+      "(needs.classify-changes.outputs.#{output} == 'true' && " \
+        "needs.#{job_name}.result != 'success')",
+      "(needs.classify-changes.outputs.#{output} == 'false' && " \
+        "needs.#{job_name}.result != 'skipped')"
+    ]
+  end
+].join(" || ").freeze
+
+def d171_pages_gates_retired?(jobs)
+  D171_PAGES_GATE_JOBS.none? { |job_name| jobs.key?(job_name) }
+end
+
 D171_CI_GATE_RUN = <<~'SHELL'.strip
   echo "required CI jobs or exact change routing did not succeed:"
   echo '${{ toJSON(needs) }}'
@@ -1776,6 +1820,15 @@ def validate_d171_ci_routing(workflow_text, source)
   jobs = d171_mapping(workflow["jobs"], "#{source} jobs")
   historical_fixture =
     Digest::SHA256.hexdigest(workflow_text) == D171_CHANGE_AWARE_CI_WORKFLOW_SHA256
+  pages_retired = d171_pages_gates_retired?(jobs)
+  job_names = pages_retired ? D171_PAGES_RETIRED_JOB_NAMES : D171_JOB_NAMES
+  optional_routing =
+    pages_retired ? D171_PAGES_RETIRED_OPTIONAL_ROUTING : D171_OPTIONAL_ROUTING
+  candidate_checkout_jobs =
+    pages_retired ? D171_PAGES_RETIRED_CANDIDATE_CHECKOUT_JOBS : D171_CANDIDATE_CHECKOUT_JOBS
+  ci_gate_needs = pages_retired ? D171_PAGES_RETIRED_CI_GATE_NEEDS : D171_CI_GATE_NEEDS
+  ci_gate_condition =
+    pages_retired ? D171_PAGES_RETIRED_CI_GATE_FAILURE_CONDITION : D171_CI_GATE_FAILURE_CONDITION
 
   d171_require_equal(
     workflow.keys.sort,
@@ -1795,7 +1848,7 @@ def validate_d171_ci_routing(workflow_text, source)
     D171_CONCURRENCY,
     "#{source} concurrency"
   )
-  D171_JOB_NAMES.each do |job_name|
+  job_names.each do |job_name|
     job = d171_mapping(jobs[job_name], "#{source} #{job_name}")
     d171_require_failure_propagation(job, "#{source} #{job_name}")
     d171_require_equal(
@@ -1834,7 +1887,7 @@ def validate_d171_ci_routing(workflow_text, source)
     end
   end
 
-  D171_CANDIDATE_CHECKOUT_JOBS.each do |job_name|
+  candidate_checkout_jobs.each do |job_name|
     steps = d171_sequence(
       jobs.dig(job_name, "steps"),
       "#{source} #{job_name} steps"
@@ -1998,7 +2051,7 @@ def validate_d171_ci_routing(workflow_text, source)
             "#{source} governance agent command does not match the reviewed D-171 routing"
     end
   end
-  D171_OPTIONAL_ROUTING.each do |job_name, (output, expected_needs)|
+  optional_routing.each do |job_name, (output, expected_needs)|
     job = d171_mapping(jobs[job_name], "#{source} #{job_name}")
     d171_require_equal(
       job["needs"],
@@ -2157,7 +2210,7 @@ def validate_d171_ci_routing(workflow_text, source)
     "#{source} cross-compile-verify native output check"
   )
 
-  D171_PAGES_GATE_RUNS.each do |job_name, (step_name, run)|
+  (pages_retired ? {} : D171_PAGES_GATE_RUNS).each do |job_name, (step_name, run)|
     page_job = d171_mapping(jobs[job_name], "#{source} #{job_name}")
     d171_require_equal(
       page_job["runs-on"],
@@ -2183,7 +2236,7 @@ def validate_d171_ci_routing(workflow_text, source)
     %w[if needs permissions runs-on steps].sort,
     "#{source} ci-gate keys"
   )
-  d171_require_equal(ci_gate["needs"], D171_CI_GATE_NEEDS, "#{source} ci-gate needs")
+  d171_require_equal(ci_gate["needs"], ci_gate_needs, "#{source} ci-gate needs")
   d171_require_equal(ci_gate["if"], "always()", "#{source} ci-gate condition")
   d171_require_equal(ci_gate["runs-on"], "ubuntu-latest", "#{source} ci-gate runner")
   d171_require_equal(ci_gate["permissions"], {}, "#{source} ci-gate permissions")
@@ -2202,7 +2255,7 @@ def validate_d171_ci_routing(workflow_text, source)
   )
   d171_require_equal(
     d171_normalize_expression(gate_step["if"]),
-    d171_normalize_expression(D171_CI_GATE_FAILURE_CONDITION),
+    d171_normalize_expression(ci_gate_condition),
     "#{source} ci-gate truth table"
   )
   d171_require_equal(gate_step["run"], D171_CI_GATE_RUN, "#{source} ci-gate failure")
@@ -2215,7 +2268,7 @@ def validate_d171_ci_routing(workflow_text, source)
   unrouted_jobs = unrouted.fetch("jobs")
   unrouted_jobs.delete("classify-changes")
   unrouted_jobs.delete("governance")
-  D171_OPTIONAL_ROUTING.each_key do |job_name|
+  optional_routing.each_key do |job_name|
     job = unrouted_jobs.fetch(job_name)
     job.delete("if")
     needs = job["needs"]
@@ -2230,14 +2283,19 @@ def validate_d171_ci_routing(workflow_text, source)
       job.delete("needs")
     end
   end
-  unrouted_jobs["ci-gate"] = Marshal.load(Marshal.dump(D199_PAGES_ACCESSIBILITY_CI_GATE_JOB))
+  # Pages rewrite (#802): with the Pages gates retired, the synthetic aggregate reduces to
+  # the six-element paired-performance shape, which ACCEPTED_PERF_CI_GATE_JOBS
+  # already accepts.
+  unrouted_jobs["ci-gate"] = Marshal.load(Marshal.dump(
+    pages_retired ? PAIRED_PERF_CI_GATE_JOB : D199_PAGES_ACCESSIBILITY_CI_GATE_JOB
+  ))
   unrouted_text = unrouted.to_yaml
 
   unless coverage_gate_present?(unrouted_text, source)
     raise RoadmapEvidenceError, "#{source}: D-171 does not retain the exact coverage gate"
   end
   validate_source_aware_perf_gate_lifecycle(unrouted_text, source)
-  validate_pages_performance_lifecycle(unrouted_text, source)
+  validate_pages_performance_lifecycle(unrouted_text, source) unless pages_retired
   true
 end
 

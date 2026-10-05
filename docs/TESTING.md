@@ -2246,7 +2246,14 @@ two-merge transition for general CI and checker changes: the base-owned checker
 validates named permissions, Action pins, checkout credentials, trusted-event
 guards, D-171 routing, Tier-1 coverage, and aggregate-gate properties in one
 pull request. The candidate manifest cannot authorize its own bytes, and no
-manifest entry forces a later activation. The separately pinned
+manifest entry forces a later activation. As the first stage of the Pages
+rewrite (umbrella #802), the base-owned D-171 routing validator also accepts a
+"Pages gates retired" `ci.yml` shape — both `pages-performance` and
+`pages-accessibility` absent and absent from `ci-gate`'s needs and truth table —
+while still validating the full shape in full whenever either job is present;
+hybrids fail. The Lighthouse and accessibility scripts and fixtures are
+unlisted from the manifest so the activation pull request may delete them. The
+separately pinned
 `workflow-policy.yml` trust anchor retains its own staged update boundary. The
 audit then runs the base-owned
 `check_search_visibility_audit.py` against the checked-out base ledger. The
