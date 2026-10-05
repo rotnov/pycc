@@ -365,18 +365,14 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             collect_named_expr_targets_in_expr(call, killed);
         }
-        HirExpr::GenericClassInstantiate { args, .. } => {
+        // #1411: `type(self)(args)` walks its arguments the same way.
+        HirExpr::GenericClassInstantiate { args, .. } | HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 collect_named_expr_targets_in_expr(arg, killed);
             }
         }
         HirExpr::ExprCall { callee, args } => {
             collect_named_expr_targets_in_expr(callee, killed);
-            for arg in args {
-                collect_named_expr_targets_in_expr(arg, killed);
-            }
-        }
-        HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 collect_named_expr_targets_in_expr(arg, killed);
             }

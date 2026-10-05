@@ -2223,7 +2223,8 @@ fn bind_named_expr_targets(
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, call)
         }
-        HirExpr::GenericClassInstantiate { args, .. } => {
+        // #1411: `type(self)(args)` walks its arguments the same way.
+        HirExpr::GenericClassInstantiate { args, .. } | HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 bind_named_expr_targets(signatures, parents, concrete, deferred, env, arg)?;
             }
@@ -2231,12 +2232,6 @@ fn bind_named_expr_targets(
         }
         HirExpr::ExprCall { callee, args } => {
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, callee)?;
-            for arg in args {
-                bind_named_expr_targets(signatures, parents, concrete, deferred, env, arg)?;
-            }
-            Ok(())
-        }
-        HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 bind_named_expr_targets(signatures, parents, concrete, deferred, env, arg)?;
             }
