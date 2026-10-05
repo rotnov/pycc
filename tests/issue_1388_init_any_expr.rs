@@ -308,7 +308,9 @@ fn a_compiled_handler_catches_a_foreign_attribute_error() {
 /// lines 10-29, MIT), verbatim but for the elided `###{standalone` marker
 /// and its sibling imports: every slot is established from a read through
 /// one assigned earlier, on CPython objects (D-258), under
-/// `--foreign-relative-imports`.
+/// `--foreign-relative-imports`. The sibling `ParseTableBase` is generic, as
+/// in lark: CPython 3.13 (CI's hosted floor) evaluates the
+/// `ParseTableBase[StateT]` annotations eagerly, where 3.14 defers them.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn the_lark_parse_conf_establishes_its_slots_from_earlier_ones() {
@@ -318,8 +320,8 @@ fn the_lark_parse_conf_establishes_its_slots_from_earlier_ones() {
         ("top/pkg/__init__.py", ""),
         (
             "top/pkg/lalr_analysis.py",
-            "from typing import TypeVar\nStateT = TypeVar('StateT')\n\
-             class ParseTableBase:\n\
+            "from typing import Generic, TypeVar\nStateT = TypeVar('StateT')\n\
+             class ParseTableBase(Generic[StateT]):\n\
              \x20   def __init__(self):\n\
              \x20       self.start_states = {'start': 0}\n\
              \x20       self.end_states = {'start': 9}\n\
