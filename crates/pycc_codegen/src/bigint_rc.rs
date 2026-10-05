@@ -2130,7 +2130,8 @@ mod tests {
             .filter(|c| c.callee == "pycc_rt_bigint_release")
             .count();
         // Two releases, one per `AttrSet`: `__init__`'s (into a
-        // zero-initialized slot, so its guard is false at runtime) and the
+        // still-unassigned slot, which the unchecked getter reads as `0`, so
+        // its guard is false at runtime) and the
         // top-level store of the encoded `True` word over whatever slot 0
         // then held. The single retain is `__init__`'s own `n` parameter --
         // a duplicate reference the slot becomes a second owner of. The

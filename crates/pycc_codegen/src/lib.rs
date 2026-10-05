@@ -7954,7 +7954,8 @@ fn emit_stmt<'ctx>(
         // *duplicate* reference whose original owner keeps its own copy; and
         // `decref_str_attr_slot_before_store` before overwriting, to
         // release whatever the slot held previously (a no-op on a fresh
-        // instance's zero-initialized slot, exactly like a local's
+        // instance's unassigned slot, which the unchecked getter reads as
+        // `0`, exactly like a local's
         // null-initialized string slot). Without both, a `str` attribute
         // read twice, or reassigned, use-after-frees the first `PyStrObj`.
         MirStmt::AttrSet { base, slot, value } => {
