@@ -20,13 +20,20 @@ pub const EXCEPTION_TYPE_RUNTIME_ERROR: u8 = 6;
 /// past the flat seven (7..=24, 26..=27 for
 /// `ImportError`/`ModuleNotFoundError`, #1292, and 28 for `AssertionError`,
 /// #1369) belongs to a class this
-/// crate never raises by name, so it declares no constants for them. This
+/// crate never raises by name, so it declares no constants for them;
+/// `AttributeError` (29, #1388) is raised by name and has its own constant
+/// below. This
 /// crate has no `[dependencies]` and cannot see
 /// `pycc_hir::BUILTIN_EXCEPTION_CLASSES`, so the literal is hand-copied and
 /// pinned against the array by `ext_bridge`'s
 /// `exception_type_tags_match_the_c_shims_hardcoded_switch` and by
 /// `src/ext_build_tests/toolchain.rs`.
 pub const EXCEPTION_TYPE_OVERFLOW_ERROR: u8 = 25;
+/// #1388: `AttributeError`'s tag, raised by
+/// `instance::pycc_rt_instance_get_slot_checked` when a slot is read before
+/// its first assignment. Hand-copied and pinned exactly like
+/// [`EXCEPTION_TYPE_OVERFLOW_ERROR`] above.
+pub const EXCEPTION_TYPE_ATTRIBUTE_ERROR: u8 = 29;
 /// #1316: the reserved tag the `ext` C shim's foreign-operation bridge gives
 /// a CPython exception that is not an `Exception` at all -- `SystemExit`,
 /// `KeyboardInterrupt`, `GeneratorExit`, a non-`Exception`

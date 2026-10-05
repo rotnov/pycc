@@ -24,8 +24,18 @@
 //! rewrite types the literal.
 //!
 //! Part 1 of #1367 admits a parameter annotated with a class a foreign
-//! import binds (`Ty::Object`), declared or not; its right-hand side still
-//! passes the same shape gate.
+//! import binds (`Ty::Object`), declared or not.
+//!
+//! #1388 lifts the shape gate for a declared attribute: its establishing
+//! right-hand side may be any expression the body lowers -- a call, a
+//! subscript, arithmetic, a read of a slot assigned earlier -- because the
+//! declaration, not the expression, supplies the slot type, and
+//! `pycc_types::check_attr_set` judges the value against it. Reading a slot
+//! before its assignment is no longer a compile-time concern either: the
+//! runtime raises CPython's `AttributeError` for it
+//! (`pycc_rt::instance`). The gate stays in force where type parameters are
+//! involved (see `declared_slot_ty`) and for an undeclared attribute, whose
+//! slot type has no other source.
 
 use super::declared_attrs::DeclaredAttr;
 use crate::{Ty, unsupported};
@@ -122,10 +132,13 @@ pub(super) fn collect_init_attrs(
                 continue;
             }
             let ty = match declared.find(&attr_name) {
-                Some(decl) => {
-                    declared_slot_ty(decl, declared.class_name, assign, params, receiver_name)?
-                }
-                None => slot_ty_from_init_rhs(&assign.value, params, receiver_name)?,
+                Some(decl) => declared_slot_ty(decl, declared, assign, params, receiver_name)?,
+                None => slot_ty_from_init_rhs(
+                    &assign.value,
+                    params,
+                    receiver_name,
+                    (!declared.generic).then_some(attr_name.as_str()),
+                )?,
             };
             attrs.push((attr_name, ty));
         }
@@ -141,6 +154,9 @@ pub(super) struct DeclaredAttrs<'a> {
     pub(super) attrs: &'a [DeclaredAttr],
     /// The class's own name.
     pub(super) class_name: &'a str,
+    /// Whether the class is a PEP 695 generic class (`class C[T]:`), whose
+    /// declarations keep the shape gate (#1388; see `declared_slot_ty`).
+    pub(super) generic: bool,
 }
 
 impl DeclaredAttrs<'_> {
@@ -159,29 +175,41 @@ impl DeclaredAttrs<'_> {
 /// the literal from the now-concrete slot (this is how the unannotated `{}`
 /// becomes admissible), and under any other declaration the literal stays
 /// untyped and the checker reports the same wrong-shape `T0003` a later
-/// reset gets. Any other right-hand side must still pass
-/// `slot_ty_from_init_rhs`'s shape gate, which is what keeps an `__init__`
-/// RHS from reading a still-unassigned slot; its inferred type is then
-/// discarded, and `pycc_types::check_attr_set` judges the value against the
-/// declared slot as for every `AttrSet`. The one pair that check cannot
-/// judge -- a type parameter against anything else, since `is_assignable`
-/// admits any scalar into a `Ty::Param` slot and a `Ty::Param` into any
-/// scalar slot -- is refused here, so it cannot compile into a slot that
-/// holds the wrong representation for some instantiation.
+/// reset gets.
+///
+/// Since #1388 any other right-hand side is admitted too, its type
+/// discarded: `pycc_types::check_attr_set` judges the value against the
+/// declared slot as for every `AttrSet`, and a read of a slot not yet
+/// assigned raises `AttributeError` at run time. The exception is the one
+/// pair that check cannot judge -- a type parameter against anything else,
+/// since `is_assignable` admits any scalar into a `Ty::Param` slot and a
+/// `Ty::Param` into any scalar slot. In a PEP 695 generic class, the only
+/// place a type parameter can occur, the right-hand side must still pass
+/// `slot_ty_from_init_rhs`'s shape gate, whose bare-parameter answer is
+/// exact, and a mismatched pair is refused here, so it cannot compile into
+/// a slot that holds the wrong representation for some instantiation.
 fn declared_slot_ty(
     decl: &DeclaredAttr,
-    class_name: &str,
+    declared: &DeclaredAttrs<'_>,
     assign: &pycc_ast::StmtAssign,
     params: &[(String, Ty)],
     receiver_name: &str,
 ) -> Result<Ty, Diagnostic> {
+    let class_name = declared.class_name;
     let value = assign.value.as_ref();
     let is_empty_display = matches!(value, Expr::List(list) if list.elts.is_empty())
         || matches!(value, Expr::Dict(dict) if dict.items.is_empty());
     if is_empty_display {
         return Ok(decl.ty.clone());
     }
-    let inferred = slot_ty_from_init_rhs(value, params, receiver_name)?;
+    // A type parameter is in scope only inside a PEP 695 generic class: a
+    // generic method is refused (`C0001`) and a `Generic[T]` base is erased
+    // (`super::generic_base`), so neither a declaration nor an `__init__`
+    // parameter of any other class can carry a `Ty::Param`.
+    if !declared.generic {
+        return Ok(decl.ty.clone());
+    }
+    let inferred = slot_ty_from_init_rhs(value, params, receiver_name, None)?;
     let involves_param = matches!(inferred, Ty::Param(_)) || matches!(decl.ty, Ty::Param(_));
     if involves_param && inferred != decl.ty {
         return Err(unsupported(
@@ -222,11 +250,11 @@ fn receiver_attr(target: &Expr, receiver_name: &str) -> Option<String> {
 /// (int/float/bool/str), a PEP 695 type parameter, or -- since #1262 -- a
 /// `list[int]`/`dict[str, int]` container, which the slot stores as its
 /// pointer word, or -- since Part 1 of #1367 -- a class a foreign import
-/// binds (`Ty::Object`), stored as its `PyObject*` word. The shape gate is
-/// what keeps an `object` slot from being read before it is assigned:
-/// widening it to any expression is #1388. For an attribute a class-body declaration types (#1266),
-/// this is only the shape gate: `declared_slot_ty` discards the type it
-/// returns in favor of the declared one.
+/// binds (`Ty::Object`), stored as its `PyObject*` word. For an attribute a
+/// class-body declaration types (#1266), this is only the shape gate, and
+/// since #1388 only where a type parameter is in scope: `declared_slot_ty`
+/// discards the type it returns in favor of the declared one, and admits
+/// any right-hand side everywhere else.
 ///
 /// `[]` yields the provisional slot type `list[<Ty::Infer>]`. It is the one
 /// place this crate records a `Ty::Infer` slot on purpose, and it never
@@ -239,11 +267,15 @@ fn receiver_attr(target: &Expr, receiver_name: &str) -> Option<String> {
 /// class-body declaration, whose type `declared_slot_ty` supplies without
 /// calling this function for an empty literal. Every other RHS shape --
 /// including an arithmetic expression, a call, or a reference to `self`
-/// itself -- is `C0001`.
+/// itself -- is `C0001`. `declaration_hint` is the attribute's name when a
+/// class-body declaration would admit that shape (#1388: an undeclared
+/// attribute outside a PEP 695 generic class), and the diagnostic then
+/// names the declaration; it is `None` where a declaration would not help.
 fn slot_ty_from_init_rhs(
     value: &Expr,
     params: &[(String, Ty)],
     receiver_name: &str,
+    declaration_hint: Option<&str>,
 ) -> Result<Ty, Diagnostic> {
     match value {
         // Two guarded arms of the same top-level `match`, deliberately
@@ -376,13 +408,23 @@ fn slot_ty_from_init_rhs(
             ),
             pycc_ast::expr_range(value),
         )),
-        other => Err(unsupported(
-            "an instance attribute's first assignment inside `__init__` must be a bare \
-             parameter name, a scalar literal (int/float/bool/str) or an empty list `[]` \
-             whose element type the class's own methods supply, so its type is known at \
-             compile time",
-            pycc_ast::expr_range(other),
-        )),
+        other => {
+            let hint = declaration_hint.map_or(String::new(), |attr| {
+                format!(
+                    " -- or declare it in the class body (`{attr}: <type>`), which admits any \
+                     expression"
+                )
+            });
+            Err(unsupported(
+                format!(
+                    "an instance attribute's first assignment inside `__init__` must be a bare \
+                     parameter name, a scalar literal (int/float/bool/str) or an empty list \
+                     `[]` whose element type the class's own methods supply, so its type is \
+                     known at compile time{hint}"
+                ),
+                pycc_ast::expr_range(other),
+            ))
+        }
     }
 }
 

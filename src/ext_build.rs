@@ -1055,18 +1055,20 @@ fn ctor_descriptor(module: &HirModule, class: &str) -> Option<ExtCtor> {
                 *ty == Ty::MemoryView && pycc_hir::body_stores_into(body, param_name)
             })
             .collect(),
-        slot_count: instance_slot_count(module, class_def),
+        slot_names: instance_slot_names(module, class_def),
     })
 }
 
-/// The number of `pycc_rt_instance_new` slots an instance of `class_def`
-/// occupies.
+/// The name of every `pycc_rt_instance_new` slot an instance of
+/// `class_def` occupies, in slot order.
 ///
 /// `pycc_hir::flat_attr_layout` is the single definition of what counts as
 /// a slot -- merged `@dataclass` fields, an exception class's empty
-/// attribute list -- and `pycc_mir` delegates to it too, so the count the
+/// attribute list -- and `pycc_mir` delegates to it too, so the layout the
 /// generated `tp_init` allocates is by construction the one
-/// `MirExpr::Instantiate` passes for the same class.
+/// `MirExpr::Instantiate` passes for the same class (#1388: the names as
+/// well as the count, since they word the `AttributeError` of a slot read
+/// before its assignment).
 ///
 /// That parity is what forbids skipping an MRO entry this program does not
 /// define. The counterpart on the MIR side is `pycc_mir::class`'s
@@ -1082,7 +1084,7 @@ fn ctor_descriptor(module: &HirModule, class: &str) -> Option<ExtCtor> {
 /// synthetic builtin exception base dropped as `pycc_hir::link` concatenates
 /// -- only ever appears in the MRO of an exception class, which
 /// [`instance_shape_admissible`] already refused above.
-fn instance_slot_count(module: &HirModule, class_def: &HirClassDef) -> usize {
+fn instance_slot_names(module: &HirModule, class_def: &HirClassDef) -> Vec<String> {
     let mro_defs: Vec<&HirClassDef> = class_def
         .mro
         .iter()
@@ -1104,7 +1106,10 @@ fn instance_slot_count(module: &HirModule, class_def: &HirClassDef) -> usize {
             }
         })
         .collect();
-    flat_attr_layout(&mro_defs).len()
+    flat_attr_layout(&mro_defs)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
 }
 
 /// One constructible class's generated `Py_tp_init` descriptor.
@@ -1131,8 +1136,10 @@ pub(crate) struct ExtCtor {
     /// the flag has to be computed here too, or `Py_tp_init` would acquire
     /// read-only for a constructor body the checker admits a store in.
     pub(crate) param_writable: Vec<bool>,
-    /// The slot count `pycc_rt_instance_new` is called with.
-    pub(crate) slot_count: usize,
+    /// The slot names, in slot order, whose count `pycc_rt_instance_new` is
+    /// called with and which, after [`ExtCtor::class`], make up the layout
+    /// descriptor it is passed (#1388).
+    pub(crate) slot_names: Vec<String>,
 }
 
 /// The constructible classes among the published ones, in publication order.

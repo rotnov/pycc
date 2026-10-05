@@ -85,12 +85,11 @@ fn assert_runs(tag: &str, source: &str, expected_stdout: &str) {
 }
 
 /// Compile `source` successfully, then assert running it hits the documented
-/// D-072 exit-`101` boundary with `message` on stderr.
+/// D-072 exit-`101` boundary with `message` on stderr -- the boundary an
+/// uncaught Python exception exits through too.
 ///
-/// `pycc run` rather than a direct exec of the built binary: `pycc_rt`'s
-/// panic crosses an `extern "C"` boundary and becomes a non-unwinding
-/// process abort, so the raw child is killed by a signal and reports no exit
-/// code. The `101` is the driver's own mapping, per `docs/CLI_SPEC.md`.
+/// `pycc run` rather than a direct exec of the built binary, so the `101`
+/// is the driver's own mapping, per `docs/CLI_SPEC.md`.
 fn assert_runtime_abort(tag: &str, source: &str, message: &str) {
     let dir = ScratchDir::new(&format!("issue966_{tag}")).expect("failed to create scratch dir");
     let src = write_fixture(&dir, source);
@@ -196,16 +195,17 @@ fn an_all_implicit_mro_still_instantiates() {
 /// The ranking keys on **provenance**, never on shape. An explicitly written
 /// `def __init__(self) -> None: pass` lowers to exactly the same empty body
 /// as the implicit constructor, but it is a real constructor and must keep
-/// ranking first -- CPython raises `AttributeError` for this program.
+/// ranking first -- CPython raises `AttributeError` for this program, and
+/// since #1388 so does pycc, with CPython's own message.
 ///
-/// The abort *is* the discriminator: if any shape-based detection crept in,
-/// `B.__init__` would run and this would print `1` instead.
+/// The exception *is* the discriminator: if any shape-based detection crept
+/// in, `B.__init__` would run and this would print `1` instead.
 #[test]
 fn an_explicitly_written_empty_constructor_still_outranks_a_later_base() {
     assert_runtime_abort(
         "explicit_empty_init",
         "class A:\n    def __init__(self) -> None:\n        pass\n\n\nclass B:\n    def __init__(self) -> None:\n        self.z = 1\n\n\nclass C(A, B):\n    pass\n\n\nc = C()\nprint(c.z)\n",
-        "pycc_rt: invalid encoded int word 0x0",
+        "AttributeError: 'C' object has no attribute 'z'",
     );
 }
 

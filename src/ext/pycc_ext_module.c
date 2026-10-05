@@ -60,11 +60,13 @@ extern void *pycc_rt_str_from_literal(const unsigned char *ptr, long long len);
 extern void pycc_rt_str_decref(void *s);
 extern const unsigned char *pycc_rt_ext_str_bytes(void *s, size_t *len);
 /* The instance boundary (#1145). `pycc_rt_instance_new` allocates a
- * `PyInstanceObj` with `slot_count` attribute slots and returns it as the
- * opaque `void *` a compiled `Ty::Instance` parameter is. It is the same
- * call `MirExpr::Instantiate` emits for a native `Grid(3, 4)`, so a host-
- * constructed instance and a natively constructed one have identical
- * layout.
+ * `PyInstanceObj` with `slot_count` unassigned attribute slots and returns
+ * it as the opaque `void *` a compiled `Ty::Instance` parameter is. It is
+ * the same call `MirExpr::Instantiate` emits for a native `Grid(3, 4)`, so
+ * a host-constructed instance and a natively constructed one have
+ * identical layout. `layout`/`layout_len` is the class's static,
+ * NUL-separated name-then-slot-names descriptor, which words the
+ * `AttributeError` of a slot read before its assignment (#1388).
  *
  * There is deliberately no matching free. Compiled code never releases an
  * instance either (D-107's arena model, narrowed by D-154), so a
@@ -73,7 +75,7 @@ extern const unsigned char *pycc_rt_ext_str_bytes(void *s, size_t *len);
  * function still aliases -- attribute reads hand out interior pointers.
  * The inner object therefore outlives its carrier; see
  * `pycc_ext_instance_dealloc`. */
-extern void *pycc_rt_instance_new(long long slot_count);
+extern void *pycc_rt_instance_new(long long slot_count, const char *layout, size_t layout_len);
 
 /* `pycc_rt::ext_bridge`'s classification codes. */
 #define PYCC_EXT_INT_SMALLINT 0
@@ -406,8 +408,8 @@ static int pycc_ext_bridge_store(PyObject *exc, unsigned char tag, const char *c
  * `BUILTIN_EXCEPTION_CLASSES` array order, which this file cannot see from
  * C: tags 0..=6 are the flat seven, which `pycc_rt::exception` also names as
  * `EXCEPTION_TYPE_*` constants, and tags 7..=22 are the PEP 3151 `OSError`
- * family; 25..=28 are `OverflowError`, `ImportError`,
- * `ModuleNotFoundError` and `AssertionError`, and 23..=24 (the PEP 654
+ * family; 25..=29 are `OverflowError`, `ImportError`,
+ * `ModuleNotFoundError`, `AssertionError` and `AttributeError`, and 23..=24 (the PEP 654
  * groups) fall to `default:`. Two tests are this switch's drift guard -- `ext_bridge`'s
  * `exception_type_tags_match_the_c_shims_hardcoded_switch` for the seven
  * constants, and `ext_build_tests`'
@@ -532,6 +534,11 @@ static int pycc_ext_raise_pending(void)
     case 28:
         exc_type = PyExc_AssertionError;
         break;
+    /* #1388: `AttributeError`, appended past `AssertionError` the same
+     * way -- the class a read of a not-yet-assigned instance slot raises. */
+    case 29:
+        exc_type = PyExc_AttributeError;
+        break;
     /* #1316: a bridged non-`Exception` `BaseException`. Only a fallback --
      * the bridge-table lookup above normally re-raises the original -- and
      * a named label so the decimal-tag drift guard does not read it as a
@@ -543,7 +550,7 @@ static int pycc_ext_raise_pending(void)
         /*
          * Tag 0 is `Exception`. So, deliberately, are the two remaining
          * builtin tags -- a hole in the otherwise contiguous switched range,
-         * since tags 25..=28 above sit past them -- and every user-defined class:
+         * since tags 25..=29 above sit past them -- and every user-defined class:
          *
          *  - tags 23..=24 are `BaseExceptionGroup`/`ExceptionGroup`. The C
          *    API exposes no `PyExc_ExceptionGroup` at all, and the type it
@@ -1473,8 +1480,8 @@ int pycc_ext_import_error_bridge(void)
  * four `ConnectionError` children before `ConnectionError`, every PEP 3151
  * subclass before `OSError`. A CPython class pycc does not model maps to
  * its nearest modelled base, and anything else under `Exception` to tag 0.
- * That is sound for compiled code -- `except AttributeError` and `except
- * NameError` are compile-time `T0021`, so no pycc handler can tell -- and
+ * That is sound for compiled code -- `except NameError` is compile-time
+ * `T0021`, so no pycc handler can tell -- and
  * the host always sees the original through the bridge table.
  *
  * `ext_build_tests`' `the_c_shims_foreign_error_mapping_names_its_classes`
@@ -1496,6 +1503,7 @@ static unsigned char pycc_ext_obj_error_tag(PyObject *exc, const char **class_na
     PYCC_EXT_OBJ_TAG(PyExc_ImportError, 26, "ImportError")
     PYCC_EXT_OBJ_TAG(PyExc_OverflowError, 25, "OverflowError")
     PYCC_EXT_OBJ_TAG(PyExc_AssertionError, 28, "AssertionError")
+    PYCC_EXT_OBJ_TAG(PyExc_AttributeError, 29, "AttributeError")
     PYCC_EXT_OBJ_TAG(PyExc_BrokenPipeError, 19, "BrokenPipeError")
     PYCC_EXT_OBJ_TAG(PyExc_ConnectionAbortedError, 20, "ConnectionAbortedError")
     PYCC_EXT_OBJ_TAG(PyExc_ConnectionRefusedError, 21, "ConnectionRefusedError")

@@ -357,7 +357,7 @@ pub enum MirExpr {
         ops: Option<Box<SetElementOps>>,
     },
     /// `ClassName(args)` (D-154, Part 1 of #375): allocates a new instance
-    /// with `attr_count` slots (`pycc_codegen`'s job, via the class
+    /// with `slot_names.len()` slots (`pycc_codegen`'s job, via the class
     /// instance layout ADR's `pycc_rt_instance_new`), then calls `ctor`
     /// (the mangled `<ClassName>.__init__`) with the fresh instance
     /// pointer as `self`, followed by `args`. `HirExpr::Call` has no shape
@@ -802,7 +802,7 @@ pub enum InstanceHashVia {
 
 /// `MirExpr::Instantiate`'s payload, boxed (not inlined into that variant
 /// directly) to keep `MirExpr`'s own size close to its other variants --
-/// `ctor: String` + `attr_count: usize` + `args: Vec<MirExpr>` + `ty: Ty`
+/// `ctor: String` + the slot count + `args: Vec<MirExpr>` + `ty: Ty`
 /// inlined directly measured large enough to trip clippy's
 /// `large_enum_variant` lint (`-D warnings`) on `MirItem` (whose
 /// `TopLevelStmt(MirStmt)` variant embeds `MirExpr` several layers deep,
@@ -812,7 +812,15 @@ pub enum InstanceHashVia {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstantiateExpr {
     pub ctor: String,
-    pub attr_count: usize,
+    /// The class's source name -- a monomorphised generic class's original
+    /// name, not its `0gen_` mangling -- which `pycc_rt` uses to word the
+    /// `AttributeError` of a slot read before its assignment (#1388).
+    pub class_name: String,
+    /// The name of every slot of the class's flat MRO layout, in slot
+    /// order (`class::mro_attrs`). Its length is the slot count the
+    /// instance is allocated with (#432); the names word the same
+    /// `AttributeError` (#1388).
+    pub slot_names: Vec<String>,
     pub args: Vec<MirExpr>,
     pub ty: Ty,
 }

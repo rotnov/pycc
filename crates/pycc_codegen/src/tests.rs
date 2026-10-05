@@ -4060,7 +4060,8 @@ fn collect_expr_bindings_walks_into_a_slice_bound() {
 fn collect_expr_bindings_walks_into_an_instantiate_arg() {
     let expr = MirExpr::Instantiate(Box::new(InstantiateExpr {
         ctor: "C.__init__".to_string(),
-        attr_count: 1,
+        class_name: "C".to_string(),
+        slot_names: vec!["s0".to_string()],
         args: vec![MirExpr::NamedExpr {
             name: "a".to_string(),
             value: Box::new(MirExpr::IntLiteral(1)),
@@ -4927,7 +4928,8 @@ fn class_instantiation_attribute_and_method_call_codegens_and_runs() {
                 target: "p".to_string(),
                 value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
                     ctor: "Point.__init__".to_string(),
-                    attr_count: 2,
+                    class_name: "C".to_string(),
+                    slot_names: vec!["s0".to_string(), "s1".to_string()],
                     args: vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)],
                     ty: self_ty.clone(),
                 })),
@@ -5046,7 +5048,8 @@ fn bool_float_and_str_typed_attribute_slots_round_trip_correctly() {
                 target: "w".to_string(),
                 value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
                     ctor: "Widget.__init__".to_string(),
-                    attr_count: 3,
+                    class_name: "C".to_string(),
+                    slot_names: vec!["s0".to_string(), "s1".to_string(), "s2".to_string()],
                     args: vec![
                         MirExpr::BoolLiteral(true),
                         MirExpr::FloatLiteral(2.5),
@@ -5180,7 +5183,8 @@ fn a_str_attribute_read_twice_and_then_reassigned_does_not_use_after_free() {
                 target: "w".to_string(),
                 value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
                     ctor: "Widget.__init__".to_string(),
-                    attr_count: 1,
+                    class_name: "C".to_string(),
+                    slot_names: vec!["s0".to_string()],
                     args: vec![MirExpr::StringLiteral("hi".to_string())],
                     ty: self_ty.clone(),
                 })),
@@ -5303,7 +5307,8 @@ fn instantiation_of_an_unregistered_constructor_panics_with_an_internal_error() 
             target: "g".to_string(),
             value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
                 ctor: "Ghost.__init__".to_string(),
-                attr_count: 0,
+                class_name: "C".to_string(),
+                slot_names: vec![],
                 args: vec![],
                 ty: instance_ty("Ghost"),
             })),
@@ -5369,7 +5374,8 @@ fn a_function_returning_an_instance_codegens_and_runs() {
                 target: "p".to_string(),
                 value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
                     ctor: "Point.__init__".to_string(),
-                    attr_count: 1,
+                    class_name: "C".to_string(),
+                    slot_names: vec!["s0".to_string()],
                     args: vec![MirExpr::IntLiteral(7)],
                     ty: self_ty.clone(),
                 })),
@@ -5454,7 +5460,8 @@ fn instantiating_a_class_at_module_scope_with_a_truthiness_check_codegens_and_ru
                 target: "p".to_string(),
                 value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
                     ctor: "Point.__init__".to_string(),
-                    attr_count: 2,
+                    class_name: "C".to_string(),
+                    slot_names: vec!["s0".to_string(), "s1".to_string()],
                     args: vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)],
                     ty: self_ty.clone(),
                 })),

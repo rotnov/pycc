@@ -21,7 +21,7 @@ use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt, Ty};
 /// `class_defs`. The `body_fn` closure receives the `self`-typed
 /// parameter name and returns the function body that triggers the
 /// specific MRO walk to test -- using a function parameter (not
-/// `Instantiate`) avoids the `mro_attr_count` → `mro_attrs` panic
+/// `Instantiate`) avoids the `mro_attrs` panic
 /// firing first, so the `AttrGet`/`AttrSet`/`MethodCall` MRO walk
 /// panic is the one actually reached.
 fn ghost_mro_param_module(body: Vec<HirStmt>) -> HirModule {
@@ -132,10 +132,10 @@ fn method_call_with_a_ghost_class_in_the_mro_panics_with_an_internal_error() {
     expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef"
 )]
 fn mro_attrs_with_a_ghost_class_in_the_mro_panics_with_an_internal_error() {
-    // `Instantiate` calls `mro_attr_count` → `mro_attrs`, which walks
+    // `Instantiate` calls `mro_attrs`, which walks
     // the full MRO. The `__init__` MRO walk (using `?`, not panicking)
     // finds `Derived.__init__` first and returns early, so
-    // `mro_attr_count` is reached -- and its `mro_attrs` call panics on
+    // `mro_attrs` is reached -- and it panics on
     // the absent `Ghost` entry.
     use pycc_hir::HirClassDef;
     let self_ty = Ty::Instance(Box::new("Derived".to_string()));
@@ -379,7 +379,7 @@ fn mro_attrs_deduplicates_a_redeclared_attribute_across_the_mro() {
             _ => None,
         })
         .expect("expected an Instantiate node");
-    assert_eq!(instantiate.attr_count, 1);
+    assert_eq!(instantiate.slot_names.len(), 1);
 }
 
 #[test]
@@ -525,7 +525,7 @@ fn class_level_attributes_occupy_no_instance_slot_in_the_mro_layout() {
     // The e2e suite can only observe that the *values* read back
     // correctly, which a layout that over-allocates would still satisfy;
     // this asserts the slot count itself, which is the actual D-154
-    // contract (`Instantiate` allocates exactly `mro_attr_count` words).
+    // contract (`Instantiate` allocates exactly `mro_attrs(..).len()` words).
     use pycc_hir::{ClassAttrValue, HirClassDef};
     use std::collections::HashMap;
 
@@ -583,7 +583,7 @@ fn class_level_attributes_occupy_no_instance_slot_in_the_mro_layout() {
         crate::class::mro_attrs(&base, &classes),
         vec![("w".to_string(), Ty::Int)]
     );
-    assert_eq!(crate::class::mro_attr_count(&base, &classes), 1);
+    assert_eq!(crate::class::mro_attrs(&base, &classes).len(), 1);
     // `Derived` inherits `Base`'s single slot and adds one of its own --
     // neither its own three class attributes nor `Base`'s inherited one
     // widen the layout.
@@ -591,7 +591,7 @@ fn class_level_attributes_occupy_no_instance_slot_in_the_mro_layout() {
         crate::class::mro_attrs(&derived, &classes),
         vec![("w".to_string(), Ty::Int), ("h".to_string(), Ty::Int)]
     );
-    assert_eq!(crate::class::mro_attr_count(&derived, &classes), 2);
+    assert_eq!(crate::class::mro_attrs(&derived, &classes).len(), 2);
     // The class attributes themselves survive the clone into `classes`
     // unchanged (`ClassAttrValue` is structurally comparable).
     assert_eq!(classes["Derived"].class_attrs, derived.class_attrs);
@@ -601,4 +601,77 @@ fn class_level_attributes_occupy_no_instance_slot_in_the_mro_layout() {
         "{:?}",
         ClassAttrValue::Bool(true)
     );
+}
+
+// -- #1388: `class::class_source_name` -------------------------------------
+
+fn named_class(name: &str, type_param: Option<&str>) -> pycc_hir::HirClassDef {
+    pycc_hir::HirClassDef {
+        name: name.to_string(),
+        bases: Vec::new(),
+        mro: vec![name.to_string()],
+        attrs: Vec::new(),
+        methods: Vec::new(),
+        properties: Vec::new(),
+        static_methods: Vec::new(),
+        class_methods: Vec::new(),
+        type_param: type_param.map(str::to_string),
+        is_enum: false,
+        implicit_object_init: false,
+        enum_members: Vec::new(),
+        class_attrs: Vec::new(),
+        is_dataclass: false,
+        dataclass_fields: Vec::new(),
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: Vec::new(),
+        abstract_methods: Vec::new(),
+        is_abstract: false,
+        exception_type_tag: None,
+    }
+}
+
+fn source_name_of(name: &str, defs: &[(&str, Option<&str>)]) -> String {
+    let classes: std::collections::HashMap<String, pycc_hir::HirClassDef> = defs
+        .iter()
+        .map(|(class, param)| (class.to_string(), named_class(class, *param)))
+        .collect();
+    crate::class::class_source_name(name, &classes)
+}
+
+#[test]
+fn a_plain_class_is_its_own_source_name() {
+    assert_eq!(source_name_of("Box", &[("Box", None)]), "Box");
+}
+
+#[test]
+fn a_monomorphised_class_reports_its_generic_class() {
+    let defs = [("Box", Some("T")), ("Pair", Some("K"))];
+    assert_eq!(source_name_of("0gen_Box__T_int", &defs), "Box");
+    assert_eq!(source_name_of("0gen_Pair__K_str", &defs), "Pair");
+    // The type parameter is part of the match: `Pair` binds `K`, not `T`.
+    assert_eq!(source_name_of("0gen_Pair__T_str", &defs), "Pair__T_str");
+}
+
+#[test]
+fn a_mangling_no_generic_class_matches_falls_back_to_its_unprefixed_name() {
+    assert_eq!(
+        source_name_of("0gen_Gone__T_int", &[("Box", Some("T"))]),
+        "Gone__T_int"
+    );
+    // A non-generic class of the matching name is no witness.
+    assert_eq!(
+        source_name_of("0gen_Box__T_int", &[("Box", None)]),
+        "Box__T_int"
+    );
+}
+
+#[test]
+fn overlapping_generic_names_resolve_to_the_longest() {
+    // `G` and `G__T_a` both prefix `G__T_a__T_int`; the longer one wins,
+    // whichever the map iterates first.
+    let defs = [("G", Some("T")), ("G__T_a", Some("T"))];
+    assert_eq!(source_name_of("0gen_G__T_a__T_int", &defs), "G__T_a");
+    let defs = [("G__T_a", Some("T")), ("G", Some("T"))];
+    assert_eq!(source_name_of("0gen_G__T_a__T_int", &defs), "G__T_a");
 }

@@ -238,3 +238,22 @@ fn a_type_var_declaration_outside_the_plain_form_is_refused() {
         "type variable `T` collides with a class of the same name already defined in this module",
     );
 }
+
+/// #1388: a `Generic[T]` class is not a PEP 695 generic class -- its `T`
+/// resolves to `object`, never `Ty::Param` -- so its declarations admit any
+/// establishing expression, which is what lets `declared_slot_ty` keep the
+/// shape gate to `type_param.is_some()` classes alone.
+#[test]
+fn a_generic_base_class_declares_object_slots_from_any_expression() {
+    let hir = lower_ok(&format!(
+        "{TYPING}class C(Generic[T]):\n    x: T\n    n: int\n\
+         \x20   def __init__(self, v: T, k: int) -> None:\n        self.x = v\n        \
+         self.n = k + 1\n"
+    ));
+    let c = class(&hir, "C");
+    assert!(c.type_param.is_none());
+    assert_eq!(
+        c.attrs,
+        vec![("x".to_string(), Ty::Object), ("n".to_string(), Ty::Int)]
+    );
+}

@@ -464,13 +464,13 @@ fn a_cross_module_helper_takes_a_foreign_class_parameter() {
     }
 }
 
-/// Pins a known divergence, the uninitialised-slot hazard (#1148): a
-/// foreign-class slot read before `__init__` assigns it holds a NULL word,
-/// which the foreign operation reports as `SystemError` where CPython raises
-/// `AttributeError`. Only the exception type names are compared.
+/// A foreign-class slot read before `__init__` assigns it raises CPython's
+/// own `AttributeError` (#1388; before it, the NULL word made the foreign
+/// operation report `SystemError`, the uninitialised-slot hazard #1148).
+/// The artifact's last traceback line must equal CPython's.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn a_foreign_slot_read_before_its_assignment_raises_system_error() {
+fn a_foreign_slot_read_before_its_assignment_raises_attribute_error() {
     let compiled_dir = ScratchDir::new("1367_hosted_null_slot").expect("scratch");
     let source_dir = ScratchDir::new("1367_hosted_null_slot_src").expect("scratch");
     let source = write(
@@ -492,16 +492,20 @@ fn a_foreign_slot_read_before_its_assignment_raises_system_error() {
         .output()
         .expect("pycc should spawn");
     assert!(build.status.success(), "{}", stderr_of(&build));
-    for (dir, expected) in [
-        (&compiled_dir, "SystemError"),
-        (&source_dir, "AttributeError"),
-    ] {
-        let run = import_m(dir);
-        assert!(!run.status.success(), "{expected}: {}", stdout_of(&run));
-        let stderr = stderr_of(&run);
-        let last = stderr.lines().last().unwrap_or_default();
-        assert!(last.starts_with(&format!("{expected}:")), "{stderr}");
-    }
+    let last_lines: Vec<String> = [&compiled_dir, &source_dir]
+        .into_iter()
+        .map(|dir| {
+            let run = import_m(dir);
+            assert!(!run.status.success(), "{}", stdout_of(&run));
+            let stderr = stderr_of(&run);
+            stderr.lines().last().unwrap_or_default().to_string()
+        })
+        .collect();
+    assert_eq!(
+        last_lines[0], "AttributeError: '_Box' object has no attribute 'f'",
+        "pycc"
+    );
+    assert_eq!(last_lines[0], last_lines[1], "pycc vs cpython");
 }
 
 /// A PEP 695 type parameter resolves before the alias table, so `[Fraction]`

@@ -116,7 +116,8 @@ fn instantiation_lowers_to_a_dedicated_mir_node() {
             target: "p".to_string(),
             value: MirExpr::Instantiate(Box::new(InstantiateExpr {
                 ctor: "Point.__init__".to_string(),
-                attr_count: 2,
+                class_name: "Point".to_string(),
+                slot_names: vec!["x".to_string(), "y".to_string()],
                 args: vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)],
                 ty: Ty::Instance(Box::new("Point".to_string())),
             })),
@@ -845,7 +846,7 @@ fn an_instance_class_attribute_read_folds_to_its_constant() {
         MirItem::TopLevelStmt(MirStmt::Assign {
             value: MirExpr::Instantiate(instantiate),
             ..
-        }) => Some(instantiate.attr_count),
+        }) => Some(instantiate.slot_names.len()),
         _ => None,
     });
     assert_eq!(attr_count, Some(1));
