@@ -1,7 +1,8 @@
 //! Emission for `MirExpr::ObjMethodCall` (Part 2 of #1026, PR 2b of #1081),
 //! `MirExpr::ObjCall` (#1313, through the same argument marshalling; a
 //! computed callee since Part 2a of #1371, see [`callee_is_produced`]),
-//! `MirExpr::ObjSubscript` (Part 3 of #1026, PR 3b of #1082) and
+//! `MirExpr::ObjSubscript` (Part 3 of #1026, PR 3b of #1082),
+//! `MirExpr::ObjSlice` (Part 2b of #1371, see [`emit_slice`]) and
 //! `MirStmt::ForObject` (PR 3c of #1082).
 //!
 //! They share this module because they share the *packer contract*: each
