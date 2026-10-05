@@ -43,6 +43,7 @@ mod object_compare;
 mod object_list_display;
 // Part 2b of #1371: membership in, and slices of, a CPython object.
 mod object_membership_slice;
+mod object_return;
 // Part 1 of #891: the run-time unpack of a CPython object.
 mod object_unpack;
 // Part 6 of #1371: `and`/`or` with a CPython object operand.

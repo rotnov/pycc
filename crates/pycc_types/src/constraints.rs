@@ -3046,6 +3046,15 @@ pub(crate) fn collect_block_constraints(
                     }
                     continue;
                 }
+                // #1387: a bare `return` / `return None` into a declared
+                // `object` slot, the check phase's own admission through the
+                // one shared predicate (`crate::object_none`). An inferred
+                // return (`Err(var)`) declines, as the buffer egress does.
+                if let Ok(declared) = &return_term
+                    && crate::object_none::admits_none_return(declared, value.as_ref())
+                {
+                    continue;
+                }
                 let actual = match value {
                     Some(expr) => collect_expr_constraints(
                         signatures,

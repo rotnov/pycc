@@ -118,13 +118,15 @@ fn the_literals_part_2d_leaves_refused_into_an_object_slot() {
     );
 }
 
-/// `None` is not yet assignable to the object (#1387): a bare `return`
-/// inside a `-> Any` function is a return-type mismatch.
+/// `None` is not assignable to the object (#1387): since Part 1 of #1387 a
+/// bare `return` or `return None` in a `-> Any` function returns CPython's
+/// `None` (`tests/issue_1387_none_into_object_return.rs`), but a
+/// `None`-typed expression there is still a return-type mismatch.
 #[test]
 fn none_into_an_object_return_is_still_t0022() {
     assert_ext_error(
         "1397_none_return",
-        &format!("{ANY}def f(x: Any) -> Any:\n    return None\n"),
+        &format!("{ANY}def g() -> None:\n    return\n\n\ndef f(x: Any) -> Any:\n    return g()\n"),
         "T0022",
         "return type mismatch: expected `object`, found `None`",
     );
