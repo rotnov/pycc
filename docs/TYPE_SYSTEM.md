@@ -343,10 +343,10 @@ element, and panics on an empty one.
   store (`self.s = [x]`, [#1421](https://github.com/rotnov/pycc/issues/1421)),
   a call argument (`f([])`), a `return []`, a conditional-expression or `or`
   operand and a module-level statement are not object slots here and keep their
-  diagnostics. One program changes code: `xs = []; xs.append(1); xs = o`
-  reported `T0023` and now reports `I0404`, because the display is the
-  object and `.append` on an object is not implemented yet
-  ([#1095](https://github.com/rotnov/pycc/issues/1095)).
+  diagnostics. `xs = []; xs.append(1); xs = o` reported `T0023` and now
+  compiles: the display is the object, and `.append` on it is the foreign
+  method call of [#1095](https://github.com/rotnov/pycc/issues/1095), so it
+  grows the CPython list.
 - **What is still an error, now `T0003`.** Any position with no inferable
   element type: a call argument (`f([])`), a `return []`, a nested literal
   (`[[]]`, `{"k": []}`), a module-level assignment, and a local whose only

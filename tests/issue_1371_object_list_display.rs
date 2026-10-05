@@ -116,8 +116,10 @@ fn assert_matches_cpython(tag: &str, module: &str, body: &str) -> String {
 /// mixed element types, lark lines 94-101 (`s` an object slice on one
 /// branch and `[]` on the other, then `callbacks[rule](s) if callbacks else
 /// s`, with a truthy and an empty `callbacks`), the empty
-/// display *before* the object binding, and a display in a nested block.
-/// Two calls of the same function return two distinct lists.
+/// display *before* the object binding, a display in a nested block, and
+/// an `.append` on an empty display that became the object (the method
+/// call is the #1095 foreign dispatch, so it grows the CPython list). Two
+/// calls of the same function return two distinct lists.
 const SUCCESS: &str = "import builtins\n\
     from typing import Any\n\
     \n\
@@ -151,6 +153,11 @@ const SUCCESS: &str = "import builtins\n\
     if n:\n        x: object = [n, n]\n        return len(x)\n    return 0\n\
     \n\
     \n\
+    def appended(n: int) -> object:\n    \
+    xs = []\n    xs.append(n)\n    \
+    if n > 100:\n        xs = builtins.list(\"ab\")\n    return xs\n\
+    \n\
+    \n\
     print(annotated())\n\
     print(builtins.type(annotated()).__name__)\n\
     print(annotated() is annotated())\n\
@@ -162,7 +169,8 @@ const SUCCESS: &str = "import builtins\n\
     print(lark(builtins.list(\"abcdef\"), 0, builtins.dict(), \"len\"))\n\
     print(later(1))\n\
     print(nested(5))\n\
-    print(nested(0))\n";
+    print(nested(0))\n\
+    print(appended(5))\n";
 
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
@@ -171,7 +179,7 @@ fn object_list_displays_behave_like_cpython_in_the_host() {
     assert_eq!(
         out,
         "[]\nlist\nFalse\n[7, 'a', 2.5, True, <built-in function len>, 8]\n[3, 6]\n[4]\n\
-         2\n[]\n[]\n['b', 'c']\n2\n0\nno error\n"
+         2\n[]\n[]\n['b', 'c']\n2\n0\n[5]\nno error\n"
     );
 }
 
@@ -250,8 +258,7 @@ fn every_packed_element_is_consumed_exactly_once() {
 /// The shapes Part 2d does not admit keep a diagnostic, never a panic: an
 /// element with no boxing helper, a dict display bound to an object, an
 /// empty display with no object evidence, a non-empty display whose only
-/// object evidence is another binding of the name, and an `.append` on an
-/// empty display that became the object (`I0404`, formerly `T0023`).
+/// object evidence is another binding of the name.
 #[test]
 fn the_shapes_outside_part_2d_are_refused() {
     const HEAD: &str = "import builtins\n\n\n";
@@ -286,15 +293,6 @@ fn the_shapes_outside_part_2d_are_refused() {
              return len(s)\n",
             "T0023",
             "cannot assign",
-        ),
-        // `T0023` before Part 2d: the empty display now becomes the object,
-        // so the `.append` is a method on an object, which is #1095.
-        (
-            "obj_list_append_then_object",
-            "def f() -> int:\n    xs = []\n    xs.append(1)\n    \
-             xs = builtins.list(\"ab\")[1:]\n    return len(xs)\n",
-            "I0404",
-            "using `xs`, which is bound to a CPython object, in this position is not supported yet",
         ),
     ] {
         let dir = ScratchDir::new(tag).expect("scratch");
