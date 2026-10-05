@@ -304,7 +304,7 @@ pub(super) fn lower_method(
 /// after the receiver, which carries neither an annotation nor a default.
 /// An annotated operand keeps its annotation, a defaulted one keeps #1409's
 /// default-derived type, and a `native` module keeps `T0021`, since `object`
-/// is not a type a native program can hold (`docs/TYPE_SYSTEM.md`).
+/// is not spellable in a `native` annotation (`docs/TYPE_SYSTEM.md`).
 fn equality_operand_as_object(
     mut params: Vec<(String, Ty)>,
     method_name: &str,

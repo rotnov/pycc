@@ -101,7 +101,7 @@ fn none_into_an_annotated_object_binding_is_still_refused() {
 }
 
 #[test]
-fn a_native_program_returns_none_into_a_foreign_class_return() {
+fn a_native_program_checks_a_none_return_into_a_foreign_class() {
     // The return-position rule keys on the declared type alone, so it holds
     // wherever `object` exists: in a `native` program a foreign class
     // annotates as it (Part 1 of #1367). The embedded runtime links the same
