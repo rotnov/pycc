@@ -943,8 +943,8 @@ mod tests {
     #[test]
     fn a_final_wrapping_an_unsupported_annotation_shape_propagates() {
         assert_collision(
-            "class C:\n    X: Final[\"int\"] = 1\n",
-            "got a string literal",
+            "class C:\n    X: Final[b\"int\"] = 1\n",
+            "got a bytes literal",
         );
     }
 

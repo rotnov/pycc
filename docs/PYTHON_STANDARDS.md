@@ -251,11 +251,11 @@ For each newly observed upstream release:
     targets in both profiles on run
     [33972731538](https://github.com/rotnov/pycc/actions/runs/33972731538)
     (`main` push for `51808cd8b1261d87900601679e33a8a5416ec6dc`, PR #938's
-    merge). Not `✅`: the fixture deliberately exercises no forward
-    reference to a later-defined name (PEP 563's distinguishing case) and
-    no string annotation, because pycc rejects both with `C0001` today
-    (#889), and no `__annotations__` introspection; the manifest records
-    all three as `core` gaps, which force `◐` under D-177.
+    merge); since #1410 it also runs a string annotation naming its own class. Not
+    `✅`: the fixture exercises no forward reference to a later-defined name (PEP
+    563's distinguishing case), which pycc rejects with `C0001`, quoted or not
+    (#889), and no `__annotations__` introspection; the manifest records both as
+    `core` gaps, which force `◐` under D-177.
 
 ## Python 3.0–3.2 (foundations)
 
