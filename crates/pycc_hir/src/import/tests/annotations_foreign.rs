@@ -1,7 +1,9 @@
 //! Part 1 of #1367: a name a foreign import binds is spellable in an
 //! annotation, as the opaque `Ty::Object` (`docs/TYPE_SYSTEM.md`, the
 //! `object` row). A subscript on it is erased and its arguments are never
-//! resolved, and `object` itself stays unspellable (Part 3, #1387).
+//! resolved, and in a native module `object` itself stays unspellable
+//! (Part 3, #1387); an `--ext` module spells it under D-258 (#1397,
+//! `annotations_ext.rs`).
 
 use super::from_foreign::{lower_foreign, lower_relative, only_error};
 use super::*;

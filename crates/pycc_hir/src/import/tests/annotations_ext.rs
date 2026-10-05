@@ -199,6 +199,25 @@ fn a_subscripted_any_or_object_is_t0044_in_an_ext_module() {
     }
 }
 
+/// A subscript on an *alias* of `Any` or `object` (`type Foo = Any`,
+/// `Bar: TypeAlias = object`) is erased to the object, not refused with
+/// `T0044`. The alias table records only the resolved `Ty::Object`, the
+/// same entry a foreign class's name gets, so the subscript arm cannot tell
+/// the two apart. This pins the current behaviour; it is not a miscompile.
+/// CPython 3.14 never evaluates the annotation (PEP 649), so `Foo[int]`
+/// accepts any object there too, which is exactly what the erased
+/// `Ty::Object` admits.
+#[test]
+fn a_subscripted_alias_of_any_or_object_is_erased_to_the_object() {
+    let module = lower_ext(&format!(
+        "{TYPING}type Foo = Any\nBar: TypeAlias = object\n\
+         def _f(a: Foo[int], b: Bar[str]) -> Foo[int]:\n    return a\n"
+    ));
+    let (params, return_ty) = signature(&module, "_f");
+    assert_eq!(params, vec![Ty::Object, Ty::Object]);
+    assert_eq!(return_ty, Ty::Object);
+}
+
 /// A module's own `object` or `list` shadows the builtin, as in Python:
 /// the builtin spelling is resolved after the class table and the aliases.
 #[test]

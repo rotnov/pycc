@@ -905,9 +905,10 @@ pub(crate) fn collect_expr_constraints(
                 // with an unresolved return variable, and signature
                 // materialization then reports `T0021: cannot infer return
                 // type ...; add an annotation` -- advice the user cannot
-                // act on, because the foreign object type is deliberately
-                // unspellable (only a class a foreign import binds resolves
-                // to it, Part 1 of #1367). With the term, the return materializes and
+                // act on, because in a native build the foreign object type
+                // is deliberately unspellable (only a class a foreign import
+                // binds resolves to it, Part 1 of #1367; an `--ext` module
+                // can also write `Any`/`object` under D-258). With the term, the return materializes and
                 // the check phase's own `I0404` (choke point 1 in
                 // `crate::foreign`) reports the real refusal instead.
                 //
@@ -1704,8 +1705,9 @@ pub(crate) fn collect_expr_constraints(
             // already propagated genuine errors).
             // Part 3 of #1026 (PR 3b of #1082): `o[k]` is a term, not a
             // hole, on exactly the `AttrGet` arm's own reasoning below --
-            // `object` is unspellable in an annotation
-            // (`docs/TYPE_SYSTEM.md`'s `object` row), so discarding the term
+            // outside an `--ext` module `object` is unspellable in an
+            // annotation (`docs/TYPE_SYSTEM.md`'s `object` row; D-258 lets
+            // an ext module write `Any`/`object`), so discarding the term
             // would leave an unannotated
             // `def _h(): return gc.garbage[0]` reporting a `T0021` asking
             // for an annotation no source can write, in place of the
@@ -1852,8 +1854,9 @@ pub(crate) fn collect_expr_constraints(
             // unannotated `def _helper(): return numpy.pi` would leave the
             // return variable unresolved and signature materialization
             // would report `T0021: ... add an annotation` -- advice no
-            // annotation can satisfy, because `object` is unspellable
-            // (`annotation_to_ty` rejects it with `C0001`; since Part 1 of
+            // annotation can satisfy in a native build, because there
+            // `object` is unspellable (`annotation_to_ty` rejects it with
+            // `C0001` outside an `--ext` module, D-258; since Part 1 of
             // #1367 only a class a foreign import binds resolves to it, and
             // `numpy.pi` is no class). Offering the
             // term lets the return materialize as `Ty::Object`. Since Part 1
