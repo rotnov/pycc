@@ -161,6 +161,31 @@ fn default_ty(default: &HirExpr) -> Ty {
     }
 }
 
+/// The type an **unannotated** defaulted parameter takes in an `--ext`
+/// module (#1409), or `None` when the default gives it none and the
+/// parameter keeps its `T0001`.
+///
+/// The parameter is typed exactly as if it carried the annotation its
+/// default implies (D-258's #1409 amendment), so it then goes through
+/// [`check_default`] and every later pass unchanged:
+///
+/// * a literal `int`, `float`, `bool` or `str` default gives that scalar
+///   type -- the annotation `x: bool = True` is what the parameter would
+///   have been written with, and a body that branches on it
+///   (`if deepcopy_values:`) stays native;
+/// * a `None` default gives the opaque CPython object (`Ty::Object`, the
+///   type `Any` lowers to in an `--ext` module) under
+///   [`DefaultPolicy::AdmitMethod`] only. A module-level `def` splices its
+///   default into in-module calls, where `None` at an object slot is still
+///   refused (#1387), so there a `None` default implies no type;
+/// * any other default (`[]`, a name, a call) implies no type.
+pub(crate) fn unannotated_default_ty(default: &Expr, policy: DefaultPolicy) -> Option<Ty> {
+    match default_ty(&literal_default(default)?) {
+        Ty::None => (policy == DefaultPolicy::AdmitMethod).then_some(Ty::Object),
+        scalar => Some(scalar),
+    }
+}
+
 /// Whether a literal of type `from` may fill a parameter annotated `to`.
 ///
 /// The subset of `pycc_types::is_assignable` reachable from a literal
@@ -191,11 +216,13 @@ fn literal_is_assignable(from: &Ty, to: &Ty) -> bool {
 /// policies; the `Reject` arm still runs before annotation resolution,
 /// preserving the pre-existing order for a protocol member.
 ///
-/// `ty` is the parameter's resolved annotation, or `Ty::Infer` for an
-/// unannotated parameter of a private `def`. **No type is inferred from a
-/// default**: an unannotated defaulted parameter keeps `Ty::Infer` and its
-/// default is accepted whatever it is, exactly as the same helper's
-/// unannotated non-defaulted parameter is today.
+/// `ty` is the parameter's resolved annotation, the type
+/// [`unannotated_default_ty`] gives an unannotated public parameter of an
+/// `--ext` module (#1409), or `Ty::Infer` for an unannotated parameter of a
+/// private `def`. Outside that `--ext` case **no type is inferred from a
+/// default**: an unannotated defaulted parameter of a private `def` keeps
+/// `Ty::Infer` and its default is accepted whatever it is, exactly as the
+/// same helper's unannotated non-defaulted parameter is today.
 ///
 /// A mismatch is `T0021`, not the `T0025` an annotated *assignment* reports,
 /// even though the def-site syntax resembles one: by this part's design the

@@ -36,6 +36,10 @@ use crate::{HirExpr, HirItem, ImportBinding, Ty, lower_arg_list, unsupported};
 /// see `Ty::Infer`'s own doc comment). An unannotated `__init__` parameter
 /// referenced by a `self.<attr> = <param>` assignment would otherwise seed
 /// the slot with `Ty::Infer`, which must never reach `pycc_mir` unresolved.
+/// The one exception, in an `--ext` module, is an unannotated parameter
+/// whose literal or `None` default implies a concrete type (#1409,
+/// `func::params::unannotated_default_ty`): it seeds the slot with that
+/// type, never `Ty::Infer`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lower_method(
     def: &pycc_ast::StmtFunctionDef,

@@ -675,7 +675,16 @@ literal passed explicitly by the host would -- including the `int` row's
 `OverflowError` outside the inline range, and a `bool` default at an `int`
 parameter reading back as the `bool` itself, as in CPython. A receiver-exact inherited copy (#1337, D-254)
 serves its origin's defaults. Keywords stay refused (D-244 rule 7), and an
-export with no default keeps the exact check and byte-identical C.
+export with no default keeps the exact check and byte-identical C. An
+**unannotated** defaulted parameter of an `--ext` module
+([#1409](https://github.com/rotnov/pycc/issues/1409); `docs/TYPE_SYSTEM.md`,
+"Call surface") is carried as the parameter its default implies -- `state_stack=None`
+on a method as `state_stack: Any = None`, `deepcopy_values=True` as
+`deepcopy_values: bool = True` -- and generates byte-identical C to that
+annotated twin, so it is unpacked by the table's row for that type below: a
+`bool`, `int`, `float` or `str` default's parameter refuses exactly the host
+values that row refuses (an `int` parameter still accepts a `bool`) with the
+row's `TypeError`, where CPython would accept them.
 
 | Annotation | As a parameter | As a return type |
 |---|---|---|

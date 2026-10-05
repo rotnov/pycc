@@ -4,7 +4,7 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 
 ## Strictness rules
 
-1. Every public function/method: parameters and return type annotated, else `T0001`.
+1. Every public function/method: parameters and return type annotated, else `T0001` (except an unannotated defaulted parameter in an `ext` module; see "No type is inferred from a default, except in an `ext` module" below).
 2. Locals and private helpers: inferred (Hindley-Milner-flavored local inference; annotations always win).
 3. `Any` does not exist in pure pycc code — it is a compile error (`T0002`) except at compiler-classified CPython interop boundaries (see RUNTIME.md § interop). Planned v0.7 creates that boundary behind ordinary standard-Python imports; it does not require a pycc-specific import spelling (D-128). **Implemented since [#1397](https://github.com/rotnov/pycc/issues/1397) ([D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md), [#1285](https://github.com/rotnov/pycc/issues/1285)):** in a module compiled into a `pycc build --ext` artifact, `typing.Any`, the builtin name `object`, and a container annotation over that type (or an unparametrised `list`/`dict`/`tuple`/`set`, or one over a foreign class or type variable) are the opaque CPython `object` a foreign import binds (the `object` row below), and such a value crosses the export boundary unchanged. It is a top type, not PEP 484's gradual `Any`: an object reaches a native-typed slot only through an explicit conversion. A `native` program keeps `T0002` for `Any` (and `C0001` for `object` and a bare container), byte for byte. The exact admitted set is narrower than that summary in three places: only the four bare spellings `list`, `dict`, `tuple`, `set` collapse (a bare `frozenset` or `List` keeps `C0001`); a container over a type variable keeps `T0042`; and `Any[...]`/`object[...]` are `T0044`, since neither is generic. Three neighbouring seams stay refused with their existing codes: a list literal into an object slot (`xs: object = []` is `T0003`, `[x]` is a native `list[object]` and `T0034`), `None` into an object slot (`T0022`, [#1387](https://github.com/rotnov/pycc/issues/1387)), and a run-time class check on a foreign-class parameter, which crosses unchecked for now ([#1386](https://github.com/rotnov/pycc/issues/1386)).
 4. No implicit `Optional`, no implicit numeric narrowing **or widening** (D-086 — includes `int` at a `float`-annotated boundary; `float(x)` for `x: int | float | bool` is now a real callable builtin conversion, D-086's own remedy for that boundary, correctly deferring to a user-defined `float` of the same name if one exists — `int(...)` remains unimplemented and out of scope, and a bigint-valued `int` argument raises a catchable `OverflowError` since Part C of #1038 ([#1065](https://github.com/rotnov/pycc/issues/1065)), formerly a process abort -- the same pre-existing limitation every other numeric promotion to `float` already has, now reported rather than fatal), no untyped containers (`x = []` requires inferable or annotated element type).
@@ -27,7 +27,9 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   public class joins the `ext` export set. The inference convention below stays
   module-level: a method body is not a private-helper inference root, a
   `_`-prefixed method creates no inference variables, and every method
-  parameter and return still needs a written annotation. Widening the
+  parameter and return still needs a written annotation (except an
+  unannotated defaulted parameter in an `ext` module; see "No type is
+  inferred from a default, except in an `ext` module" below). Widening the
   inference convention would be a separate change with its own solver work,
   not a corollary of the export-set widening.
 - The v0.1 solver links those variables through call arguments, local names,
@@ -732,9 +734,25 @@ twin. Four rules follow from that model:
   Part 3 of #884 widens both to the module boundary. A `def` whose name is
   bound more than once in module scope fills no default either (see "Keyword
   arguments and default parameter values on a redefined name" below).
-- **No type is inferred from a default.** An unannotated parameter of a
-  private helper keeps its inferred type; the default does not seed it. A
-  public function's parameter still needs its annotation (`T0001`).
+- **No type is inferred from a default, except in an `ext` module.** An
+  unannotated parameter of a private helper keeps its inferred type; the
+  default does not seed it. A public function's parameter still needs its
+  annotation (`T0001`). The one exception is an `ext` module
+  ([#1409](https://github.com/rotnov/pycc/issues/1409), D-258's #1409
+  amendment): there an unannotated parameter of a public function or method,
+  `__init__` included, whose default is in the admitted subset takes the type
+  that default implies, and is then checked exactly as if it carried that
+  annotation. A literal `int`, `float`, `bool` or `str` default gives that
+  scalar type (`deepcopy_values=True` is `deepcopy_values: bool = True`, so a
+  body that branches on it stays native). A `None` default gives the opaque
+  object type (`state_stack=None` is `state_stack: Any = None`) on a method
+  only; on a module-level `def` it implies no type, for the reason the
+  previous rule gives, and stays `T0001`. A parameter with no default, or
+  with a default outside the subset (`= []`), stays `T0001`, as does every
+  `native` build. The scalar choice is stricter than CPython at the host
+  boundary: a host value the annotated twin's row in `docs/RUNTIME.md`
+  refuses (`copy(0)` for a `bool` parameter) raises `TypeError`, as for any
+  annotated scalar parameter (D-244 rule 7).
 - **A mismatch is `T0021`, not `T0025`.** The def-site syntax resembles an
   annotated assignment, but by this model the default *is* a call-site
   argument, so it is checked with the call-argument rule and reported with
