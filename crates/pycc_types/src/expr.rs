@@ -275,6 +275,9 @@ pub(crate) fn infer_expr_in(
             right,
             truth_only,
         } => crate::boolop::infer_bool_op(env, local_names, *op, left, right, *truth_only),
+        HirExpr::IfExp { test, body, orelse } => {
+            crate::if_exp::infer_if_exp(env, local_names, test, body, orelse)
+        }
         HirExpr::BinOp { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;
@@ -580,12 +583,14 @@ pub(crate) fn infer_expr_in(
                 // row.
                 //
                 // The message below deliberately does *not* enumerate
-                // `object`: it is unspellable in an annotation
-                // (`docs/TYPE_SYSTEM.md`'s `object` row) and exists only
-                // because a foreign `import` bound it -- or, since Part 1 of
-                // #1367, a class such an import binds annotated it -- so
-                // "pass an `object`" is advice nobody can act on by writing a
-                // type. `tests::float_of_a_str_is_rejected_as_t0021` pins the
+                // `object`: outside an `--ext` module it is unspellable in
+                // an annotation (`docs/TYPE_SYSTEM.md`'s `object` row) and
+                // exists only because a foreign `import` bound it -- or,
+                // since Part 1 of #1367, a class such an import binds
+                // annotated it -- so in a native build "pass an `object`" is
+                // advice nobody can act on by writing a type. (Under D-258 an
+                // ext module can spell it as `Any`/`object`; the message is
+                // shared by both modes and keeps the native wording.) `tests::float_of_a_str_is_rejected_as_t0021` pins the
                 // exact text, so the omission reads as deliberate rather than
                 // as an oversight.
                 //

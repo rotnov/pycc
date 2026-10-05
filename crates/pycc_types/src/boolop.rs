@@ -98,7 +98,10 @@ fn admit_operand(
 /// The first class in `class_name`'s MRO that defines a truth dunder, with
 /// that dunder's name. `None` for a class pycc has no definition of (a
 /// monomorphized generic instance's own name) and for a class with neither.
-fn class_truth_dunder(env: &Environment, class_name: &str) -> Option<(String, &'static str)> {
+pub(crate) fn class_truth_dunder(
+    env: &Environment,
+    class_name: &str,
+) -> Option<(String, &'static str)> {
     let class_def = env.lookup_class(class_name)?;
     class_def.mro.iter().find_map(|mro_class| {
         let mro_def = env.lookup_class(mro_class)?;

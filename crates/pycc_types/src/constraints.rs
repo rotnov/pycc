@@ -905,9 +905,10 @@ pub(crate) fn collect_expr_constraints(
                 // with an unresolved return variable, and signature
                 // materialization then reports `T0021: cannot infer return
                 // type ...; add an annotation` -- advice the user cannot
-                // act on, because the foreign object type is deliberately
-                // unspellable (only a class a foreign import binds resolves
-                // to it, Part 1 of #1367). With the term, the return materializes and
+                // act on, because in a native build the foreign object type
+                // is deliberately unspellable (only a class a foreign import
+                // binds resolves to it, Part 1 of #1367; an `--ext` module
+                // can also write `Any`/`object` under D-258). With the term, the return materializes and
                 // the check phase's own `I0404` (choke point 1 in
                 // `crate::foreign`) reports the real refusal instead.
                 //
@@ -1014,6 +1015,40 @@ pub(crate) fn collect_expr_constraints(
                         &format!("`{}` operands", op.as_str()),
                     )?;
                     Ok(Some(left))
+                }
+                _ => Ok(None),
+            }
+        }
+        // #1395: `body if test else orelse`. `test` is collected for its
+        // own constraints only; its type does not reach the result. Two
+        // concrete branch types take the one join rule `pycc_types::if_exp`
+        // and `pycc_mir` also use, and a pair with no join yields no term,
+        // so `infer_expr_in` reports the `T0021`. A branch that is still an
+        // inference variable is unified with the other branch, inferring
+        // only the equal-type case -- except against `None`, which would
+        // bind the variable to `None` where the join means `T | None`, so
+        // that pair yields no term.
+        HirExpr::IfExp { test, body, orelse } => {
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, test)?;
+            let body =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, body)?;
+            let orelse =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, orelse)?;
+            match (body, orelse) {
+                (Some(Ok(body)), Some(Ok(orelse))) => {
+                    Ok(pycc_hir::if_exp_result_ty(&body, &orelse).map(Ok))
+                }
+                (Some(Ok(Ty::None)), _) | (_, Some(Ok(Ty::None))) => Ok(None),
+                (Some(body), Some(orelse)) => {
+                    unify_terms(
+                        body.clone(),
+                        orelse,
+                        parents,
+                        concrete,
+                        "T0021",
+                        "conditional expression branches",
+                    )?;
+                    Ok(Some(body))
                 }
                 _ => Ok(None),
             }
@@ -1714,8 +1749,9 @@ pub(crate) fn collect_expr_constraints(
             // already propagated genuine errors).
             // Part 3 of #1026 (PR 3b of #1082): `o[k]` is a term, not a
             // hole, on exactly the `AttrGet` arm's own reasoning below --
-            // `object` is unspellable in an annotation
-            // (`docs/TYPE_SYSTEM.md`'s `object` row), so discarding the term
+            // outside an `--ext` module `object` is unspellable in an
+            // annotation (`docs/TYPE_SYSTEM.md`'s `object` row; D-258 lets
+            // an ext module write `Any`/`object`), so discarding the term
             // would leave an unannotated
             // `def _h(): return gc.garbage[0]` reporting a `T0021` asking
             // for an annotation no source can write, in place of the
@@ -1862,8 +1898,9 @@ pub(crate) fn collect_expr_constraints(
             // unannotated `def _helper(): return numpy.pi` would leave the
             // return variable unresolved and signature materialization
             // would report `T0021: ... add an annotation` -- advice no
-            // annotation can satisfy, because `object` is unspellable
-            // (`annotation_to_ty` rejects it with `C0001`; since Part 1 of
+            // annotation can satisfy in a native build, because there
+            // `object` is unspellable (`annotation_to_ty` rejects it with
+            // `C0001` outside an `--ext` module, D-258; since Part 1 of
             // #1367 only a class a foreign import binds resolves to it, and
             // `numpy.pi` is no class). Offering the
             // term lets the return materialize as `Ty::Object`. Since Part 1
@@ -2079,6 +2116,12 @@ fn bind_named_expr_targets(
         | HirExpr::BoolOp { left, right, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, left)?;
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, right)
+        }
+        HirExpr::IfExp { test, body, orelse } => {
+            for part in [test, body, orelse] {
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, part)?;
+            }
+            Ok(())
         }
         HirExpr::CompareChain { first, links } => {
             for operand in pycc_hir::compare_chain_operands(first, links) {

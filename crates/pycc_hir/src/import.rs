@@ -233,9 +233,27 @@ pub struct ResolvedImports<'a> {
     /// every loaded module, since a sibling this module never imports cannot
     /// hand it an instance of that class.
     container_method_names: BTreeSet<&'static str>,
+    /// D-258 rule 1 (#1397): the module is compiled into an `ext` artifact
+    /// (`pycc build --ext`), so `Any`, `object` and an object container
+    /// annotation lower to the opaque `Ty::Object` instead of being refused.
+    /// `false` by default, which is every `native` path (`pycc check`,
+    /// `pycc build`/`run`, `lower_all`), so their output is unchanged.
+    ext_module: bool,
 }
 
 impl<'a> ResolvedImports<'a> {
+    /// Marks the module as compiled into an `ext` artifact (D-258 rule 1,
+    /// #1397). The driver sets it for every module it lowers for `pycc
+    /// build --ext`, the entry module and every project module linked into
+    /// it alike: the artifact mode is a property of the build.
+    pub fn set_ext_module(&mut self, ext_module: bool) {
+        self.ext_module = ext_module;
+    }
+
+    pub(crate) fn ext_module(&self) -> bool {
+        self.ext_module
+    }
+
     /// Adds container method names that one of this module's dependencies
     /// can reach (issue #1188).
     pub fn inherit_container_method_names(

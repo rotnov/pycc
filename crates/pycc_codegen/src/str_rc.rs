@@ -48,9 +48,10 @@ use super::*;
 /// reliably reproducible use-after-free caught in review, not merely a
 /// theoretical gap (D-154 Part 1's own post-merge finding).
 ///
-/// A `MirExpr::BoolOp` (#1211) is owning here, like every node this
-/// `matches!` does not name: each of its value arms increfs a duplicate
-/// operand inside that arm, so its `str` result is always a fresh reference.
+/// A `MirExpr::BoolOp` (#1211) or `MirExpr::IfExp` (#1395) is owning here,
+/// like every node this `matches!` does not name: each of its value arms
+/// increfs a duplicate operand inside that arm, so its `str` result is
+/// always a fresh reference.
 ///
 /// `MirExpr::ExceptionMessage` (#1298) -- `print(e)` and `f"{e}"` on a caught
 /// exception binding -- is a duplicate reference for the same field-load

@@ -689,6 +689,12 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             }
             infer_expr_in(env, local_names, expr)
         }
+        HirExpr::IfExp { test, body, orelse } => {
+            for sub in [test.as_mut(), body.as_mut(), orelse.as_mut()] {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
         HirExpr::FString(parts) => {
             for part in parts.iter_mut() {
                 if let FStringPart::Interpolation(inner) = part {
@@ -1292,6 +1298,11 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
         | HirExpr::BoolOp { left, right, .. } => {
             collect_generic_class_instantiations_from_expr(left, out);
             collect_generic_class_instantiations_from_expr(right, out);
+        }
+        HirExpr::IfExp { test, body, orelse } => {
+            for part in [test, body, orelse] {
+                collect_generic_class_instantiations_from_expr(part, out);
+            }
         }
         HirExpr::FString(parts) => {
             for part in parts {
@@ -2723,6 +2734,21 @@ fn rewrite_protocol_calls_in_expr(
                 specializations,
                 seen,
             );
+        }
+        // #1395: like `BoolOp` above, without this arm the `_ => {}`
+        // catch-all below would leave a protocol-typed call inside a
+        // conditional expression unspecialized.
+        HirExpr::IfExp { test, body, orelse } => {
+            for part in [test, body, orelse] {
+                rewrite_protocol_calls_in_expr(
+                    part,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
+            }
         }
         // #1212: without this arm the `_ => {}` catch-all below would skip
         // a protocol-typed call inside a chained comparison and leave it

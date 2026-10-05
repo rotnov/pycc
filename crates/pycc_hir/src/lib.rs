@@ -10,6 +10,7 @@ mod exception;
 mod expr;
 mod func;
 mod hir_module;
+mod if_exp;
 mod import;
 mod int_boundary;
 mod module;
@@ -50,6 +51,7 @@ pub use hir_module::{
     foreign_bound_object, foreign_import_statement, killed_names, opens_foreign_statement,
     top_level_bound_names,
 };
+pub use if_exp::if_exp_result_ty;
 pub use import::{
     ProjectImportRequest, ResolvedImport, ResolvedImports, ResolvedModule, project_import_requests,
 };
@@ -202,13 +204,19 @@ pub enum Ty {
     Optional(Box<Ty>),
     /// An opaque CPython object (Part 1 of #1026): the value a foreign
     /// `import numpy` binds. Carries no shape at all -- pycc knows only
-    /// that the value is a `PyObject *` owned by the CPython runtime, so
-    /// every operation on it is refused by `pycc_types` (`I0404`) except
-    /// the read that produces it. The variant is deliberately unit-shaped
-    /// and `object` itself is unspellable in an annotation: it is not a
-    /// builtin type name `annotation_to_ty` accepts. Since Part 1 of #1367
-    /// the name of a class a foreign import binds resolves to this variant
-    /// in an annotation (`docs/TYPE_SYSTEM.md`'s `object` row).
+    /// that the value is a `PyObject *` owned by the CPython runtime.
+    /// `pycc_types` admits only the operations lowered through the CPython C
+    /// API (`docs/TYPE_SYSTEM.md`'s `object` row) and refuses every other one
+    /// with `I0404`. In a `native` build `object` itself is unspellable in
+    /// an annotation: `annotation_to_ty` rejects it with `C0001`, and `Any`
+    /// with `T0002`. In every module of a `pycc build --ext` artifact (D-258,
+    /// #1397) `typing.Any`, the builtin `object`, a bare
+    /// `list`/`dict`/`tuple`/`set` and a container with an object argument
+    /// all spell this variant, and a public signature carries it across the
+    /// export boundary as the `PyObject *` itself. Since Part 1 of #1367 the name of a
+    /// class a foreign import binds resolves to this variant in an
+    /// annotation in either mode (`docs/TYPE_SYSTEM.md`'s `object` row). The
+    /// variant is deliberately unit-shaped.
     /// A unit variant adds no payload, so `size_of::<Ty>()` stays at the
     /// D-109 16-byte ceiling.
     Object,
@@ -439,6 +447,22 @@ pub enum HirExpr {
         left: Box<HirExpr>,
         right: Box<HirExpr>,
         truth_only: bool,
+    },
+    /// `body if test else orelse` (#1395).
+    ///
+    /// `test` is evaluated exactly once, first, and only for its truth:
+    /// lowering marks it a truth position (`crate::boolop::mark_truth_context`),
+    /// so an `and`/`or` directly inside it is typed `bool`. Then exactly one
+    /// of `body` (truthy) or `orelse` (falsy) is evaluated, and the node
+    /// yields that branch's value, typed by [`if_exp_result_ty`].
+    ///
+    /// A walrus is admitted in `test`, which always runs, and refused in
+    /// either branch, which may not: every binding walker binds a walrus
+    /// target unconditionally (see `HirExpr::BoolOp`'s lowering).
+    IfExp {
+        test: Box<HirExpr>,
+        body: Box<HirExpr>,
+        orelse: Box<HirExpr>,
     },
     FString(Vec<FStringPart>),
     /// `[e1, e2, ...]`. Element homogeneity is `pycc_types`' job, not this

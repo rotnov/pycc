@@ -418,6 +418,9 @@ impl Verifier<'_> {
                 base: left,
                 index: right,
             } => self.exprs([left.as_ref(), right.as_ref()]),
+            MirExpr::IfExp {
+                test, body, orelse, ..
+            } => self.exprs([test.as_ref(), body.as_ref(), orelse.as_ref()]),
             MirExpr::CompareChain { first, links } => {
                 self.expr(first);
                 for link in links {

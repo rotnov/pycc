@@ -167,6 +167,16 @@ pub(crate) fn boundary_carrier(ty: &Ty) -> Option<BoundaryCarrier> {
         Ty::Float => Some(BoundaryCarrier::Scalar("double", "float")),
         Ty::Bool => Some(BoundaryCarrier::Scalar("char", "bool")),
         Ty::Str => Some(BoundaryCarrier::Scalar("void *", "str")),
+        // D-258 rule 5 (#1397): the opaque CPython object -- `Any`,
+        // `object`, an object-carrying container, and (until #1386 decides
+        // otherwise) a foreign-imported class -- crosses as the `PyObject *`
+        // itself, which is what `ty_to_basic_type` gives `Ty::Object`.
+        // `pycc_ext_unpack_object` admits any object and hands the compiled
+        // body a strong reference it never releases (RUNTIME #1092's
+        // leak-only rule), and `pycc_ext_pack_object` returns a new
+        // reference to the very pointer the body handed back, so identity
+        // survives the round trip (`f(x) is x`).
+        Ty::Object => Some(BoundaryCarrier::Scalar("void *", "object")),
         Ty::Tuple(elements) => elements
             .iter()
             .map(|element| match element {
@@ -186,6 +196,13 @@ pub(crate) fn boundary_carrier(ty: &Ty) -> Option<BoundaryCarrier> {
                 // annotation -- which is why it is stated rather than
                 // left to a recursion that happens to work.
                 Ty::Str => None,
+                // The same reasoning for D-258's opaque object (#1397): a
+                // single top-level slot, but no `pycc_ext_unpack_object_at`
+                // element shim. Unreachable from an `ext` source today --
+                // D-258 rule 4 collapses `tuple[int, Any]` to the object
+                // itself before a `Ty::Tuple` is ever built -- so stated
+                // rather than left to the recursion.
+                Ty::Object => None,
                 // Every other element goes through this same function,
                 // so its width comes from the table above rather than a
                 // parallel one, and a `list` element (no carrier at all)
@@ -358,7 +375,8 @@ pub(crate) fn capability_gap(name: &str, offender: &str) -> Diagnostic {
             "--ext cannot export the public {noun} `{source_name}`: its {offender} is not a type \
              this pycc version's CPython boundary can carry -- a parameter must be `int`, \
              `float`, `bool`, `str`, `memoryview` (or its other spellings `ndarray` and \
-             `NDArray`) or a \
+             `NDArray`), a CPython object (`Any`, `object`, a foreign class, or a container \
+             of objects) or a \
              `tuple` of `int`/`float`/`bool`, and a \
              return type must be one of those, or `None` \
              (D-244 rule \

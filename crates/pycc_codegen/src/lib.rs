@@ -30,6 +30,7 @@ mod compare;
 mod compare_chain;
 mod comprehension;
 mod copy_slots;
+mod if_exp;
 use bigint_rc::{
     BigIntRefcount, emit_bigint_refcount_call, pop_pending_int_release,
     push_pending_int_release_if_scalar_temporary, push_pending_int_release_if_temporary,
@@ -2592,6 +2593,26 @@ fn emit_expr_unchecked<'ctx>(
             right,
             ty,
             *truth_only,
+        ),
+        // #1395: `body if test else orelse`. See `if_exp.rs`.
+        MirExpr::IfExp {
+            test,
+            body,
+            orelse,
+            ty,
+        } => if_exp::emit_if_exp(
+            &boolop::Emitter {
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+            },
+            test,
+            body,
+            orelse,
+            ty,
         ),
         MirExpr::Not(operand) => {
             let operand_scalar = emit_expr(

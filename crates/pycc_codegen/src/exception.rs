@@ -234,6 +234,12 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // `emit_expr` inside its own arm, which guards that operand where
         // it is evaluated, so this node adds no edge of its own.
         | MirExpr::BoolOp { .. }
+        // #1395: a conditional expression is a truth test, a branch and a
+        // join, all infallible; `test` and each branch are guarded by their
+        // own `emit_expr` where they are evaluated. (An `object` condition's
+        // truth test raises through `foreign_len::emit_truthy`'s own
+        // failure edge, as in an `if` statement.)
+        | MirExpr::IfExp { .. }
         // #1212 (Part 4 of #1018): a chained comparison is compares,
         // branches and a join. Each operand is guarded by its own
         // `emit_expr`, and each link that can leave an exception pending

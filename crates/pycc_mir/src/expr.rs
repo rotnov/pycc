@@ -522,6 +522,11 @@ pub(super) fn lower_expr(
             lower_expr(right, scopes, classes, current_class),
             *truth_only,
         ),
+        HirExpr::IfExp { test, body, orelse } => super::if_exp::lower_if_exp(
+            lower_expr(test, scopes, classes, current_class),
+            lower_expr(body, scopes, classes, current_class),
+            lower_expr(orelse, scopes, classes, current_class),
+        ),
         HirExpr::BinOp { op, left, right } => {
             let left = lower_expr(left, scopes, classes, current_class);
             let right = lower_expr(right, scopes, classes, current_class);
@@ -1572,6 +1577,11 @@ pub(super) fn pre_bind_named_expr_targets(
         | HirExpr::BoolOp { left, right, .. } => {
             pre_bind_named_expr_targets(left, scopes, classes, current_class);
             pre_bind_named_expr_targets(right, scopes, classes, current_class);
+        }
+        HirExpr::IfExp { test, body, orelse } => {
+            for part in [test, body, orelse] {
+                pre_bind_named_expr_targets(part, scopes, classes, current_class);
+            }
         }
         HirExpr::CompareChain { first, links } => {
             for operand in pycc_hir::compare_chain_operands(first, links) {

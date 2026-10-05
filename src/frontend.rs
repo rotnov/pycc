@@ -214,12 +214,19 @@ impl ProgramSources {
 /// `relative_imports` is how the entry module's relative imports resolve
 /// (#1366): [`RelativeImports::Project`] everywhere but a `pycc build --ext
 /// --foreign-relative-imports`.
+///
+/// `ext_module` is whether the program is compiled into an `ext` artifact
+/// (D-258 rule 1, #1397): `true` only from [`resolve_frontend_with`], the
+/// `pycc build --ext` frontend, so `pycc check` and every native build keep
+/// today's `Any`/`object`/container refusals byte-identical.
 fn link_frontend(
     path: &Path,
     module_name: Option<&str>,
     relative_imports: RelativeImports,
+    ext_module: bool,
 ) -> Result<(HirModule, ProgramSources, Option<DiscoveredManifest>), FrontendFailure> {
-    let program: LoadedProgram = modules::load_with(path, module_name, relative_imports)?;
+    let program: LoadedProgram =
+        modules::load_with(path, module_name, relative_imports, ext_module)?;
     let manifest = program.manifest;
     let mut files = Vec::with_capacity(program.modules.len());
     let mut bounds = Vec::with_capacity(program.modules.len());
@@ -292,8 +299,12 @@ fn link_frontend(
 /// so it never emits `I0403`: only whether the policy admits each
 /// CPython-backed import is checked here.
 pub(crate) fn check_frontend(path: &Path, interop: InteropCli) -> Result<(), FrontendFailure> {
-    let (hir, sources, manifest) =
-        link_frontend(path, Some(NATIVE_MODULE_NAME), RelativeImports::Project)?;
+    let (hir, sources, manifest) = link_frontend(
+        path,
+        Some(NATIVE_MODULE_NAME),
+        RelativeImports::Project,
+        false,
+    )?;
     let policy = interop_policy::resolve_for_program(&hir, manifest.as_ref(), interop)?;
     pycc_types::check_all_keyed(&hir).map_err(|keyed| sources.group(attribute(&sources, keyed)))?;
     let gaps = interop_policy::policy_gaps(&hir, &policy);
@@ -317,8 +328,12 @@ pub(crate) fn lock_frontend(
     path: &Path,
     interop: InteropCli,
 ) -> Result<HirModule, FrontendFailure> {
-    let (hir, sources, manifest) =
-        link_frontend(path, Some(NATIVE_MODULE_NAME), RelativeImports::Project)?;
+    let (hir, sources, manifest) = link_frontend(
+        path,
+        Some(NATIVE_MODULE_NAME),
+        RelativeImports::Project,
+        false,
+    )?;
     let policy = interop_policy::resolve_for_program(&hir, manifest.as_ref(), interop)?;
     let gaps = interop_policy::policy_gaps(&hir, &policy);
     if gaps.is_empty() {
@@ -339,7 +354,7 @@ pub(crate) fn resolve_frontend(
     path: &Path,
     module_name: Option<&str>,
 ) -> Result<HirModule, FrontendFailure> {
-    resolve_frontend_with(path, module_name, RelativeImports::Project)
+    resolve_linked(path, module_name, RelativeImports::Project, false)
 }
 
 /// Link and type-check the entry file's program, the `pycc build --ext`
@@ -352,7 +367,18 @@ pub(crate) fn resolve_frontend_with(
     module_name: Option<&str>,
     relative_imports: RelativeImports,
 ) -> Result<HirModule, FrontendFailure> {
-    let (hir, sources, _manifest) = link_frontend(path, module_name, relative_imports)?;
+    resolve_linked(path, module_name, relative_imports, true)
+}
+
+/// Links and type-checks the entry file's program; `ext_module` is
+/// [`link_frontend`]'s (D-258, #1397).
+fn resolve_linked(
+    path: &Path,
+    module_name: Option<&str>,
+    relative_imports: RelativeImports,
+    ext_module: bool,
+) -> Result<HirModule, FrontendFailure> {
+    let (hir, sources, _manifest) = link_frontend(path, module_name, relative_imports, ext_module)?;
     pycc_types::check_and_resolve_all_keyed(&hir)
         .map_err(|keyed| sources.group(attribute(&sources, keyed)))
 }
@@ -438,8 +464,12 @@ pub(crate) fn resolve_frontend_native(
     host: EmbedHost,
     interop: InteropCli,
 ) -> Result<(HirModule, NeedsInterpreter), FrontendFailure> {
-    let (hir, sources, manifest) =
-        link_frontend(path, Some(NATIVE_MODULE_NAME), RelativeImports::Project)?;
+    let (hir, sources, manifest) = link_frontend(
+        path,
+        Some(NATIVE_MODULE_NAME),
+        RelativeImports::Project,
+        false,
+    )?;
     let policy = interop_policy::resolve_for_program(&hir, manifest.as_ref(), interop)?;
     let import_gaps = crate::foreign_import::classify_for_native_build(&hir, host, &policy);
     // Keyed by *item* index rather than import position: a `memoryview`

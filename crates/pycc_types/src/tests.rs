@@ -35,6 +35,7 @@ mod generic_class_substitution;
 mod generic_method_dedup;
 mod generic_method_instantiation;
 mod generic_monomorphization_arms;
+mod if_exp;
 mod import_alias;
 mod init_rank;
 mod optional_narrowing;
@@ -5797,9 +5798,9 @@ fn float_with_two_arguments_is_rejected_as_t0021() {
 
 /// Also the pin for PR 4a of #1083's deliberate omission: `float`'s gate now
 /// admits `Ty::Object` too, but the message still enumerates only the three
-/// spellable types, because `object` is unspellable in an annotation
-/// (`docs/TYPE_SYSTEM.md`'s `object` row) and "pass an `object`" is advice
-/// nobody can act on.
+/// spellable types, because in a native build `object` is unspellable in an
+/// annotation (`docs/TYPE_SYSTEM.md`'s `object` row; D-258 admits it only in
+/// an `--ext` module) and "pass an `object`" is advice nobody can act on.
 #[test]
 fn float_of_a_str_is_rejected_as_t0021() {
     let mut env = Environment::new();

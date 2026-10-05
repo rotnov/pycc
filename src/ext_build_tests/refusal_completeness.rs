@@ -121,6 +121,7 @@ fn the_shim_declares_exactly_the_unpack_helpers_the_boundary_refuses_through() {
         "int",
         "int_at",
         "memoryview",
+        "object",
         "str",
         "tuple",
     ]
@@ -153,6 +154,10 @@ fn every_admitted_argument_type_refuses_before_the_call_and_after_the_arity_chec
         // to release argument 1's already-acquired `Py_buffer`, which the
         // one-parameter shape cannot state at all.
         ("take_memoryview", Ty::MemoryView),
+        // D-258 rule 5 (#1397): the opaque object, a scalar-shaped slot
+        // whose helper admits every object but still sits behind the same
+        // `!= 0` arm, so the wrapper's shape stays uniform.
+        ("take_object", Ty::Object),
     ];
     for (name, ty) in rows {
         let params = [("a", ty.clone()), ("b", ty.clone())];
@@ -226,13 +231,9 @@ fn expected_to_carry(ty: &Ty) -> bool {
         // carrier -- which is the asymmetry this predicate deliberately
         // does not model, since it answers only the parameter question.
         Ty::MemoryView => true,
-        // Part 1 of #1026: an opaque CPython object is refused at the
-        // export boundary (D-244 rule 2 admits only the scalar set). The
-        // refusal is stated twice over: `collect_exports` rejects the
-        // signature with `C0003` before `boundary_carrier` is ever asked
-        // (see `an_object_typed_parameter_is_refused_at_the_export_boundary`),
-        // and this arm pins the carrier answer itself.
-        Ty::Object => false,
+        // D-258 rule 5 (#1397), replacing Part 1 of #1026's refusal: the
+        // opaque CPython object crosses as the `PyObject *` itself.
+        Ty::Object => true,
     }
 }
 
@@ -259,6 +260,8 @@ fn no_type_outside_the_admitted_set_is_carried_at_a_parameter_position() {
         Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float, Ty::Bool])),
         // No `_at` element shim, exactly like `tuple[str]` below.
         Ty::Tuple(Box::new(vec![Ty::MemoryView])),
+        // Nor for D-258's object (#1397): carried at a top-level slot only.
+        Ty::Tuple(Box::new(vec![Ty::Object])),
         // The two element shapes the boundary refuses: neither has an
         // `_at` helper, and both are unreachable from source today only
         // because `T0039` refuses the annotation first.

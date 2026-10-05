@@ -4886,12 +4886,12 @@ fn super_attr_outside_method_is_c0001() {
 
 #[test]
 fn super_method_with_unsupported_arg_is_c0001() {
-    // `super().foo(x if True else y)` — the ternary argument is an
-    // unsupported expression kind, so `lower_expr` on the argument
-    // returns Err, which the `?` in the super().method() lowering path
-    // propagates as C0001.
+    // `super().foo(lambda: 1)` — the lambda argument is an unsupported
+    // expression kind, so `lower_expr` on the argument returns Err, which
+    // the `?` in the super().method() lowering path propagates as C0001.
+    // (The conditional expression this test used before #1395 now lowers.)
     let module = pycc_parser_test_helper::parse(
-        "class A:\n    def __init__(self) -> None:\n        super().foo(x if True else y)\n",
+        "class A:\n    def __init__(self) -> None:\n        super().foo(lambda: 1)\n",
     );
     let err = lower_checked(&module).unwrap_err();
     assert_eq!(err.code, "C0001");
@@ -6346,10 +6346,10 @@ fn a_protocol_body_ellipsis_names_the_expression_inside_the_statement() {
 }
 
 #[test]
-fn a_conditional_expression_receiver_names_its_expression_kind() {
+fn a_lambda_receiver_names_its_expression_kind() {
     assert_capability_error_message(
-        "def f(a: str, b: str) -> str:\n    return (a if a else b).upper()\n",
-        "expression kind not supported yet: a conditional expression (`x if c else y`)",
+        "def f(a: str) -> str:\n    return (lambda: a).upper()\n",
+        "expression kind not supported yet: a `lambda`",
     );
 }
 

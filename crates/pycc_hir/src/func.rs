@@ -337,6 +337,37 @@ fn name_resolves_before_class_defs(base: &str) -> bool {
     )
 }
 
+/// The alias-table entry that marks a module compiled into an `ext`
+/// artifact (D-258, #1397).
+///
+/// D-258 rule 6 records that `pycc_hir` has no artifact-mode awareness of
+/// its own, and that unconditional lowering with a mode-aware refusal
+/// elsewhere is one admissible shape. It is not the shape used here:
+/// lowering `Any` unconditionally would change `native` output beyond the
+/// `T0002` itself (`list[Any]` would reach `T0034`, `Any[int]` would be
+/// accepted), so the mode is told to the lowering instead, which rule 6's
+/// "any other shape that keeps `native` output byte-identical" admits. The
+/// driver sets [`crate::ResolvedImports::set_ext_module`], and
+/// `module::lower_module` records this entry in the alias table every
+/// [`annotation_to_ty`] call site already receives, so no call site needs a
+/// new parameter. The name is not a Python identifier, so no source name
+/// can ever look it up, and it is stripped before the `HirModule` is built.
+pub(crate) const EXT_MODULE_MARKER: &str = "<ext module>";
+
+/// Whether `aliases` carries [`EXT_MODULE_MARKER`], that is, whether the
+/// annotation being lowered belongs to an `ext` module (D-258 rule 1).
+pub(crate) fn is_ext_module(aliases: &[(String, Ty)]) -> bool {
+    aliases.iter().any(|(name, _)| name == EXT_MODULE_MARKER)
+}
+
+/// The four bare container spellings D-258 rule 4 makes the opaque object in
+/// an `ext` module. Exactly the four the decision names: a bare `frozenset`,
+/// and the bare legacy `typing` aliases (`List`, `Dict`, ...), keep their
+/// `C0001` everywhere.
+fn is_ext_object_container(name: &str) -> bool {
+    matches!(name, "list" | "dict" | "tuple" | "set")
+}
+
 /// The noun for [`annotation_to_ty`]'s non-class `T0044` (#931): what the
 /// base of a subscripted annotation resolved to, when it is neither a class
 /// nor an alias to one. The arms follow the **same precedence the
@@ -368,6 +399,11 @@ pub(crate) fn subscripted_base_description(
     } else {
         match base {
             "int" | "float" | "bool" | "str" => format!("builtin type `{base}`"),
+            // Reached only in an `ext` module (D-258, #1397): a `native`
+            // build answers `Any[...]` with `T0002` before any noun is
+            // needed. `Any` is reserved before both tables, so no alias of
+            // that name can make it mean anything else.
+            "Any" => "`Any`".to_string(),
             _ => format!("type alias `{base}`"),
         }
     }
@@ -479,11 +515,13 @@ pub(crate) fn annotation_to_ty(
             // carrier a `pycc build --ext` boundary admits so a host can
             // hand compiled code a NumPy-shaped array without copying it.
             // Lowered unconditionally here, in both parameter and return
-            // position, because `pycc_hir` has no artifact-mode awareness
-            // at all -- the two mode-dependent refusals live where the mode
-            // is known: `src/ext_build.rs` refuses a `memoryview` *return*
-            // with `C0003`, and `src/memoryview_mode.rs` refuses a
-            // `memoryview` *signature* with `I0405` in a native build.
+            // position: the mode-dependent refusal lives where the mode is
+            // known -- `src/memoryview_mode.rs` refuses a `memoryview`
+            // *signature* with `I0405` in a native build. Since #1397 this
+            // crate does know one artifact-mode fact, `EXT_MODULE_MARKER`
+            // (D-258 rule 6), but only `Any`, `object` and the
+            // object-carrying containers consult it; the buffer carrier
+            // keeps its unconditional lowering.
             //
             // This arm is also the parser of a bare `x: memoryview`
             // declaration, which neither mode-dependent refusal reaches --
@@ -491,6 +529,10 @@ pub(crate) fn annotation_to_ty(
             // body. `crates/pycc_types`'s `reject_memoryview_declaration`
             // owns that position, in both modes.
             "memoryview" => Ok(Ty::MemoryView),
+            // D-258 rule 2 (#1397): in an `ext` module `Any` is the opaque
+            // CPython object a foreign import binds. Everywhere else it keeps
+            // `T0002`, with the same code, message and span.
+            "Any" if is_ext_module(aliases) => Ok(Ty::Object),
             "Any" => Err(Diagnostic::error(
                 "T0002",
                 "`Any` is not permitted in pycc code outside a declared interop boundary"
@@ -565,6 +607,15 @@ pub(crate) fn annotation_to_ty(
                 // `name_resolves_before_aliases` ladder.
                 if matches!(other, "ndarray" | "NDArray") {
                     return Ok(Ty::MemoryView);
+                }
+                // D-258 rules 3 and 4 (#1397): in an `ext` module the builtin
+                // `object` and a bare `list`/`dict`/`tuple`/`set` are the
+                // opaque CPython object. Resolved *after* `class_defs` and the
+                // alias table, on the `ndarray` terms above: a module's own
+                // `class list:` or `type object = ...` shadows the builtin, as
+                // it does in Python.
+                if is_ext_module(aliases) && (other == "object" || is_ext_object_container(other)) {
+                    return Ok(Ty::Object);
                 }
                 Err({
                     // The message is built in `module` so #867's cascade
@@ -705,8 +756,10 @@ pub(crate) fn annotation_to_ty(
                 // Two bases keep their pre-#931 diagnostic on purpose: an
                 // undefined name still gets the exact `C0001` that
                 // `module::cascade_name` parses back (D-219), and `Any`
-                // still gets `T0002`. Both come out of the final recursion
-                // on the bare base before the reject can fire.
+                // still gets `T0002` outside an `ext` module. Both come out
+                // of the final recursion on the bare base before the reject
+                // can fire. Inside an `ext` module `Any[...]` and
+                // `object[...]` get this `T0044` instead (D-258, #1397).
                 _ => {
                     let base = base_name.id.as_str();
                     let range = pycc_ast::expr_range(annotation);
@@ -728,7 +781,8 @@ pub(crate) fn annotation_to_ty(
                     // `class_defs` and the alias table there, so an alias
                     // that happens to share such a name must not win here
                     // either (`type int = C` + bare `x: int` is `Int`; `type
-                    // Any = C` + `Any[str]` is `T0002`; both stay that way).
+                    // Any = C` + `Any[str]` is `T0002` -- `T0044` in an `ext`
+                    // module, D-258 -- and both stay that way).
                     //
                     // #1129: `memoryview` is on that list for the same reason
                     // -- it is a reserved keyword the `Expr::Name` arm answers
@@ -888,7 +942,9 @@ pub(crate) fn annotation_to_ty(
                     }
                     // Step 4 (#931, narrowed by #1130): resolve the bare base
                     // so an undefined name keeps its cascade-shaped `C0001`
-                    // (D-219) and `Any` keeps `T0002`. A base that resolves
+                    // (D-219) and `Any` keeps `T0002` in a `native` build
+                    // (in an `ext` module it resolves, and is refused by
+                    // the `non_generic_object` guard below). A base that resolves
                     // here is either not a class at all -- a type parameter,
                     // `Self`, a builtin scalar, or an alias to a
                     // scalar/container/Optional/type parameter -- or it is one
@@ -935,15 +991,39 @@ pub(crate) fn annotation_to_ty(
                     // (`Queue[int]`, `ParseTableBase[StateT]`) is erased the
                     // same way, its arguments never resolved -- CPython 3.14
                     // never evaluates an annotation (PEP 649).
-                    if resolved == Ty::MemoryView || resolved == Ty::Object {
+                    //
+                    // D-258 (#1397): `Any` and `object` resolve to the same
+                    // `Ty::Object` in an `ext` module, but neither is generic,
+                    // so `Any[int]` and `object[int]` are refused with the
+                    // `T0044` every other non-subscriptable base gets rather
+                    // than being erased like a foreign class's subscript.
+                    // `Any` is reserved before both tables, so it is always
+                    // the builtin here; `object` is the builtin only when no
+                    // alias or foreign import of that name shadows it (a
+                    // module's own `class object` took the known-class
+                    // ladder above). A foreign import named `object` is a
+                    // foreign class and keeps the erasure.
+                    let builtin_object =
+                        base == "object" && !aliases.iter().any(|(name, _)| name == base);
+                    let non_generic_object = base == "Any" || builtin_object;
+                    if resolved == Ty::MemoryView || (resolved == Ty::Object && !non_generic_object)
+                    {
                         return Ok(resolved);
                     }
+                    // The noun is decided here rather than in
+                    // `subscripted_base_description`, which sees only the
+                    // spelling: `type object = int` + `object[str]` must
+                    // keep its `native` noun, "type alias `object`".
+                    let noun = if builtin_object {
+                        "builtin type `object`".to_string()
+                    } else {
+                        subscripted_base_description(base, type_param, class_name)
+                    };
                     Err(Diagnostic::error(
                         "T0044",
                         format!(
-                            "{} is not subscriptable, so `{base}[...]` is not a valid type \
-                             annotation",
-                            subscripted_base_description(base, type_param, class_name)
+                            "{noun} is not subscriptable, so `{base}[...]` is not a valid type \
+                             annotation"
                         ),
                         Span::new(range.start, range.end),
                     ))

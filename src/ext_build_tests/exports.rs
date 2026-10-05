@@ -340,7 +340,8 @@ fn a_tuple_of_something_uncarriable_is_a_capability_gap_naming_the_tuple() {
     assert!(
         message.contains(
             "a parameter must be `int`, `float`, `bool`, `str`, `memoryview` (or its \
-             other spellings `ndarray` and `NDArray`) or a `tuple` of \
+             other spellings `ndarray` and `NDArray`), a CPython object (`Any`, `object`, \
+             a foreign class, or a container of objects) or a `tuple` of \
              `int`/`float`/`bool`, and a \
              return type must be one of those, or `None`"
         ),
@@ -434,38 +435,46 @@ fn every_gap_in_a_program_is_collected_before_the_build_gives_up() {
     assert!(third.contains("`xs: list`"), "{third}");
 }
 
-/// Part 1 of #1026 work item 12: D-244 rule 2 fixes the artifact's ABI to a
-/// scalar set, and an opaque CPython object is not in it. The refusal is
-/// `C0003` -- the same capability gap every other unadmitted type gets --
-/// and it fires in `collect_exports`, before `boundary_carrier` is ever
-/// consulted, which is what the `Ty::Object => false` arm in
-/// `refusal_completeness.rs` pins from the other side.
-///
-/// Reachable from Python source since Part 1 of #1367: a public parameter
-/// annotated with a class a foreign import binds is `object`, and
-/// `tests/issue_1367_foreign_class_annotations.rs` pins the CLI's `C0003`.
-/// The HIR is built directly here so the boundary's own answer stays pinned
-/// independently of the front end (carrying it is #1386).
+/// D-258 rule 5 (#1397), replacing Part 1 of #1026 work item 12's refusal:
+/// the opaque CPython object is carried at a parameter position as the
+/// `PyObject *` itself. Reachable from Python source as an `Any`/`object`
+/// annotation, a container of objects, and -- the interim answer #1386 may
+/// still revisit -- a class a foreign import binds.
 #[test]
-fn an_object_typed_parameter_is_refused_at_the_export_boundary() {
+fn an_object_typed_parameter_is_carried_at_the_export_boundary() {
     let hir = module(vec![func("wrap", &[("x", Ty::Object)], Ty::Int)]);
-    let gaps = collect_exports(&hir).expect_err("an opaque object is not carriable");
-    assert_eq!(gaps.len(), 1);
-    assert_eq!(gaps[0].code, EXT_CAPABILITY_CODE);
-    let message = &gaps[0].message;
-    assert!(message.contains("`x: object`"), "{message}");
+    let exports = collect_exports(&hir).expect("an opaque object is carriable");
+    assert_eq!(exports.len(), 1);
+    assert_eq!(exports[0].params, vec![Ty::Object]);
+    assert_eq!(
+        boundary_carrier(&Ty::Object),
+        Some(BoundaryCarrier::Scalar("void *", "object"))
+    );
 }
 
-/// The return half of the same refusal: `collect_exports` asks the two
-/// positions against separate admissible sets, so a `-> object` that only
-/// the parameter arm refused would still reach the wrapper.
+/// The return half: `collect_exports` asks the two positions against
+/// separate admissible sets, so the return is pinned on its own.
 #[test]
-fn an_object_return_type_is_refused_at_the_export_boundary() {
+fn an_object_return_type_is_carried_at_the_export_boundary() {
     let hir = module(vec![func("fetch", &[("x", Ty::Int)], Ty::Object)]);
-    let gaps = collect_exports(&hir).expect_err("an opaque object is not carriable");
-    assert_eq!(gaps.len(), 1);
+    let exports = collect_exports(&hir).expect("an opaque object return is carriable");
+    assert_eq!(exports[0].return_ty, Ty::Object);
+    assert_eq!(return_c_type(&Ty::Object), Some("void *"));
+}
+
+/// A `tuple` element stays refused: there is no
+/// `pycc_ext_unpack_object_at` element shim. Unreachable from an `ext`
+/// source, where D-258 rule 4 collapses such a tuple to the object itself.
+#[test]
+fn an_object_tuple_element_is_still_a_capability_gap() {
+    let hir = module(vec![func(
+        "pair",
+        &[("t", Ty::Tuple(Box::new(vec![Ty::Int, Ty::Object])))],
+        Ty::Int,
+    )]);
+    let gaps = collect_exports(&hir).expect_err("no `_at` shim for an object element");
     let message = &gaps[0].message;
-    assert!(message.contains("`-> object`"), "{message}");
+    assert!(message.contains("`t: tuple`"), "{message}");
 }
 
 #[test]

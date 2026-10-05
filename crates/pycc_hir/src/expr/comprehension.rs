@@ -88,6 +88,11 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
             left: Box::new(recurse(*left)),
             right: Box::new(recurse(*right)),
         },
+        HirExpr::IfExp { test, body, orelse } => HirExpr::IfExp {
+            test: Box::new(recurse(*test)),
+            body: Box::new(recurse(*body)),
+            orelse: Box::new(recurse(*orelse)),
+        },
         HirExpr::Compare { op, left, right } => HirExpr::Compare {
             op,
             left: Box::new(recurse(*left)),

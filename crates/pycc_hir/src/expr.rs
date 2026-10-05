@@ -308,6 +308,32 @@ pub(crate) fn lower_expr(
             }
             fold_bool_op(op, operands)
         }
+        // #1395: `body if test else orelse`. `test` always runs, first, and
+        // only for its truth, so it is a truth position and may hold a
+        // walrus; either branch may not run, so a walrus there is refused
+        // for the same reason as in a later `and`/`or` operand.
+        Expr::If(if_exp) => {
+            let mut test = lower_expr(&if_exp.test, in_function, class_name, imports, signatures)?;
+            mark_truth_context(&mut test);
+            let mut branches = Vec::with_capacity(2);
+            for branch in [&if_exp.body, &if_exp.orelse] {
+                let lowered = lower_expr(branch, in_function, class_name, imports, signatures)?;
+                if contains_named_expr(&lowered) {
+                    return Err(unsupported(
+                        "a walrus assignment (`:=`) in a conditional expression branch is not supported",
+                        pycc_ast::expr_range(branch),
+                    ));
+                }
+                branches.push(lowered);
+            }
+            let orelse = branches.pop().expect("two branches were pushed");
+            let body = branches.pop().expect("two branches were pushed");
+            HirExpr::IfExp {
+                test: Box::new(test),
+                body: Box::new(body),
+                orelse: Box::new(orelse),
+            }
+        }
         Expr::Name(name) => HirExpr::Name(name.id.as_str().to_string()),
         Expr::List(list) => HirExpr::ListLiteral(
             list.elts
@@ -979,6 +1005,9 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
         }
         HirExpr::CompareChain { first, links } => {
             contains_named_expr(first) || links.iter().any(|link| contains_named_expr(&link.right))
+        }
+        HirExpr::IfExp { test, body, orelse } => {
+            contains_named_expr(test) || contains_named_expr(body) || contains_named_expr(orelse)
         }
         HirExpr::UnaryOp { operand, .. } => contains_named_expr(operand),
         HirExpr::FString(parts) => parts.iter().any(|part| match part {
