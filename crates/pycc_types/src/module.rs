@@ -404,7 +404,10 @@ pub(super) fn check_with_environment_all(
     let mut collected = KeyedDiagnostics::new();
     for (index, (item, local_names)) in hir.items.iter().zip(function_local_names).enumerate() {
         if let HirItem::Function {
-            params, return_ty, ..
+            name,
+            params,
+            return_ty,
+            ..
         } = item
         {
             // D-133/D-134: a generic function's body is checked through
@@ -419,7 +422,10 @@ pub(super) fn check_with_environment_all(
                 check_generic_function_in(&env, item, local_names)
             } else {
                 check_function_in(&env, item, local_names)
-            };
+            }
+            // #1420: a receiver-exact copy must not infer a return its
+            // callers, typed through the origin, cannot see.
+            .and_then(|()| inherited_copies::check_copy_return(&env, name));
             if let Err(diagnostic) = checked {
                 collected.push((DiagnosticKey::Function(index), diagnostic));
             }

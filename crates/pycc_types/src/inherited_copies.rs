@@ -29,7 +29,7 @@ mod plan;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use pycc_diag::Span;
+use pycc_diag::{Diagnostic, Span};
 
 use crate::module::{DiagnosticKey, KeyedDiagnostics};
 
@@ -247,6 +247,73 @@ fn copy_body(hir: &HirModule, body: &[HirStmt], copy: &PlannedCopy) -> Vec<HirSt
         }
         _ => body.to_vec(),
     }
+}
+
+/// #1420: refuses a copy whose resolved return is not assignable to its
+/// origin's -- the one way a copy's signature can drift from the origin's.
+///
+/// A caller types `recv.m()` through the class tables, where copies never
+/// appear, so it sees the *origin's* return, while codegen dispatches to the
+/// copy. An annotated return is copied verbatim and each copy's body is
+/// checked against it, so the two cannot disagree. An *inferred* return is
+/// solved per item, and since #1420 it can follow a receiver-dependent
+/// method call: `def _t(self): return self.val()` infers `int` for `Base`
+/// but `str` for a `Derived` whose `val` returns `str`, and the call
+/// `Derived(...)._t()` would be typed `int` but run the `str` body. A
+/// narrower copy return (`type(self)(...)` answering the subclass) stays
+/// admitted: the origin's type is still a sound description of it.
+///
+/// The diagnostic is the one an annotated origin raises for the same body
+/// (`T0022`, "return type mismatch"); the driver's [`CopiedModule::rekey`]
+/// reports it at the origin with the note naming the receiver class.
+pub(crate) fn check_copy_return(env: &crate::Environment, name: &str) -> Result<(), Diagnostic> {
+    let Some(copy) = inherited_copy_origin(name, &|class| env.lookup_class(class)) else {
+        return Ok(());
+    };
+    // A copy and its origin are both registered functions; a missing
+    // signature (none is known) has nothing to compare and is admitted.
+    let returns = env
+        .lookup_function(name)
+        .zip(env.lookup_function(&copy.origin_name));
+    let Some(((_, copy_return), (_, origin_return))) =
+        returns.filter(|((_, copy), (_, origin))| {
+            !crate::class::is_assignable_env(env, copy, origin)
+                && !is_subclass_instance(env, copy, origin)
+        })
+    else {
+        return Ok(());
+    };
+    Err(Diagnostic::error(
+        "T0022",
+        format!(
+            "return type mismatch: expected `{}`, found `{}` (inherited `{}` compiled for subclass `{}`)",
+            origin_return.name(),
+            copy_return.name(),
+            copy.origin_name,
+            copy.receiver
+        ),
+        Span::new(0, 0),
+    )
+    .with_help(format!(
+        "the inherited `{}` infers `{}` for `{}`; annotate its return type, or make the overriding members agree",
+        copy.member,
+        copy_return.name(),
+        copy.receiver
+    )))
+}
+
+/// Whether `narrow` is an instance of a class whose MRO contains the class
+/// `wide` is an instance of. pycc's assignability is invariant for user
+/// classes (return types are not covariant), but a copy answering
+/// `type(self)(...)` for its receiver legitimately narrows the origin's
+/// `Base` to the receiver's subclass, and the origin's type still describes
+/// every value the copy can return.
+fn is_subclass_instance(env: &crate::Environment, narrow: &Ty, wide: &Ty) -> bool {
+    let (Ty::Instance(sub), Ty::Instance(base)) = (narrow, wide) else {
+        return false;
+    };
+    env.lookup_class(sub)
+        .is_some_and(|def| def.mro.iter().any(|class| class == base.as_ref()))
 }
 
 #[cfg(test)]

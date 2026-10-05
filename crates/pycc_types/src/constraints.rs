@@ -59,6 +59,7 @@
 //!
 //! [D-185]: https://github.com/rotnov/pycc/blob/main/docs/decisions/D-185-permit-a-dedicated-tracking-issue-per-oversized.md
 
+mod method_return;
 mod object_lift;
 mod set_comp;
 mod signatures;
@@ -267,6 +268,12 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// only ever be *narrower* than it -- the safe direction for a seam
     /// whose answer displaces the check phase's.
     pub(crate) finals: HashSet<String>,
+    /// #1420: the module's class table (`HirModule::class_defs`), read
+    /// only by the `MethodCall` arm to resolve `recv.m(...)` on a
+    /// user-class instance to the method's return term
+    /// (`method_return::method_call_on_instance`). Shared by every
+    /// environment of one module; empty in a unit-test environment.
+    pub(crate) class_defs: &'hir [(String, pycc_hir::HirClassDef)],
 }
 
 impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
@@ -289,6 +296,7 @@ impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
             returns_inside_finally: false,
             shadowed_producers: HashSet::new(),
             finals: HashSet::new(),
+            class_defs: &[],
         }
     }
 
@@ -1945,7 +1953,7 @@ pub(crate) fn collect_expr_constraints(
             }
             Ok(None)
         }
-        HirExpr::MethodCall { base, args, .. } => {
+        HirExpr::MethodCall { base, method, args } => {
             let base_term =
                 collect_expr_constraints(signatures, parents, concrete, deferred, env, base)?;
             for arg in args {
@@ -1954,7 +1962,18 @@ pub(crate) fn collect_expr_constraints(
             // Part 1 of #1333: `o.method(...)` on a concrete `object`
             // receiver answers `object`, on the `AttrGet` and `Subscript`
             // arms' own reasoning above; the three arms change together.
-            Ok(object_lift::method_call_on_object(base_term.as_ref()))
+            // #1420: on a concrete user-class instance it answers the
+            // resolved method's return term.
+            Ok(
+                object_lift::method_call_on_object(base_term.as_ref()).or_else(|| {
+                    method_return::method_call_on_instance(
+                        signatures,
+                        env,
+                        base_term.as_ref(),
+                        method,
+                    )
+                }),
+            )
         }
         // Issue #1188: this solver never picks a reading and never rejects.
         // An admitted container reading is collected exactly as the

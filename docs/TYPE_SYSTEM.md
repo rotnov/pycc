@@ -24,14 +24,41 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   predicate (`pycc_hir::is_public_name`) and this *inference* convention.
   #1143 widens only the first, applying the same unforked predicate to a class
   name and a method name so that a public `@staticmethod`/`@classmethod` of a
-  public class joins the `ext` export set. The inference convention below stays
-  module-level: a method body is not a private-helper inference root, a
-  `_`-prefixed method creates no inference variables, and every method
-  parameter and return still needs a written annotation (except an
-  unannotated defaulted parameter in an `ext` module; see "No type is
-  inferred from a default, except in an `ext` module" below). Widening the
-  inference convention would be a separate change with its own solver work,
-  not a corollary of the export-set widening.
+  public class joins the `ext` export set. The export-set widening does not
+  widen inference: a *public* method's parameters and return still need
+  written annotations (`T0001`, except an unannotated defaulted parameter in
+  an `ext` module; see "No type is inferred from a default, except in an
+  `ext` module" below). A `_`-prefixed or dunder method is not public, and
+  the solver walks it like any other function: an unannotated return is an
+  inference variable solved from its body, and one left unconstrained is the
+  same `T0021` "cannot infer return type of private helper `C._m`". A method
+  parameter is never inferred from a call site: calls to a method do not
+  unify their arguments with its parameters.
+- **A method call on a user-class instance** ([#1420](https://github.com/rotnov/pycc/issues/1420))
+  answers the return type of the method the receiver's class resolves it to,
+  walking the receiver class's MRO over its instance `methods` tables as the
+  check phase's `resolve_method_call` does: an annotated method contributes
+  its declared return, an unannotated one its own inference variable. So
+  `def __copy__(self): return self.copy()` infers `copy`'s return, and a
+  chain of unannotated helpers resolves in any source order. The receiver
+  must already be a concrete instance when the call is visited -- `self`, an
+  annotated parameter, or a local bound from one; a receiver that is still
+  an inference variable, a `@staticmethod`/`@classmethod` (their own
+  tables), a protocol, `super()`, and a method whose return mentions a type
+  parameter answer nothing, leaving the prior `T0021`. The call only links
+  two solver terms, so recursion (`return self._f()` inside `_f`) and
+  mutual recursion terminate with that `T0021` instead of looping.
+- **An inherited copy must agree with its origin's return.** A D-254
+  receiver-exact copy of an inherited method is solved per receiver class,
+  while a caller types `recv.m()` through the origin's signature. With
+  method-call inference an unannotated inherited `def _t(self): return
+  self.val()` could infer `int` for `Base` but `str` for a `Derived` whose
+  `val` returns `str`; the copy is refused with `T0022` "return type
+  mismatch: expected `int`, found `str` (inherited `Base._t` compiled for
+  subclass `Derived`)" rather than miscompiled. A copy whose return is an
+  instance of a subclass of the origin's return class -- an inherited
+  `return type(self)(...)` -- stays admitted, since the origin's type still
+  describes every value the copy returns.
 - The v0.1 solver links those variables through call arguments, local names,
   assignments, returns, `range` operands, and arithmetic expressions. The
   resulting helper signature is monomorphic within the module. Conflicting
