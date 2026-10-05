@@ -288,6 +288,7 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              bounds, a rich comparison with an object or \
              scalar operand, an identity test against an object or `None`, \
              a membership test of a scalar or object item in an object, \
+             a list display of scalar or object elements bound to an object slot, \
              `isinstance` against a foreign class or `int`/`float`/`bool`/`str`, `for` iteration, binding the \
              value to a name, returning it from and passing it to a pycc \
              function, printing it and f-string \
@@ -478,6 +479,7 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
 
 pub(crate) mod compare;
 pub(crate) mod for_loop;
+pub(crate) mod list_display;
 pub(crate) mod slice;
 pub(crate) mod subscript_call;
 

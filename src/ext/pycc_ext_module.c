@@ -2095,6 +2095,55 @@ PyObject *pycc_ext_obj_getslice(PyObject *o, PyObject *start, PyObject *stop, Py
 }
 
 /*
+ * Part 2d of #1371: a list display bound to an object slot, `x: object =
+ * [a, b]` (`EXT_OBJ_BUILD_LIST_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `items` holds `n` *packed* elements, in source order, each a new
+ * reference a `pycc_ext_obj_pack_*` helper produced. Every one is consumed
+ * on every path, exactly as `pycc_ext_obj_call` consumes its arguments: a
+ * `NULL` element is a packer that already set the exception, so the list is
+ * never built and the rest are released; a failed `PyList_New` releases
+ * them all. Otherwise each reference moves into the fresh list through
+ * `PyList_SetItem`, which steals it -- the limited API (abi3) has no
+ * `PyList_SET_ITEM`. The index is always in range of a list just built
+ * with `n` slots, so it cannot fail; the check is defence in depth and
+ * releases what has not moved yet. The result is a *new* reference that
+ * is deliberately never released, on the leak-only rule `docs/RUNTIME.md`
+ * records, or `NULL` with the exception set.
+ */
+PyObject *pycc_ext_obj_build_list(PyObject **items, long long n)
+{
+    PyObject *list = NULL;
+    int failed = 0;
+    long long i;
+
+    for (i = 0; i < n; i++) {
+        if (items[i] == NULL) {
+            failed = 1;
+        }
+    }
+    if (!failed) {
+        list = PyList_New((Py_ssize_t)n);
+    }
+    if (list == NULL) {
+        for (i = 0; i < n; i++) {
+            Py_XDECREF(items[i]);
+        }
+        return NULL;
+    }
+    for (i = 0; i < n; i++) {
+        if (PyList_SetItem(list, (Py_ssize_t)i, items[i]) < 0) {
+            for (i = i + 1; i < n; i++) {
+                Py_DECREF(items[i]);
+            }
+            Py_DECREF(list);
+            return NULL;
+        }
+    }
+    return list;
+}
+
+/*
  * Part 3 of #1026 (PR 3c of #1082): `iter(o)` for a `for x in <object>:`
  * loop (`EXT_OBJ_GET_ITER_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *

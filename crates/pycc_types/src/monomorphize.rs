@@ -704,6 +704,7 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             infer_expr_in(env, local_names, expr)
         }
         HirExpr::ListLiteral(elements)
+        | HirExpr::ObjectList(elements)
         | HirExpr::SetLiteral(elements)
         | HirExpr::TupleLiteral(elements) => {
             for element in elements.iter_mut() {
@@ -1320,7 +1321,10 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
                 }
             }
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 collect_generic_class_instantiations_from_expr(e, out);
             }
@@ -2822,7 +2826,7 @@ fn rewrite_protocol_calls_in_expr(
                 seen,
             );
         }
-        HirExpr::ListLiteral(elements) => {
+        HirExpr::ListLiteral(elements) | HirExpr::ObjectList(elements) => {
             for e in elements.iter_mut() {
                 rewrite_protocol_calls_in_expr(
                     e,

@@ -291,6 +291,16 @@ pub const EXT_OBJ_CONTAINS_SYMBOL: &str = "pycc_ext_obj_contains";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_GETSLICE_SYMBOL: &str = "pycc_ext_obj_getslice";
 
+/// The fixed C shim's list-display helper (Part 2d of #1371): it takes an
+/// array of `n` *packed* elements and returns a *new* reference to a fresh
+/// CPython `list` holding them in order, or `NULL` with the CPython
+/// exception already set. It consumes every element on every path -- a
+/// `NULL` element (a failed packer) and a failed `PyList_New` included --
+/// for the reason [`EXT_OBJ_GETITEM_SYMBOL`] records.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_BUILD_LIST_SYMBOL: &str = "pycc_ext_obj_build_list";
+
 /// The fixed C shim's `None` accessor (Part 1 of #1371): a *borrowed*
 /// pointer to CPython's immortal `None`, the right-hand side of `o is None`.
 ///

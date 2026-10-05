@@ -1000,9 +1000,10 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
             FStringPart::Literal(_) => false,
             FStringPart::Interpolation(e) => contains_named_expr(e),
         }),
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
-            es.iter().any(contains_named_expr)
-        }
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => es.iter().any(contains_named_expr),
         HirExpr::Subscript { base, index } => {
             contains_named_expr(base) || contains_named_expr(index)
         }

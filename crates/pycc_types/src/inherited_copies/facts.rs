@@ -329,6 +329,7 @@ impl<'a> Walker<'a> {
                 }
             }
             HirExpr::ListLiteral(items)
+            | HirExpr::ObjectList(items)
             | HirExpr::SetLiteral(items)
             | HirExpr::TupleLiteral(items) => {
                 for item in items {

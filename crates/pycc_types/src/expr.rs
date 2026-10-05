@@ -881,6 +881,11 @@ pub(crate) fn infer_expr_in(
             pycc_hir::check_container_ty(&dict_ty, Span::new(0, 0))?;
             Ok(dict_ty)
         }
+        // Part 2d of #1371: a list display the empty-container pre-pass
+        // resolved to an object slot, built as a CPython `list`.
+        HirExpr::ObjectList(elements) => {
+            crate::foreign::list_display::object_list_ty(env, local_names, elements)
+        }
         HirExpr::ListLiteral(elements) => {
             // #1021: reaching this arm with no elements means the
             // empty-container pre-pass (`crate::empty_container`) found no

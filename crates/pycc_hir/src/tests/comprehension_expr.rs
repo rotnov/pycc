@@ -198,3 +198,28 @@ fn a_nested_dict_comprehension_renames_the_outer_variable_in_its_key_and_value()
         CompElt::Set(HirExpr::Name(set_outer.var.clone()))
     );
 }
+
+/// Part 2d of #1371: `HirExpr::ObjectList` is built only by `pycc_types`'
+/// empty-container pre-pass, after lowering, so no source reaches the
+/// rename with one. The arm still keeps the node and renames every
+/// element, so a future caller cannot silently lose a loop variable.
+#[test]
+fn renaming_an_object_list_renames_every_element() {
+    let renamed = rename_name_in_expr(
+        HirExpr::ObjectList(vec![
+            HirExpr::Name("i".to_string()),
+            HirExpr::IntLiteral(1),
+            HirExpr::Name("j".to_string()),
+        ]),
+        "i",
+        "k",
+    );
+    assert_eq!(
+        renamed,
+        HirExpr::ObjectList(vec![
+            HirExpr::Name("k".to_string()),
+            HirExpr::IntLiteral(1),
+            HirExpr::Name("j".to_string()),
+        ])
+    );
+}
