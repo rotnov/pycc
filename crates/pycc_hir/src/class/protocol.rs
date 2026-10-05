@@ -165,17 +165,21 @@ pub(super) fn lower_protocol_class(
                         &[],
                         class_name_defs,
                         crate::func::params::DefaultPolicy::Reject,
-                    )?;
-                    p.extend(crate::lower_arg_list(
-                        args_rest,
-                        method_is_public,
-                        &method_name,
-                        type_param.as_deref(),
-                        Some(&class_name),
-                        &[],
-                        class_name_defs,
-                        crate::func::params::DefaultPolicy::Reject,
-                    )?);
+                    )?
+                    .0;
+                    p.extend(
+                        crate::lower_arg_list(
+                            args_rest,
+                            method_is_public,
+                            &method_name,
+                            type_param.as_deref(),
+                            Some(&class_name),
+                            &[],
+                            class_name_defs,
+                            crate::func::params::DefaultPolicy::Reject,
+                        )?
+                        .0,
+                    );
                     let r = crate::lower_return_annotation(
                         method_def.returns.as_deref(),
                         method_is_public,
@@ -408,6 +412,7 @@ pub(super) fn lower_protocol_class(
             type_param,
             is_enum: false,
             implicit_object_init: false,
+            method_defaults: Vec::new(),
             enum_members: Vec::new(),
             is_dataclass: false,
             dataclass_fields: Vec::new(),

@@ -16,9 +16,10 @@
 //!   any item is lowered, uses `None` to mean "leave this `def` out of the
 //!   signature table entirely", so no call site can ever bind against a
 //!   signature this part cannot represent; and
-//! * [`check_default`], reached only from `func::lower_params`, which turns
-//!   the same `None` into the `C0001` the user sees, and additionally
-//!   applies every *type* rule — assignability and the PEP 695 exclusion.
+//! * [`check_default`], reached from `func::lower_params` and, since the
+//!   method part of #1140, `class::lower_method`, which turns the same
+//!   `None` into the `C0001` the user sees, and additionally applies every
+//!   *type* rule — assignability and the PEP 695 exclusion.
 //!
 //! Splitting it that way keeps the rejection at exactly one site, so a bad
 //! default is reported once at its own `def` rather than once per call.
@@ -30,21 +31,32 @@ use crate::{HirExpr, Ty, unsupported};
 
 /// Whether a parameter list's caller can serve a default value.
 ///
-/// Part 2 of #884 (#1189) implements defaults for a module-level `def` only.
-/// `func::lower_params` passes [`DefaultPolicy::Admit`]; every method and
-/// protocol-member caller passes [`DefaultPolicy::Reject`] and keeps the
-/// pre-existing capability diagnostic byte for byte, because those call
-/// shapes have no signature table to fill a short argument vector from
-/// (Parts 4 and 5 of #884).
+/// Part 2 of #884 (#1189) implements defaults for a module-level `def`:
+/// `func::lower_params` passes [`DefaultPolicy::Admit`]. The method part of
+/// #1140 admits them on a method too: every `class::lower_method` arm passes
+/// [`DefaultPolicy::AdmitMethod`]. A protocol-member caller passes
+/// [`DefaultPolicy::Reject`] and keeps the pre-existing capability
+/// diagnostic byte for byte.
 ///
 /// The policy is an explicit argument rather than something derived from
-/// another parameter (`class_name.is_none()` happens to discriminate the two
-/// admitting call sites today) precisely so a future caller cannot acquire
-/// the wrong answer by accident.
+/// another parameter (`class_name.is_none()` happens to discriminate the
+/// module-level call sites today) precisely so a future caller cannot
+/// acquire the wrong answer by accident.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum DefaultPolicy {
-    /// Validate each default and keep it: a module-level `def`.
+    /// Validate each default and keep it: a module-level `def`, whose
+    /// default is spliced into an in-module call's argument vector.
     Admit,
+    /// [`DefaultPolicy::Admit`]'s rules plus one: `None` may default a
+    /// parameter of the opaque `object` type (`Ty::Object` -- `Any` or
+    /// `object` under `--ext`, D-258). A method's default is read only by
+    /// the `--ext` host boundary, which hands the parameter the host's own
+    /// `None` object exactly as a host passing `None` explicitly does; no
+    /// in-module call ever materializes it, because a short in-module method
+    /// call is still the arity `T0021` (Part 4 of #884, #1191). A
+    /// module-level `def` gets no such relaxation: its default is spliced
+    /// into a native call, where `None` at an `object` slot is refused.
+    AdmitMethod,
     /// Report the unchanged `C0001` for any default at all.
     Reject,
 }
@@ -165,15 +177,19 @@ fn literal_is_assignable(from: &Ty, to: &Ty) -> bool {
             if *from == Ty::None || literal_is_assignable(from, inner))
 }
 
-/// Validates one defaulted parameter of a module-level `def`, returning the
-/// lowered default on success.
+/// Validates one defaulted parameter of a module-level `def` or a method,
+/// returning the lowered default on success.
+///
+/// `policy` is [`DefaultPolicy::Admit`] or [`DefaultPolicy::AdmitMethod`];
+/// the latter additionally admits `None` at `Ty::Object` (see its own doc
+/// comment for why that is sound only for a method).
 ///
 /// This is the **single** site that rejects a default. It runs *after* the
 /// parameter's annotation has been resolved, so an annotation that is itself
 /// unsupported (a wider `Optional`, say) keeps reporting its own diagnostic
-/// first. That ordering is deliberate and applies only under
-/// [`DefaultPolicy::Admit`]; the `Reject` arm still runs before annotation
-/// resolution, preserving the pre-existing order for a method.
+/// first. That ordering is deliberate and applies under both admitting
+/// policies; the `Reject` arm still runs before annotation resolution,
+/// preserving the pre-existing order for a protocol member.
 ///
 /// `ty` is the parameter's resolved annotation, or `Ty::Infer` for an
 /// unannotated parameter of a private `def`. **No type is inferred from a
@@ -191,6 +207,7 @@ pub(crate) fn check_default(
     param_name: &str,
     fn_name: &str,
     ty: &Ty,
+    policy: DefaultPolicy,
 ) -> Result<HirExpr, Diagnostic> {
     let range = pycc_ast::expr_range(default);
     if matches!(ty, Ty::Param(_)) {
@@ -206,7 +223,8 @@ pub(crate) fn check_default(
         return Err(unsupported(UNADMITTED_DEFAULT, range));
     };
     let from = default_ty(&lowered);
-    if *ty != Ty::Infer && !literal_is_assignable(&from, ty) {
+    let object_none = policy == DefaultPolicy::AdmitMethod && from == Ty::None && *ty == Ty::Object;
+    if *ty != Ty::Infer && !object_none && !literal_is_assignable(&from, ty) {
         return Err(Diagnostic::error(
             "T0021",
             format!(

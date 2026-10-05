@@ -431,6 +431,7 @@ fn a_program_that_defines_the_spelling_as_a_class_keeps_its_own_meaning() {
         class_methods: Vec::new(),
         is_enum: false,
         implicit_object_init: false,
+        method_defaults: Vec::new(),
         enum_members: Vec::new(),
         is_dataclass: false,
         dataclass_fields: Vec::new(),

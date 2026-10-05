@@ -87,6 +87,7 @@ fn minimal_class_def(
         type_param: None,
         is_enum: false,
         implicit_object_init: false,
+        method_defaults: Vec::new(),
         enum_members: Vec::new(),
         is_dataclass: false,
         dataclass_fields: Vec::new(),

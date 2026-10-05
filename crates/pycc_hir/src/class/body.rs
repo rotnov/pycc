@@ -31,7 +31,7 @@ use super::{
     collect_init_attrs, is_declaration_body, is_scalar_slot_type, lower_method,
 };
 use crate::expr::keyword_bind::SignatureTable;
-use crate::{HirItem, ImportBinding, Ty, unsupported};
+use crate::{HirExpr, HirItem, ImportBinding, Ty, unsupported};
 use pycc_ast::{Expr, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
@@ -146,6 +146,10 @@ pub(super) struct ClassBodyOutput {
     /// Class-level attributes in source order, in either the annotated
     /// PEP 526 spelling (#911) or the bare `X = 1` one (#910).
     pub(super) class_attrs: Vec<(String, Ty, ClassAttrValue)>,
+    /// `(mangled name, defaults)` for every method that declares a default
+    /// value -- see `HirClassDef::method_defaults` (the method part of
+    /// #1140).
+    pub(super) method_defaults: Vec<(String, Vec<Option<HirExpr>>)>,
 }
 
 /// Walks a non-enum, non-protocol class body once, lowering every method and
@@ -177,6 +181,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
     let mut dataclass_fields: Vec<(String, Ty)> = Vec::new();
     let mut abstract_methods: Vec<String> = Vec::new();
     let mut class_attrs: Vec<(String, Ty, ClassAttrValue)> = Vec::new();
+    let mut method_defaults: Vec<(String, Vec<Option<HirExpr>>)> = Vec::new();
     let mut init_seen = false;
     // #1266: a value-less class-body annotation is an instance attribute
     // declaration. It is collected before the walk because it may follow
@@ -546,7 +551,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
                 method_def.range,
             ));
         }
-        let (item, params) = lower_method(
+        let (item, params, (name, defaults)) = lower_method(
             method_def,
             class_name,
             type_param,
@@ -556,6 +561,13 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             imports,
             signatures,
         )?;
+        // The method part of #1140: a redefinition replaces the earlier
+        // entry -- or removes it, when the later `def` declares no default --
+        // so the table always describes the definition that wins.
+        method_defaults.retain(|(held, _)| *held != name);
+        if !defaults.is_empty() {
+            method_defaults.push((name, defaults));
+        }
         if method_name == "__init__" {
             init_seen = true;
             // #1181: `collect_init_attrs` tests the body's receiver
@@ -900,6 +912,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
         dataclass_fields,
         abstract_methods,
         class_attrs,
+        method_defaults,
     })
 }
 

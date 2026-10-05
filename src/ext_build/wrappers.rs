@@ -14,7 +14,7 @@ use pycc_types::Ty;
 use super::carrier::{
     BUFFER_VIEW_C_TYPE, BoundaryCarrier, SlotCleanup, boundary_carrier, return_c_type,
 };
-use super::{ExtExport, ExtReceiver, source_level_name};
+use super::{ExtExport, ExtReceiver, defaults, source_level_name};
 
 /// One export's or constructor's slot vector, with Part 1 of #1142's
 /// writability applied.
@@ -166,6 +166,15 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
         }
     };
     let mut out = String::new();
+    // The method part of #1140: the cached default objects an omitted
+    // argument is read from, emitted ahead of the wrapper that uses them --
+    // and nothing at all for an export without defaults, which keeps every
+    // such wrapper byte-identical.
+    let default_prefix = format!("wrap_{symbol}");
+    out.push_str(&defaults::default_object_helpers(
+        &default_prefix,
+        &export.defaults,
+    ));
     if use_thunk {
         out.push_str(&format!("extern {return_c} {thunk}({params});\n"));
     } else {
@@ -261,16 +270,29 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
         );
     }
     out.push_str(&arg_slot_locals(&slots));
-    out.push_str(&format!(
-        "    if (nargs != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \
-         \"{source_name}() takes exactly {arity} argument{plural} (%zd given)\", nargs);\n        \
-         return NULL;\n    }}\n",
-        plural = if arity == 1 { "" } else { "s" },
-    ));
+    if export.defaults.is_empty() {
+        out.push_str(&format!(
+            "    if (nargs != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \
+             \"{source_name}() takes exactly {arity} argument{plural} (%zd given)\", nargs);\n        \
+             return NULL;\n    }}\n",
+            plural = if arity == 1 { "" } else { "s" },
+        ));
+    } else {
+        out.push_str(&defaults::range_arity_check(
+            source_name,
+            &default_prefix,
+            &export.defaults,
+            &defaults::ArgSource {
+                count: "nargs",
+                item: &|index| format!("args[{index}]"),
+                fail: "        return NULL;\n",
+            },
+        ));
+    }
     out.push_str(&unpack_args(
         &slots,
         source_name,
-        &|index| format!("args[{index}]"),
+        &|index| defaults::arg_expr(&export.defaults, index, format!("args[{index}]")),
         "        return NULL;\n",
     ));
     let mut call_args: Vec<String> = Vec::new();

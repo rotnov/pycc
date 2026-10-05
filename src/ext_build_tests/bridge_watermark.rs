@@ -14,6 +14,7 @@ use super::*;
 
 fn plain_export(name: &str) -> ExtExport {
     ExtExport {
+        defaults: Vec::new(),
         name: name.to_string(),
         class: None,
         method: None,

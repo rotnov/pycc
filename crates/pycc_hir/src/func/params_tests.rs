@@ -303,43 +303,47 @@ fn an_unsupported_annotation_is_reported_before_its_default() {
     assert_eq!(diagnostic.span, Some(span_of(source, "list[int] | None")));
 }
 
-// --- `DefaultPolicy::Reject` ------------------------------------------
+// --- `DefaultPolicy::Reject` and method defaults ---------------------
 
 #[test]
-fn a_default_on_a_method_parameter_keeps_the_unchanged_capability_error() {
-    for source in [
-        // An instance method.
-        "class C:\n    def m(self, a: int = 1) -> None:\n        return\n",
-        // A `classmethod`.
-        "class C:\n    @classmethod\n    def m(cls, a: int = 1) -> None:\n        return\n",
-        // A `staticmethod`.
-        "class C:\n    @staticmethod\n    def m(a: int = 1) -> None:\n        return\n",
-        // A protocol member.
-        "from typing import Protocol\n\nclass P(Protocol):\n    def m(self, a: int = 1) -> None:\n        ...\n",
-    ] {
-        let diagnostic = lower_err(source);
-        assert_eq!(diagnostic.code, "C0001", "source: {source}");
-        assert_eq!(
-            diagnostic.message, "default parameter values are not supported yet",
-            "source: {source}"
-        );
-    }
-}
-
-#[test]
-fn a_method_default_is_reported_before_its_annotation_is_resolved() {
-    // Under `DefaultPolicy::Reject` the default check runs *before*
-    // annotation resolution, so an unsupported annotation on a defaulted
-    // method parameter keeps reporting the default's own capability error
-    // rather than the annotation's.
+fn a_default_on_a_protocol_member_keeps_the_unchanged_capability_error() {
+    // Only a protocol member still passes `DefaultPolicy::Reject`; every
+    // other method admits a default since the method part of #1140
+    // (`class::method_tests`).
     let diagnostic = lower_err(
-        "class C:\n    def m(self, a: list[int] | None = None) -> None:\n        return\n",
+        "from typing import Protocol\n\nclass P(Protocol):\n    def m(self, a: int = 1) -> None:\n        ...\n",
     );
     assert_eq!(diagnostic.code, "C0001");
     assert_eq!(
         diagnostic.message,
         "default parameter values are not supported yet"
     );
+}
+
+#[test]
+fn a_protocol_member_default_is_reported_before_its_annotation_is_resolved() {
+    // Under `DefaultPolicy::Reject` the default check runs *before*
+    // annotation resolution, so an unsupported annotation on a defaulted
+    // protocol-member parameter keeps reporting the default's own capability
+    // error rather than the annotation's.
+    let diagnostic = lower_err(
+        "from typing import Protocol\n\nclass P(Protocol):\n    def m(self, a: list[int] | None = None) -> None:\n        ...\n",
+    );
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "default parameter values are not supported yet"
+    );
+}
+
+#[test]
+fn a_method_default_is_reported_after_its_annotation_is_resolved() {
+    // A method admits defaults, so it follows the module-level order: the
+    // unsupported annotation reports first.
+    let diagnostic = lower_err(
+        "class C:\n    def m(self, a: list[int] | None = None) -> None:\n        return\n",
+    );
+    assert_eq!(diagnostic.code, "T0049", "{diagnostic:?}");
 }
 
 #[test]
