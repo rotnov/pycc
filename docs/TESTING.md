@@ -884,7 +884,7 @@ whole past the first layer, so this list is a **lower bound**.
 
 | Blocker in the subject module (line) | Diagnostic | Issue |
 |---|---|---|
-| `from typing import Dict, Any, Generic, List` (2) | cleared: the line compiles, since each name is registered in `typing` (the subject's own `-> Any` would still meet `T0002`, #1285 -- an inference, since the measured run never reaches it). With a debug build of the #1378 branch (on top of `main` at `6114494b`, which carries Part 1 of #1138), the same `pycc build lalr_parser_state.py -o out.abi3.so --ext` command on the module copied alone reports five errors (rows 2 and 4), and two with `--foreign-relative-imports` (row 4) | [#1378](https://github.com/rotnov/pycc/issues/1378) (Part 6 of #882) |
+| `from typing import Dict, Any, Generic, List` (2) | cleared: the line compiles, since each name is registered in `typing` (the subject's own `-> Any` would still meet `T0002`, #1285 -- an inference, since the measured run never reaches it; [D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md) decides it is admitted in an `--ext` module, implementation pending). With a debug build of the #1378 branch (on top of `main` at `6114494b`, which carries Part 1 of #1138), the same `pycc build lalr_parser_state.py -o out.abi3.so --ext` command on the module copied alone reports five errors (rows 2 and 4), and two with `--foreign-relative-imports` (row 4) | [#1378](https://github.com/rotnov/pycc/issues/1378) (Part 6 of #882) |
 | relative sibling imports (3, 4, 6) | cleared: `T0021` "attempted relative import with no known parent package" at `05bc7805`, none under `--ext --foreign-relative-imports` | [#1366](https://github.com/rotnov/pycc/issues/1366) (the flag binds them as CPython objects of the host's package, resolved from the module's own `__package__`/`__spec__` at import time; #1161's live `__name__` is not a prerequisite) |
 | `from lark.exceptions import UnexpectedToken` (7) | cleared out of package; in a package tree `lark.exceptions` is a project import (a `C0001` in a skeleton tree; in the full tree it links and the build fails in `lark/utils.py`) | #1138 (Part 1); in-tree: [#1382](https://github.com/rotnov/pycc/issues/1382) |
 | `class ...(Generic[StateT])` (11, 32) | `C0001` base class must be a bare name | #886 (v0.4) |
@@ -892,7 +892,7 @@ whole past the first layer, so this list is a **lower bound**.
 | method parameter defaults, the subject's own `is_end: bool = False` included (40, 59, 67) | `C0001` default parameter values | #1140 |
 | `__eq__(self, other)`: its only faithful annotation is `object`, which Part 1 of #1367 leaves unspellable (51) | `T0021` cannot infer parameter | #1367 (Part 3, [#1387](https://github.com/rotnov/pycc/issues/1387)) |
 | `-> 'ParserState[StateT]'` string forward reference (59) | `C0001` | #889 (v0.4) |
-| the subject's `-> Any` (67) | `T0002` (inferred) | #1285 |
+| the subject's `-> Any` (67) | `T0002` (inferred). The boundary question is decided by [D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md): in an `--ext` module `Any` is the opaque CPython object and crosses the boundary unchanged; implementation pending, so the diagnostic stands | #1285 |
 | function-local bindings of objects (`state_stack = self.state_stack`, 68-72) | `I0404` | #1333 / #1362 |
 | `action, arg = states[state][token.type]` (77) | `C0001` tuple target | #891 |
 | `{s for s in states[state].keys() if s.isupper()}` (79) | `C0001` comprehension iterable | #1255 |
@@ -903,6 +903,9 @@ Fourteen rows are listed. #1366 has cleared the relative-import row,
 Part 1 of #1138 the line-7 row out of package, and #1378 the `typing` import
 row, so eleven remain. Two of them are boundary questions inside the subject
 module rather than missing features: #1285, and #1367's `object` spelling.
+[D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md) has since decided both for an `--ext` module (`Any` and `object` are
+the opaque CPython object there), so they are now implementation work; their
+diagnostics stand until the implementing pull requests land.
 A seventeenth row, the false `T0022` on the `while True:` loop at line 74
 (left only by `return` or `raise`), was removed by
 [#1370](https://github.com/rotnov/pycc/issues/1370): a constant-true loop
@@ -1020,7 +1023,7 @@ edit was made:
 | `C0001` class inherits from builtin type `frozenset` | 1 | #1319 (Part 2 of #1283) carries support; #1318 (Part 1) only made the message honest -- it now names the builtin type instead of calling `frozenset` an unknown class -- and #1283 stays open. `fzset` is defined only in `lark/utils.py` (line 319) and used in `lark/parsers/grammar_analysis.py` and `lark/parsers/lalr_analysis.py`. The same `pycc build <module> -o <out>.abi3.so --ext` command (release builds of `main` at `d59fde73` and of the #1318 change on top of it, on the unedited subject module from the local 1.3.1 archive) reports 13 errors at both; only this line's text differs. #1319 carries the support in three parts: Part 1 ([#1326](https://github.com/rotnov/pycc/issues/1326)) ships the native `frozenset[int]` value type the subclass will build on, and leaves this line's diagnostic unchanged -- the same command still reports 13 errors, all in `lark/utils.py` |
 | `C0001` class attribute initialised with a non-literal | 0 (was 1) | #1284. Part 1 ([#1345](https://github.com/rotnov/pycc/issues/1345), [D-256](./decisions/D-256-admit-a-foreign-callable-staticmethod-class.md)) admits `exists = staticmethod(os.path.exists)` (line 309), pinned by `tests/issue_1284_foreign_static_class_attr.rs`. The same `pycc build <module> -o <out> --ext` command, run on `lark/utils.py` with a debug build of the #1345 branch at `2e9e0a46` (on top of `main` at `f2d2ae42`), still reports 13 errors. The line-309 error is gone, and a `C0001` `` `**kwargs` is not supported yet `` at line 312:13 of the same class now takes its place: it was masked because the attribute failed first |
 | `C0001` `**kwargs` is not supported yet (line 312, in the class whose attribute #1345 admits) | 1 | #1193 (Part 6 of #884) |
-| `T0002` `Any` outside a declared interop boundary | 2 | none: internal `Any` use inside a dependency, refused by design; unlike the subject's own `-> Any` (#1285) it is not at the timed boundary |
+| `T0002` `Any` outside a declared interop boundary | 2 | none: internal `Any` use inside a dependency, refused by design in a `native` build; [D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md) would admit it in an `--ext` build once implemented, which does not move D-257's scoping (the two `T0001`s below remain); unlike the subject's own `-> Any` (#1285) it is not at the timed boundary |
 | `T0001` unannotated public parameter | 2 | annotation-fixable, but outside D-252's scope (a closure module) |
 
 Part 1 of [#1333](https://github.com/rotnov/pycc/issues/1333) ([#1362](https://github.com/rotnov/pycc/issues/1362)) moves no row: the same `pycc build lark/parsers/lalr_parser_state.py -o <out>.abi3.so --ext` command (debug build of the #1362 branch on top of `main` at `05bc7805`, on the unedited 1.3.1 subject module) still reports 13 errors, all in `lark/utils.py` and none of them `I0404`, because every function-local object use there is refused first by a row above -- the `product(*lists)` return on line 300 by the `T0001` on `lists`, the `open_q = deque(list(initial))` binding on line 343 by the `T0001` on `initial`, and the same binding on line 331 by `bfs`'s `Callable` annotation (`C0002`) -- and each would then stop at its own argument shape, a starred argument or a `list(...)` call, neither of which Part 1 touches.
@@ -1041,7 +1044,8 @@ not admit that edit. That makes it a second blocker, independent of the
 import-closure gaps: closing every gap in the table would still leave the
 subject refused, unless pycc comes to admit an `Any` return on a method that
 the host reaches only through a shim. That is a D-244 boundary question, not a
-missing feature.
+missing feature. [D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md) has since settled it as admitted for an `--ext` module
+(implementation pending).
 
 No timing was taken, and none can be until the subject compiles. The
 pre-registration commit and the protocol report remain unwritten. Two points
