@@ -282,11 +282,12 @@ fn unadmitted_operations_on_a_function_local_object_are_diagnosed() {
             "T0021",
             "range stop expects `int`, got `object`",
         ),
+        // Part 1 of #1371 admits `y == 1`; a container operand stays out.
         (
             "obj_fn_eq",
-            "    print(y == 1)\n",
-            "T0021",
-            "cannot compare `object` and `int`",
+            "    print(y == [1])\n",
+            "I0404",
+            "comparing a CPython object with a `list[int]` value",
         ),
         (
             "obj_fn_in",

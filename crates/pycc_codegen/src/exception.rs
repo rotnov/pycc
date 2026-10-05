@@ -112,7 +112,20 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // iterable, condition and elements may each raise -- a `range` step
         // of `0` or a `1 // 0` element -- so it is always fallible, exactly
         // like the statement form the loop body already guards.
-        | MirExpr::Comprehension(_) => true,
+        | MirExpr::Comprehension(_)
+        // Part 1 of #1371: `PyObject_IsInstance` raises for a class
+        // argument that is not a class, and propagates a raising
+        // `__instancecheck__`; `foreign_compare::emit_isinstance` owns the
+        // `-1` check.
+        | MirExpr::ObjIsInstance { .. } => true,
+        // Part 1 of #1371: a rich comparison runs the operands' own
+        // `__eq__`/`__lt__`/..., which may raise, and
+        // `foreign_compare::emit_compare` owns the `NULL` check; an
+        // identity test is a pointer compare and cannot raise.
+        MirExpr::ObjCompare { op, .. } => !matches!(
+            op,
+            pycc_mir::CmpOpKind::Is | pycc_mir::CmpOpKind::IsNot
+        ),
         // #1346: the node itself raises nothing. `sequence::emit_sequence`
         // emits both children through the guarded `emit_expr`, so each
         // child's own guard has already handled a raise by the time the
