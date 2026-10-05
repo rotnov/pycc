@@ -1325,8 +1325,12 @@ its container type is inferred.
 - more than one `for` clause (tracked by #1257), more than one `if` filter
   (Part 3 of #1214, #1256), a target that is not a bare name, and `async`
   comprehensions (neither of the last two is tracked yet). Part 2 of #1214
-  (#1255) owns the iterable limit above: Part 1 admitted an `object`-valued
-  iterable expression, and a bare name bound to an `object` is what remains.
+  (#1255) owns the iterable limits in **Types** above: Part 1 admitted a list
+  or set comprehension over an `object`-valued iterable expression, and what
+  remains is a bare name bound to an `object` (`I0404`), a dict comprehension
+  over an `object` or an element with no CPython conversion, such as a
+  `list[int]` (`I0404`), and any other iterable
+  expression (`C0001`).
 
 **Across modules.** A synthesized name is not a definition, so it never
 collides in the link step ([#1237](https://github.com/rotnov/pycc/issues/1237)).

@@ -83,6 +83,10 @@ const MODULE_OUT: &str = "['CD', 'GH']\n['ab', 'cd', 'ef', 'gh']\n[3, 3, 3, 3]\n
 /// `lalr_parser_state.py` line 79 in its `try`/`except KeyError` context:
 /// `{s for s in states[state].keys() if s.isupper()}`.
 ///
+/// `nested` builds an object comprehension whose element is another one,
+/// and the module-body loop calls `count_upper` three times, so a function
+/// body's comprehension runs again on each call.
+///
 /// `catch` covers the raising paths inside a function body: `iter()` of a
 /// non-iterable, an `__iter__` that raises, a `__next__` that raises
 /// mid-iteration (`int("x")` from `map`), a raising filter, a raising
@@ -112,6 +116,10 @@ fn hosted_source() -> String {
         return len(found)\n\
         \n\
         \n\
+        def nested(t: object) -> object:\n    \
+        return [[c for c in k.lower()] for k in t.keys() if k.isupper()]\n\
+        \n\
+        \n\
         def catch() -> None:\n    \
         try:\n        print([k for k in builtins.len])\n    except TypeError:\n        print(\"TypeError\")\n    \
         try:\n        print([k for k in ns[\"BadIter\"]()])\n    except KeyError:\n        print(\"KeyError\")\n    \
@@ -126,6 +134,11 @@ fn hosted_source() -> String {
         print(Parser().expected(states, 1, \"Ab\"))\n\
         print(keys_of(table))\n\
         print(count_upper(table))\n\
+        print(nested(table))\n\
+        total = 0\n\
+        for i in range(3):\n    \
+        total = total + count_upper(table)\n\
+        print(total)\n\
         catch()\n"
     )
 }
@@ -267,7 +280,8 @@ fn comprehensions_over_objects_behave_like_cpython_in_the_host() {
     assert_eq!(
         out,
         format!(
-            "{MODULE_OUT}['CD', 'GH']\nNone\n['Ab', 'CD', 'ef', 'GH']\n2\nTypeError\nKeyError\n\
+            "{MODULE_OUT}['CD', 'GH']\nNone\n['Ab', 'CD', 'ef', 'GH']\n2\n\
+             [['c', 'd'], ['g', 'h']]\n6\nTypeError\nKeyError\n\
              ValueError\nAttributeError\nAttributeError\nTypeError\nno error\n"
         )
     );

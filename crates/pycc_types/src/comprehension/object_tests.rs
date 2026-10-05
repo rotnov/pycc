@@ -110,3 +110,100 @@ fn an_ill_typed_iterable_reports_its_own_error() {
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert_ne!(diagnostics[0].code, "C0001", "{diagnostics:?}");
 }
+
+fn resolve_foreign(source: &str) -> Result<pycc_hir::HirModule, Vec<pycc_diag::Diagnostic>> {
+    let module = pycc_parser::parse(source).expect("test source must parse");
+    let mut hir = pycc_hir::lower_checked(&module).expect("test source must lower");
+    hir.imports.push(ImportBinding::Foreign {
+        local_name: "numpy".to_string(),
+        module_path: "numpy".to_string(),
+        from: None,
+        site: pycc_hir::ForeignImportSite::Item(0),
+        span: Span::new(0, 0),
+    });
+    crate::check_and_resolve_all(&hir)
+}
+
+/// An object comprehension: `[_v0 for _v0 in <iterable>]`.
+fn object_comprehension(iterable: pycc_hir::HirExpr) -> pycc_hir::HirExpr {
+    pycc_hir::HirExpr::Comprehension(Box::new(pycc_hir::HirComprehension {
+        var: "_v0".to_string(),
+        iter: pycc_hir::CompIter::Iterable(Box::new(iterable)),
+        cond: None,
+        elt: pycc_hir::CompElt::List(pycc_hir::HirExpr::Name("_v0".to_string())),
+    }))
+}
+
+/// `monomorphize`'s generic-call rewrite types an object comprehension as an
+/// object, walking its iterable. No source reaches this arm today: a module
+/// that both uses a foreign name and defines a generic function is refused by
+/// `monomorphize`'s foreign-less environment (#1105) before the walk, so the
+/// arm is pinned directly.
+#[test]
+fn the_generic_rewrite_types_an_object_comprehension_as_an_object() {
+    let mut env = crate::Environment::new();
+    let mut expr = object_comprehension(pycc_hir::HirExpr::IntLiteral(1));
+    let mut instantiations = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let ty = crate::rewrite_generic_calls_in_expr(
+        &mut env,
+        &[],
+        &mut expr,
+        &mut instantiations,
+        &mut seen,
+    );
+    assert_eq!(ty, Ok(pycc_hir::Ty::Object));
+    assert!(instantiations.is_empty());
+    assert_eq!(expr, object_comprehension(pycc_hir::HirExpr::IntLiteral(1)));
+}
+
+/// The protocol-call rewrite walks an object comprehension's iterable too,
+/// so a protocol call there could not escape it; unreachable from source for
+/// the same #1105 reason, so pinned directly.
+#[test]
+fn the_protocol_rewrite_walks_an_object_comprehension() {
+    let env = crate::Environment::new();
+    let mut item = pycc_hir::HirItem::Function {
+        name: "f".to_string(),
+        params: Vec::new(),
+        return_ty: pycc_hir::Ty::None,
+        body: vec![pycc_hir::HirStmt::ExprStmt(object_comprehension(
+            pycc_hir::HirExpr::IntLiteral(1),
+        ))],
+    };
+    let mut specializations = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    crate::rewrite_protocol_calls_in_specialization(
+        &env,
+        &mut item,
+        &std::collections::HashMap::new(),
+        &mut specializations,
+        &mut seen,
+    );
+    assert!(specializations.is_empty());
+    assert!(matches!(
+        item,
+        pycc_hir::HirItem::Function { ref body, .. }
+            if body == &[pycc_hir::HirStmt::ExprStmt(object_comprehension(
+                pycc_hir::HirExpr::IntLiteral(1),
+            ))]
+    ));
+}
+
+/// A generic call over a native iterable expression keeps the iterable's own
+/// `C0001`: the check phase refuses it before `monomorphize` could type the
+/// loop variable.
+#[test]
+fn a_generic_call_over_a_native_iterable_expression_keeps_its_c0001() {
+    let diagnostics =
+        resolve_foreign("def g[T](x: T) -> T:\n    return x\n\n\nxs = [g(k) for k in [1, 2]]\n")
+            .expect_err("a native iterable expression is refused");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, "C0001", "{diagnostics:?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("got an expression of type `list[int]`"),
+        "{diagnostics:?}"
+    );
+}
