@@ -730,6 +730,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &crate::expr::keyword_bind::SignatureTable::default(),
             false,
         )

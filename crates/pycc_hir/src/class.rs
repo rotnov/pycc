@@ -66,6 +66,7 @@ mod declared_attrs;
 pub(crate) mod enum_call;
 mod enum_class;
 mod exception_dunders;
+pub(crate) mod generic_base;
 mod inherited_copy;
 pub use inherited_copy::{
     CopiedMemberKind, InheritedCopy, SUPER_TARGET_MARKER, binds_member, first_definer,
@@ -849,6 +850,10 @@ fn class_getitem_return_ty(
 ///
 /// `staticmethod_rebound` (#1345) is whether the module body binds
 /// `staticmethod` anywhere, computed once by `module::lower_module`.
+///
+/// `type_vars` (#1394) are the module-level `T = TypeVar("T")` declarations
+/// lowered before this class, the names a `Generic[...]` base may list
+/// besides foreign-imported ones (see `generic_base`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_class(
     def: &pycc_ast::StmtClassDef,
@@ -857,6 +862,7 @@ pub(crate) fn lower_class(
     module_items: &[HirItem],
     base_class_asts: &[(String, &pycc_ast::StmtClassDef)],
     imports: &[ImportBinding],
+    type_vars: &[String],
     signatures: &SignatureTable,
     staticmethod_rebound: bool,
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
@@ -889,41 +895,11 @@ pub(crate) fn lower_class(
         },
     };
     // #432: parse base class names from the class header's positional
-    // arguments (`class C(A, B):` → `["A", "B"]`). Keyword arguments
-    // (e.g. `metaclass=Meta`) are still rejected, and a non-`Expr::Name`
-    // positional base (e.g. `class C(SomeMod.Base):`) is also rejected --
-    // only a bare name is supported as a base class for now.
-    let mut bases: Vec<String> = Vec::new();
-    if let Some(arguments) = def.arguments.as_deref() {
-        if !arguments.keywords.is_empty() {
-            return Err(unsupported(
-                "keyword arguments in a class header (e.g. `metaclass=`) are not supported yet",
-                def.range,
-            ));
-        }
-        for arg in arguments.args.iter() {
-            let Expr::Name(name) = arg else {
-                return Err(unsupported(
-                    "a base class must be a bare name (e.g. `class C(Base):`), not an \
-                     attribute access or other expression",
-                    pycc_ast::expr_range(arg),
-                ));
-            };
-            let base_name = name.id.to_string();
-            // Reject duplicate bases in the same class header.
-            if bases.contains(&base_name) {
-                return Err(unsupported(
-                    format!(
-                        "class `{}` lists base `{base_name}` more than once -- duplicate bases \
-                         are not supported",
-                        def.name.as_str()
-                    ),
-                    def.range,
-                ));
-            }
-            bases.push(base_name);
-        }
-    }
+    // arguments (`class C(A, B):` → `["A", "B"]`); a `Generic[T, ...]` base
+    // is checked and erased there (Part 1 of #886, #1394). Keyword
+    // arguments (e.g. `metaclass=Meta`) and every other non-name base
+    // (`class C(SomeMod.Base):`, `class C(Base[int]):`) are still rejected.
+    let mut bases = generic_base::lower_base_names(def, imports, type_vars, type_param.is_some())?;
     let class_name = def.name.to_string();
     // #379 (PR-19): PEP 435 enum detection. A class whose single base is
     // the bare name `Enum` (`class Color(Enum):`) is an enum class. `Enum`
