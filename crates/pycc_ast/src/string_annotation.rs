@@ -9,12 +9,14 @@
 //!   parses (`pycc_parser::parse_all`). It replaces every *top-level* string
 //!   annotation with the expression the string contains. Every later reader
 //!   of an annotation -- `Final`/`ClassVar` detection, `__slots__` checks,
-//!   the type resolver -- therefore sees the unquoted expression and needs
-//!   no string branch of its own.
+//!   the type resolver -- therefore sees the unquoted expression at the
+//!   top.
 //! - [`parse_string_annotation`] parses a string that is still in the tree,
 //!   i.e. one nested inside an annotation (`list["C"]`) or one the
 //!   normalizer left in place because it does not parse. The type resolver
-//!   calls it from its own string-literal arm.
+//!   calls it from its own string-literal arm, and
+//!   [`unquote_nested_string_annotations`] applies it throughout an
+//!   annotation for a reader that matches by shape (`__slots__`).
 //!
 //! The rewrite touches nothing but the annotation itself. Strings inside
 //! an annotation stay strings, so `Literal["a"]` keeps its literal and
@@ -24,7 +26,7 @@
 
 use crate::{Expr, ExprStringLiteral, ModModule};
 use ruff_python_ast::relocate::relocate_expr;
-use ruff_python_ast::visitor::transformer::{Transformer, walk_body};
+use ruff_python_ast::visitor::transformer::{Transformer, walk_body, walk_expr};
 
 /// Parses the contents of a string type annotation as a Python expression,
 /// with every node of the result placed at the literal's own span.
@@ -39,6 +41,34 @@ pub fn parse_string_annotation(literal: &ExprStringLiteral) -> Result<Expr, Stri
     let mut expr = parsed.into_expr();
     relocate_expr(&mut expr, literal.range);
     Ok(expr)
+}
+
+/// A copy of `annotation` with every string inside it that parses replaced
+/// by the expression it contains, recursively (`ClassVar["list['str']"]`
+/// becomes `ClassVar[list[str]]`). For a reader that matches an annotation
+/// by shape rather than through the type resolver, so that a nested string
+/// matches exactly where its unquoted spelling does. A string that does not
+/// parse stays a string.
+pub fn unquote_nested_string_annotations(annotation: &Expr) -> Expr {
+    let mut copy = annotation.clone();
+    Unquoter.visit_expr(&mut copy);
+    copy
+}
+
+struct Unquoter;
+
+impl Transformer for Unquoter {
+    fn visit_expr(&self, expr: &mut Expr) {
+        if let Expr::StringLiteral(literal) = expr
+            && let Ok(parsed) = parse_string_annotation(literal)
+        {
+            // Each parse strips one level of quoting, so this terminates.
+            *expr = parsed;
+            self.visit_expr(expr);
+            return;
+        }
+        walk_expr(self, expr);
+    }
 }
 
 /// Replaces each top-level string annotation in `module` with the
@@ -210,5 +240,27 @@ mod tests {
         let error = parse_string_annotation(literal).unwrap_err();
         assert!(!error.is_empty());
         assert!(!error.contains("byte range"), "{error}");
+    }
+
+    #[test]
+    fn unquote_nested_string_annotations_strips_every_parsable_level() {
+        let source = "x = ClassVar[\"list['str']\"]\ny = list[\"a b\"]\n";
+        let module = ruff_python_parser::parse_module(source)
+            .unwrap()
+            .into_syntax();
+        let value = |index: usize| &module.body[index].as_assign_stmt().unwrap().value;
+        let unquoted = unquote_nested_string_annotations(value(0));
+        let class_var = unquoted.as_subscript_expr().unwrap();
+        let list = class_var.slice.as_subscript_expr().unwrap();
+        assert_eq!(list.value.as_name_expr().unwrap().id.as_str(), "list");
+        assert_eq!(list.slice.as_name_expr().unwrap().id.as_str(), "str");
+        // A string that does not parse stays a string.
+        let kept = unquote_nested_string_annotations(value(1));
+        assert!(
+            kept.as_subscript_expr()
+                .unwrap()
+                .slice
+                .is_string_literal_expr()
+        );
     }
 }

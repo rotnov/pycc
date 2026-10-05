@@ -7,7 +7,9 @@
 pub use ruff_python_ast::visitor;
 
 mod string_annotation;
-pub use string_annotation::{normalize_string_annotations, parse_string_annotation};
+pub use string_annotation::{
+    normalize_string_annotations, parse_string_annotation, unquote_nested_string_annotations,
+};
 
 pub use ruff_python_ast::{
     Alias, Arguments, BoolOp, CmpOp, Comprehension, ConversionFlag, Decorator, ElifElseClause,
