@@ -260,7 +260,8 @@ fn assert_matches_cpython(tag: &str, body: &str, script: &str) -> String {
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn the_issue_example_matches_cpython_in_an_extension() {
-    let stdout = assert_matches_cpython("1389_hosted_example", ISSUE_EXAMPLE, "import m\nm.run()\n");
+    let stdout =
+        assert_matches_cpython("1389_hosted_example", ISSUE_EXAMPLE, "import m\nm.run()\n");
     assert_eq!(stdout, ISSUE_EXAMPLE_STDOUT);
 }
 

@@ -450,8 +450,7 @@ mod tests {
     #[test]
     fn an_init_attr_assigned_from_self_establishes_an_instance_slot() {
         // #1389: the receiver is a `Ty::Instance` parameter like any other.
-        let hir =
-            lower_ok("class C:\n    def __init__(self) -> None:\n        self.link = self\n");
+        let hir = lower_ok("class C:\n    def __init__(self) -> None:\n        self.link = self\n");
         assert_eq!(
             hir.class_defs[0].1.attrs,
             vec![("link".to_string(), Ty::Instance(Box::new("C".to_string())))]
