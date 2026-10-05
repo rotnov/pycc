@@ -1431,13 +1431,23 @@ such arguments (#1313), `len`, using it as an \
 `o[k]` whose key is an `int`, `float`, `bool` or `str`, iterating it \
 with `for`, binding it to a module-level name (#1325), and printing it \
 or interpolating it into an f-string (#1340), which renders it with \
-CPython's own `str()` or `format()`. The loop is \
+CPython's own `str()` or `format()`. Part 1 of #1371 adds comparisons: \
+a rich comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`) with the object on \
+either side and an `object`, `int`, `float`, `bool` or `str` value on the \
+other evaluates CPython's own `PyObject_RichCompare` and yields an \
+`object` result usable as a condition or printed; an identity test \
+(`is`, `is not`) compares the object with another object or `None`; and \
+`isinstance(o, C)` is admitted when `C` is `int`, `float`, `bool`, `str` \
+or itself a CPython object. The loop is \
 admitted when the iterable is written as an attribute load \
 (`for x in o.attr:`), a method call (`for x in o.method(...):`) or a bare \
 name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
 a bare imported module is iterated too, and raises CPython's own \
 `TypeError` at run time. Everything else is \
-still refused, including `isinstance`, a `match` subject, iterating over a subscript load \
+still refused, including `isinstance` against a pycc class or a tuple of \
+classes, a comparison chain with an object link (`a < o < b`), an \
+equality test against a bare `None`, a rich comparison with an operand \
+of any other type, a `match` subject, iterating over a subscript load \
 (`for x in o[k]:`) or inside a comprehension, \
 passing an argument of any other type to one of its methods or to the \
 object itself, and indexing with a key of any other type. Storing through a \
@@ -1461,8 +1471,10 @@ this code still refuses iterating the object with `for` (Part 2 of \
 #1333) and passing it to a generic function. An unannotated helper whose \
 parameter would be inferred as the object and then used as a method-call \
 receiver or called reports `T0021` instead (Part 3 of #1333). The \
-refusal narrows as the later parts of #1026 land -- \
-the boundary conversions -- and this code is retired when they have.",
+refusal narrows as the later parts of #1026 (the boundary conversions) and \
+of #1371 (calls, subscripts and `raise` on an object, `isinstance` against \
+a pycc class, comparison chains and `and`/`or` over an object) land, and \
+this code is retired when they have.",
         example: "\
 import numpy
 

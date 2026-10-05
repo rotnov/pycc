@@ -3,10 +3,12 @@
 //! an AST comparison with two or more operators into
 //! [`HirExpr::CompareChain`].
 //!
-//! A chain admits exactly the per-link operators a single comparison
-//! admits: `==`, `!=`, `<`, `<=`, `>`, `>=`, and `is`/`is not` when one of
-//! *that link's* two operands is syntactically the `None` literal (D-197).
-//! `in`/`not in` and general object-identity `is` keep their `C0001`.
+//! A chain admits the per-link operators `==`, `!=`, `<`, `<=`, `>`, `>=`,
+//! and `is`/`is not` when one of *that link's* two operands is
+//! syntactically the `None` literal (D-197). `in`/`not in` and general
+//! identity `is` in a chain keep their `C0001`. A *single* comparison also
+//! admits general identity between two non-literal operands (Part 1 of
+//! #1371), which `pycc_types` admits only between CPython objects.
 
 use pycc_ast::{CmpOp, Expr, ExprCompare};
 use pycc_diag::Diagnostic;
@@ -37,11 +39,19 @@ pub fn compare_chain_operands<'a>(
 /// syntactic gate to `is`/`is not`: one of `left` and `right` -- the two
 /// operands of this link -- must be the `None` literal. `range` is the
 /// whole comparison's range, which every rejection reports.
+///
+/// `general_identity` (Part 1 of #1371) widens the gate for a single
+/// comparison: `is`/`is not` between two operands neither of which is a
+/// literal also lowers, because either may be a CPython object, whose
+/// identity `pycc_types` admits and whose other pairs it refuses with this
+/// same `C0001` message. A literal operand is never an object, so a literal
+/// on either side keeps the located rejection here.
 pub(crate) fn lower_cmp_op(
     op: CmpOp,
     left: &Expr,
     right: &Expr,
     range: std::ops::Range<u32>,
+    general_identity: bool,
 ) -> Result<CmpOpKind, Diagnostic> {
     // `is`/`is not` (D-197, #763, Part 1 of #747): this compiler's first
     // support of any kind for either operator, deliberately scoped at this
@@ -50,8 +60,9 @@ pub(crate) fn lower_cmp_op(
     // through to the `other =>` rejection below. The *type* of the
     // non-`None` operand (must be `Ty::Optional(_)` or `Ty::None`) is
     // `pycc_types`' job, not this lowering step's (D-105).
-    let is_none_operand_shape =
-        matches!(left, Expr::NoneLiteral(_)) || matches!(right, Expr::NoneLiteral(_));
+    let is_none_operand_shape = matches!(left, Expr::NoneLiteral(_))
+        || matches!(right, Expr::NoneLiteral(_))
+        || (general_identity && !is_literal(left) && !is_literal(right));
     Ok(match op {
         CmpOp::Eq => CmpOpKind::Eq,
         CmpOp::NotEq => CmpOpKind::NotEq,
@@ -68,6 +79,19 @@ pub(crate) fn lower_cmp_op(
             ));
         }
     })
+}
+
+/// Whether `expr` is a literal constant, which can never be a CPython
+/// object (see [`lower_cmp_op`]'s `general_identity`).
+fn is_literal(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::NumberLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::EllipsisLiteral(_)
+    )
 }
 
 /// Lowers an AST comparison with `ops.len() >= 2` into
@@ -100,6 +124,7 @@ pub(crate) fn lower_compare_chain(
             left,
             &cmp.comparators[index],
             range.clone(),
+            false,
         )?);
     }
     let first = lower_expr(&cmp.left, in_function, class_name, imports, signatures)?;

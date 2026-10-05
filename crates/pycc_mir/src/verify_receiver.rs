@@ -392,6 +392,12 @@ impl Verifier<'_> {
                 }
                 self.expr(value);
             }
+            MirExpr::ObjIsInstance { value, class } => {
+                self.expr(value);
+                if let crate::ObjIsInstanceClass::Object(class) = class {
+                    self.expr(class);
+                }
+            }
             MirExpr::BinOp { left, right, .. }
             | MirExpr::Compare { left, right, .. }
             | MirExpr::BoolOp { left, right, .. }
@@ -407,6 +413,7 @@ impl Verifier<'_> {
                 base: left,
                 index: right,
             }
+            | MirExpr::ObjCompare { left, right, .. }
             | MirExpr::BufferGet {
                 base: left,
                 index: right,
