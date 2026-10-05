@@ -302,6 +302,14 @@ fn a_failing_module_body_unpack_propagates_like_cpython() {
             "a, b = builtins.len\nprint(\"unreached\")\n",
             "TypeError cannot unpack non-iterable builtin_function_or_method object",
         ),
+        // A static type whose `tp_name` is dotted: CPython prints the
+        // module prefix too.
+        (
+            "unpack_raise_dotted",
+            "pycc_unpack_raise_dotted",
+            "a, b = builtins.eval(\"__import__('datetime').date(2000, 1, 1)\")\nprint(\"unreached\")\n",
+            "TypeError cannot unpack non-iterable datetime.date object",
+        ),
     ] {
         let body = format!("import builtins\n\nprint(\"start\")\n{tail}");
         let out = assert_matches_cpython(tag, module, &body);
@@ -316,6 +324,9 @@ fn a_failing_module_body_unpack_propagates_like_cpython() {
 /// to the source tuple per unpack; any other iterable is first collected
 /// into a fresh tuple, which leaks and keeps one more reference to each
 /// element. CPython's own deltas after the loops are `1 1 0` for both.
+/// The third loop pins the failing path: a three-item list (`p1, p2, p1`) unpacked into
+/// two names raises `ValueError` every time, and the shim releases the
+/// iterator, the partial tuple and the extra item, so nothing leaks.
 const REFCOUNT: &str = "import builtins\n\
     import sys\n\
     \n\
@@ -338,7 +349,18 @@ const REFCOUNT: &str = "import builtins\n\
     b2 = int(sys.getrefcount(p2))\n    \
     i = 0\n    \
     while i < 100:\n        f1, f2 = ls\n        i += 1\n    \
-    print(int(sys.getrefcount(p1)) - b1, int(sys.getrefcount(p2)) - b2, int(sys.getrefcount(ls)) - bl)\n\
+    print(int(sys.getrefcount(p1)) - b1, int(sys.getrefcount(p2)) - b2, int(sys.getrefcount(ls)) - bl)\n    \
+    d3 = builtins.dict.fromkeys(builtins.str(\"abc\"), p1)\n    \
+    d3.__setitem__(\"b\", p2)\n    \
+    l3 = builtins.list(d3.values())\n    \
+    b1 = int(sys.getrefcount(p1))\n    \
+    b2 = int(sys.getrefcount(p2))\n    \
+    bl = int(sys.getrefcount(l3))\n    \
+    i = 0\n    \
+    while i < 100:\n        \
+    try:\n            g1, g2 = l3\n        except ValueError:\n            i += 0\n        \
+    i += 1\n    \
+    print(int(sys.getrefcount(p1)) - b1, int(sys.getrefcount(p2)) - b2, int(sys.getrefcount(l3)) - bl)\n\
     \n\
     \n\
     measure()\n";
@@ -347,10 +369,10 @@ const REFCOUNT: &str = "import builtins\n\
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn object_unpack_reference_counts_are_pinned() {
     let (dir, compiled) = compiled_report("unpack_refcount", "pycc_unpack_rc", REFCOUNT);
-    assert_eq!(compiled, "100 100 100\n200 200 0\nno error\n");
+    assert_eq!(compiled, "100 100 100\n200 200 0\n0 0 0\nno error\n");
     let oracle = python(&dir, &raised_report("runpy.run_path('m.py')"));
     assert_ok(&oracle);
-    assert_eq!(stdout_of(&oracle), "1 1 0\n1 1 0\nno error\n");
+    assert_eq!(stdout_of(&oracle), "1 1 0\n1 1 0\n0 0 0\nno error\n");
 }
 
 /// lark `lalr_parser_state.py` line 77 in a function of its own:

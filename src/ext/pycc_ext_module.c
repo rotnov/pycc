@@ -2513,7 +2513,10 @@ int pycc_ext_obj_unpack_float_tuple(PyObject *o, long long arity, double *out)
  * - `iter(o)` failing with `TypeError` for an object that has neither
  *   `__iter__` nor the sequence protocol is replaced by CPython's own
  *   "cannot unpack non-iterable T object"; any other failure of `iter()`
- *   (a raising `__iter__`, say) propagates unchanged;
+ *   (a raising `__iter__`, say) propagates unchanged. CPython prints the
+ *   type's `tp_name`, which the Limited API does not expose;
+ *   `pycc_ext_obj_unpack_type_name` rebuilds it (CPython's `%.200s`
+ *   truncation of a longer name is not mimicked);
  * - fewer than `n` items is `ValueError` "not enough values to unpack
  *   (expected n, got i)";
  * - an `n + 1`-th item is `ValueError` "too many values to unpack
@@ -2541,6 +2544,42 @@ int pycc_ext_obj_unpack_float_tuple(PyObject *o, long long arity, double *out)
  * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents;
  * `n` is guarded with it, codegen only ever emitting a positive arity.
  */
+/*
+ * The `tp_name` CPython's "cannot unpack non-iterable" message prints, as a
+ * new `str` reference, or NULL with an exception set. A static type's
+ * `tp_name` is "module.name", from which CPython derives both `__module__`
+ * and `__name__`, so it is rebuilt from them, a `builtins` type printing
+ * its bare name (`int`, `builtin_function_or_method`); a heap type created
+ * by a `class` statement has its `__name__` as `tp_name`. A heap type built
+ * from a `PyType_Spec` whose spec name is dotted prints `__name__` here and
+ * the dotted name in CPython: the Limited API cannot tell the two heap kinds
+ * apart.
+ */
+static PyObject *pycc_ext_obj_unpack_type_name(PyTypeObject *type)
+{
+    PyObject *name;
+    PyObject *module;
+    PyObject *dotted;
+
+    name = PyType_GetName(type);
+    if (name == NULL || (PyType_GetFlags(type) & Py_TPFLAGS_HEAPTYPE) != 0) {
+        return name;
+    }
+    module = PyType_GetModuleName(type);
+    if (module == NULL) {
+        Py_DECREF(name);
+        return NULL;
+    }
+    if (PyUnicode_CompareWithASCIIString(module, "builtins") == 0) {
+        Py_DECREF(module);
+        return name;
+    }
+    dotted = PyUnicode_FromFormat("%U.%U", module, name);
+    Py_DECREF(module);
+    Py_DECREF(name);
+    return dotted;
+}
+
 PyObject *pycc_ext_obj_unpack(PyObject *o, long long n)
 {
     PyObject *iter;
@@ -2561,7 +2600,7 @@ PyObject *pycc_ext_obj_unpack(PyObject *o, long long n)
     if (iter == NULL) {
         if (PyErr_ExceptionMatches(PyExc_TypeError)
             && PyType_GetSlot(Py_TYPE(o), Py_tp_iter) == NULL && !PySequence_Check(o)) {
-            type_name = PyType_GetName(Py_TYPE(o));
+            type_name = pycc_ext_obj_unpack_type_name(Py_TYPE(o));
             if (type_name != NULL) {
                 PyErr_Format(PyExc_TypeError, "cannot unpack non-iterable %U object", type_name);
                 Py_DECREF(type_name);

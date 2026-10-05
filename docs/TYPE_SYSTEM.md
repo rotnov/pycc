@@ -1055,7 +1055,9 @@ as in CPython. A swap, `i, j = j, i`, reads both names before either is bound.
   "not enough values to unpack (expected 3, got 2)"). The count is known
   statically, the same reasoning that makes an out-of-range literal tuple index
   `T0040` rather than a run-time `IndexError`, and mypy and pyright report the
-  same mismatch. Like other type-stage diagnostics it is reported at `1:1`
+  same mismatch. This deliberately departs from CPython for one observable
+  case: a `try`/`except ValueError` around such an unpack is never reached,
+  because the program is refused rather than run. Like other type-stage diagnostics it is reported at `1:1`
   until Part 5 of [#1371](https://github.com/rotnov/pycc/issues/1371) gives
   them a source location.
 - **A CPython object** (`object`, D-258, `--ext` only) is unpacked at run time

@@ -1137,8 +1137,9 @@ unpacks a native `tuple[...]` whose length differs from the number of target \
 names. CPython raises `ValueError` at run time with the same message; pycc \
 knows the tuple's length statically, so it reports the error before the \
 program runs, for the same reason an out-of-range literal tuple index is \
-T0040 rather than a run-time `IndexError` (D-116). Write exactly as many \
-target names as the tuple has elements. A CPython object's length is not \
+T0040 rather than a run-time `IndexError` (D-116). A `try`/`except \
+ValueError` around such an unpack therefore never runs: the program is \
+refused instead. Write exactly as many target names as the tuple has elements. A CPython object's length is not \
 known statically: unpacking one in an `--ext` build is checked at run time \
 and raises CPython's own `ValueError`.",
         example: "\
