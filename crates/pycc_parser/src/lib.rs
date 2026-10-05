@@ -21,6 +21,11 @@ use ruff_python_parser::{Mode, ParseOptions};
 ///
 /// Like `into_result`, this ignores `unsupported_syntax_errors()` (version-
 /// gated syntax): a module with only those still parses and reaches HIR.
+///
+/// A module that parses has its top-level string annotations replaced by
+/// the expressions they contain (`def f() -> "C"` reads as `-> C`; Part 1
+/// of #889), so every later stage sees one spelling of an annotation. See
+/// [`pycc_ast::normalize_string_annotations`] for exactly what is rewritten.
 pub fn parse_all(source: &str) -> Result<ModModule, Vec<Diagnostic>> {
     let parsed = ruff_python_parser::parse_unchecked(source, ParseOptions::from(Mode::Module))
         // `Mode::Module` always produces a `Mod::Module`, so the `None`
@@ -30,7 +35,9 @@ pub fn parse_all(source: &str) -> Result<ModModule, Vec<Diagnostic>> {
         .try_into_module()
         .expect("Mode::Module always yields a module");
     if parsed.has_valid_syntax() {
-        return Ok(parsed.into_syntax());
+        let mut module = parsed.into_syntax();
+        pycc_ast::normalize_string_annotations(&mut module, source);
+        return Ok(module);
     }
     Err(parsed.into_errors().into_iter().map(to_l0001).collect())
 }
@@ -70,6 +77,14 @@ mod tests {
     fn parses_a_function_returning_none_that_calls_print() {
         let module = parse("def main() -> None:\n    print(42)\n").expect("should parse");
         assert_eq!(module.body.len(), 1);
+    }
+
+    #[test]
+    fn a_string_annotation_reaches_callers_unquoted() {
+        let module = parse("def f(a: \"int\") -> None:\n    pass\n").expect("should parse");
+        let def = module.body[0].as_function_def_stmt().unwrap();
+        let annotation = def.parameters.args[0].parameter.annotation.as_deref();
+        assert!(annotation.unwrap().is_name_expr());
     }
 
     #[test]

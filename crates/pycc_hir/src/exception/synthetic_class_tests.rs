@@ -363,9 +363,36 @@ fn a_module_naming_none_of_the_seven_references_nothing() {
     ));
     // A *similar* name is not one of the seven.
     assert!(!references("x = ValueErrors\n"));
-    // A string that merely spells one is not a reference: `annotation_to_ty`
-    // does not resolve string forward references either.
+    // A string outside an annotation merely spells one: nothing resolves
+    // it as a name.
     assert!(!references("x = \"ValueError\"\n"));
+}
+
+/// Part 1 of #889: annotation lowering resolves a string annotation like
+/// its unquoted spelling, so the scan counts one -- top-level (unquoted by
+/// `parse_all`) or nested (parsed by the scan itself), at any depth.
+#[test]
+fn a_builtin_exception_name_inside_a_string_annotation_is_a_reference() {
+    for source in [
+        "x: \"ValueError\"\n",
+        "def f(e: list[\"ValueError\"]) -> None:\n    pass\n",
+        "def f(e: list[\"list['ValueError']\"]) -> None:\n    pass\n",
+        // a string nested in a type alias value, in both spellings
+        "type E = list[\"ValueError\"]\n",
+        "E: TypeAlias = list[\"ValueError\"]\n",
+    ] {
+        assert!(references(source), "must be a reference: {source:?}");
+    }
+    for source in [
+        "def f(e: list[\"Value Error\"]) -> None:\n    pass\n",
+        "def f(e: list[\"int\"]) -> None:\n    pass\n",
+        "type E = list[\"int\"]\n",
+        "E: TypeAlias = list[\"int\"]\n",
+        // an ordinary annotated assignment's value is not a type
+        "E: str = \"ValueError\"\n",
+    ] {
+        assert!(!references(source), "must not be a reference: {source:?}");
+    }
 }
 
 #[test]

@@ -30,6 +30,7 @@ mod narrow;
 mod obj_bind;
 mod obj_call;
 mod protocol;
+mod receiver_class_call;
 mod scope;
 mod set_ops;
 mod slice;

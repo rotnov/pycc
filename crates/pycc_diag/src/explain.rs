@@ -267,7 +267,11 @@ see into. T0001 fires separately for a missing parameter annotation \
 (\"parameter `<name>` of public function `<fn>` needs a type annotation\") \
 and a missing return annotation (\"public function `<fn>` needs a return \
 type annotation\") -- a function can trigger it more than once if both are \
-missing.",
+missing. One parameter case is exempt in a module compiled into a `pycc \
+build --ext` artifact (#1409): an unannotated parameter whose default is a \
+literal `int`, `float`, `bool` or `str` takes that literal's type, and a \
+method parameter defaulting to `None` the opaque CPython object, exactly as \
+if it carried that annotation.",
         example: "\
 def add(a: int, b: int) -> int:
     return a + b
