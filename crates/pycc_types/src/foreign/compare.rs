@@ -56,6 +56,7 @@ pub(crate) fn general_identity_ty(
             "testing a CPython object's identity against a `{}` value",
             other.name()
         ))),
+        // `HirExpr::Compare` carries no source range, so no real span exists at this layer (Part 5 of #1371).
         _ => Err(Diagnostic::error(
             "C0001",
             format!("comparison operator not supported yet: {op:?}"),

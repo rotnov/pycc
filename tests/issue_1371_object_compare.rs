@@ -9,7 +9,7 @@
 //! `cargo test --workspace -- --include-ignored`. The changed lines are
 //! covered by the unit tests in `crates/pycc_types/src/foreign/compare/`,
 //! `crates/pycc_mir/src/obj_compare/` and
-//! `crates/pycc_codegen/src/foreign_compare/`.
+//! `crates/pycc_codegen/src/tests/object_compare.rs`.
 
 use pycc_scratch::ScratchDir;
 use std::path::{Path, PathBuf};

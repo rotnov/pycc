@@ -278,7 +278,7 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
         "I0404",
         format!(
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
-             value, and #1026 implements attribute access, positional \
+             value and implements attribute access, positional \
              scalar-argument method calls and direct calls, `len`, truth \
              testing, a \
              scalar-key subscript load, a rich comparison with an object or \

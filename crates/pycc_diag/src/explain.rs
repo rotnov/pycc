@@ -1465,8 +1465,10 @@ this code still refuses iterating the object with `for` (Part 2 of \
 #1333) and passing it to a generic function. An unannotated helper whose \
 parameter would be inferred as the object and then used as a method-call \
 receiver or called reports `T0021` instead (Part 3 of #1333). The \
-refusal narrows as the later parts of #1026 land -- \
-the boundary conversions -- and this code is retired when they have.",
+refusal narrows as the later parts of #1026 (the boundary conversions) and \
+of #1371 (calls, subscripts and `raise` on an object, `isinstance` against \
+a pycc class, comparison chains and `and`/`or` over an object) land, and \
+this code is retired when they have.",
         example: "\
 import numpy
 
