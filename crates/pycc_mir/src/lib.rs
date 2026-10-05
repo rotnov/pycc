@@ -566,8 +566,9 @@ pub enum MirExpr {
     /// [`MirExpr::ty`] answers [`Ty::Object`]. It can raise (an unsliceable
     /// object, or a raising `__getitem__`), so
     /// `pycc_codegen::exception::expression_can_set_exception` answers
-    /// `true` for it. Only the *load* is modelled: `del o[a:b]` and
-    /// `o[a:b] = v` are still refused before MIR.
+    /// `true` for it. The deletion `del o[a:b]` is the statement
+    /// [`MirStmt::ObjDelSlice`]; the store `o[a:b] = v` is still refused
+    /// before MIR.
     ObjSlice {
         base: Box<MirExpr>,
         start: Option<Box<MirExpr>>,
@@ -1490,6 +1491,19 @@ pub enum MirStmt {
         slot: usize,
         value: MirExpr,
     },
+    /// `del base[start:stop:step]` where `base` is a CPython object (Part 2c
+    /// of #1371, from `HirStmt::DeleteSlice`): CPython's `PyObject_DelItem`
+    /// with the same `slice` key [`MirExpr::ObjSlice`] builds, an absent
+    /// bound passed as `None`. A statement because it yields nothing. Its
+    /// failure (an object without `__delitem__`, or a raising one) is
+    /// routed by codegen's foreign-failure edge inside the statement, as
+    /// [`MirStmt::ForObject`]'s `iter()` is.
+    ObjDelSlice {
+        base: MirExpr,
+        start: Option<MirExpr>,
+        stop: Option<MirExpr>,
+        step: Option<MirExpr>,
+    },
     /// PEP 634-636 (#381, PR-21): A sequence of statements executed in
     /// order — used by `match` lowering to pair the subject-temporary
     /// assignment with the nested `if` chain.
@@ -1898,6 +1912,7 @@ fn set_frame_function(body: &mut [MirStmt], frame_name: &str) {
             | MirStmt::Return(_)
             | MirStmt::ReturnBufferSlice { .. }
             | MirStmt::AttrSet { .. }
+            | MirStmt::ObjDelSlice { .. }
             | MirStmt::ForeignImport { .. }
             | MirStmt::Reraise => {}
         }

@@ -2556,13 +2556,36 @@ pub(crate) fn collect_block_constraints(
             // separate, independently-testable follow-up if solver-scope
             // coverage of this gap is wanted later.
             // #1244: a `del` binds nothing to infer; the checker owns its
-            // binding-state rule.
-            // A nested foreign import (#1291) needs no constraint: its names
+            // binding-state rule. A nested foreign import (#1291) needs no constraint: its names
             // are seeded as `Ty::Object` globals position-blind, like a
             // top-level foreign import's (`constraints/signatures.rs`).
             HirStmt::AnnAssign { value: None, .. }
             | HirStmt::Delete { .. }
             | HirStmt::ForeignImport { .. } => {}
+            // Part 2c of #1371: a slice `del` binds nothing, but its base and
+            // bounds are ordinary reads -- a call to an unannotated helper
+            // in one still needs its call-site constraints. `pycc_hir`
+            // refuses a walrus in them, so there is nothing to pre-bind.
+            HirStmt::DeleteSlice {
+                base,
+                start,
+                stop,
+                step,
+                ..
+            } => {
+                for operand in std::iter::once(&**base)
+                    .chain([start, stop, step].into_iter().flatten().map(|b| &**b))
+                {
+                    collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.deferred,
+                        env,
+                        operand,
+                    )?;
+                }
+            }
             HirStmt::ExprStmt(expr) => {
                 // PEP 572 (#774), deep-review follow-up (round 4): bind
                 // before unifying -- see `bind_named_expr_targets`'s own
@@ -3473,6 +3496,7 @@ pub(crate) fn contains_return(body: &[HirStmt]) -> bool {
         | HirStmt::SetCompAssign { .. }
         | HirStmt::DictCompAssign { .. }
         | HirStmt::Delete { .. }
+        | HirStmt::DeleteSlice { .. }
         | HirStmt::ForeignImport { .. }
         | HirStmt::Raise { .. } => false,
         HirStmt::Try {
@@ -3523,7 +3547,8 @@ pub(crate) fn introduces_bindings(body: &[HirStmt]) -> bool {
             introduces_bindings(body)
         }
         HirStmt::Match { cases, .. } => cases.iter().any(|case| introduces_bindings(&case.body)),
-        HirStmt::Return(_) | HirStmt::ExprStmt(_) => false,
+        // A slice `del` (Part 2c of #1371) changes no binding.
+        HirStmt::Return(_) | HirStmt::ExprStmt(_) | HirStmt::DeleteSlice { .. } => false,
         HirStmt::Try {
             body,
             handlers,
