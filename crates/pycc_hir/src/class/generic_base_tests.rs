@@ -233,4 +233,8 @@ fn a_type_var_declaration_outside_the_plain_form_is_refused() {
         &format!("{typing}type T = int\nT = TypeVar(\"T\")\n"),
         "type variable `T` rebinds a name already bound as a type in this module",
     );
+    assert_refused(
+        &format!("{typing}class T:\n    pass\nT = TypeVar(\"T\")\n"),
+        "type variable `T` collides with a class of the same name already defined in this module",
+    );
 }

@@ -65,6 +65,22 @@ pub(super) fn lower_type_var_decl(
             assign.range,
         ));
     }
+    // Same reverse-direction check as the type-alias arms in
+    // `lower_top_level_item`: a class defined earlier under this name would
+    // otherwise silently gain a second, alias-shaped binding.
+    if state
+        .class_defs
+        .iter()
+        .any(|(class_name, _)| class_name == name)
+    {
+        return Err(unsupported(
+            format!(
+                "type variable `{name}` collides with a class of the same name already defined \
+                 in this module"
+            ),
+            assign.range,
+        ));
+    }
     state.imported_alias_indices.push(state.aliases.len());
     state.aliases.push((name.to_string(), Ty::Object));
     state.type_vars.push(name.to_string());

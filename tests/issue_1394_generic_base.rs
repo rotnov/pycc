@@ -158,6 +158,29 @@ fn a_type_variable_is_not_a_runtime_value() {
     assert!(rendered.contains("error[T0021]"), "{rendered}");
 }
 
+/// The erased base leaves no `__orig_bases__` or `__parameters__` on the
+/// compiled class: reading either, through the class or an instance, is
+/// `T0044` (`docs/TYPE_SYSTEM.md`, "Generics").
+#[test]
+fn the_erased_base_leaves_no_generic_metadata() {
+    for (tag, read) in [
+        ("1394_orig_bases", "print(C.__orig_bases__)\n"),
+        ("1394_parameters", "c = C()\nprint(c.__parameters__)\n"),
+        ("1394_inst_orig_bases", "c = C()\nprint(c.__orig_bases__)\n"),
+        ("1394_class_parameters", "print(C.__parameters__)\n"),
+    ] {
+        let body = format!("{PREAMBLE}class C(Generic[T]):\n    pass\n{read}");
+        let output = check(tag, &body);
+        let rendered = stdout_of(&output);
+        assert_eq!(output.status.code(), Some(1), "{tag}: {rendered}");
+        assert!(rendered.contains("error[T0044]"), "{tag}: {rendered}");
+        assert!(
+            rendered.contains("has no attribute named"),
+            "{tag}: {rendered}"
+        );
+    }
+}
+
 fn artifact_name() -> &'static str {
     if cfg!(windows) { "m.pyd" } else { "m.abi3.so" }
 }
