@@ -1461,7 +1461,8 @@ of any other type, a `match` subject, iterating over a subscript load \
 passing an argument of any other type to one of its methods, to the \
 object itself or to a subscript result, indexing or slicing with a key \
 or bound of any other type, and testing membership of an item of any \
-other type or in a native container. A subscript call whose base is a bare name and whose key is \
+other type in an object or of an `object` item in a native container \
+(membership between two native values keeps its `C0001`). A subscript call whose base is a bare name and whose key is \
 `int`, `float`, `bool` or `str` (`handlers[int](x)`) is still read as a \
 generic class instantiation and refused by that path's own diagnostic. Storing through a \
 subscript (`o[k] = v`) or a slice (`o[a:b] = v`, `del o[a:b]`) and \
