@@ -316,7 +316,10 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
                 }
             }
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 collect_named_expr_targets_in_expr(e, killed);
             }

@@ -1703,6 +1703,15 @@ pub(crate) fn collect_expr_constraints(
             }
         }
         HirExpr::EmptyDict(_) => Ok(None),
+        // Part 2d of #1371: a list display built as a CPython `list` is an
+        // object whatever its elements are; their packability is
+        // `crate::foreign::list_display`'s check, run by the checker walk.
+        HirExpr::ObjectList(elements) => {
+            for element in elements {
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, element)?;
+            }
+            Ok(Some(Ok(Ty::Object)))
+        }
         HirExpr::ListLiteral(elements) => {
             let mut element_terms = Vec::with_capacity(elements.len());
             for element in elements {
@@ -2188,7 +2197,10 @@ fn bind_named_expr_targets(
             }
             Ok(())
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 bind_named_expr_targets(signatures, parents, concrete, deferred, env, e)?;
             }

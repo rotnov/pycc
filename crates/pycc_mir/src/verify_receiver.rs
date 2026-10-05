@@ -452,7 +452,9 @@ impl Verifier<'_> {
                     }
                 }
             }
-            MirExpr::ListLiteral(items) | MirExpr::TupleLiteral(items) => self.exprs(items),
+            MirExpr::ListLiteral(items)
+            | MirExpr::ObjList { elements: items }
+            | MirExpr::TupleLiteral(items) => self.exprs(items),
             MirExpr::SetLiteral { elements, ops } => {
                 if let (Some(ops), Some(first)) = (ops, elements.first()) {
                     self.check_set_ops(ops, &first.ty());

@@ -630,7 +630,10 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
                 }
             }
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 collect_named_expr_names_in_expr(e, names);
             }
@@ -1363,7 +1366,10 @@ fn collect_named_expr_bindings(
             }
             Ok(())
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 collect_named_expr_bindings(env, local_names, e)?;
             }
@@ -3813,6 +3819,7 @@ fn reject_generic_calls_in_expr(
             Ok(())
         }
         HirExpr::ListLiteral(elements)
+        | HirExpr::ObjectList(elements)
         | HirExpr::SetLiteral(elements)
         | HirExpr::TupleLiteral(elements) => {
             for element in elements {

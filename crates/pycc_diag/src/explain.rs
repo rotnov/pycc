@@ -1451,7 +1451,11 @@ admits a membership test (`k in o`, `k not in o`) of an `int`, `float`, \
 `PySequence_Contains` with a `bool` result, and a slice load \
 (`o[a:b:c]`, any bound omitted) whose bounds are of those same types, \
 answered by the object's own `__getitem__` with a `slice` key; the result \
-is another CPython object. The loop is \
+is another CPython object. Part 2d of #1371 builds a list display \
+bound to an object slot -- annotated `object`, `Any` or a bare `list`, \
+or an empty `[]` assigned to a name whose other binding is a CPython \
+object -- as a fresh CPython `list` of its `int`, `float`, `bool`, `str` \
+or `object` elements. The loop is \
 admitted when the iterable is written as an attribute load \
 (`for x in o.attr:`), a method call (`for x in o.method(...):`) or a bare \
 name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
@@ -1466,7 +1470,8 @@ passing an argument of any other type to one of its methods, to the \
 object itself or to a subscript result, indexing or slicing with a key \
 or bound of any other type, and testing membership of an item of any \
 other type in an object or of an `object` item in a native container \
-(membership between two native values keeps its `C0001`). A subscript call whose base is a bare name and whose key is \
+(membership between two native values keeps its `C0001`), and a list \
+display bound to an object slot with an element of any other type. A subscript call whose base is a bare name and whose key is \
 `int`, `float`, `bool` or `str` (`handlers[int](x)`) is still read as a \
 generic class instantiation and refused by that path's own diagnostic. Storing through a \
 subscript (`o[k] = v`) or a slice (`o[a:b] = v`) and \

@@ -575,6 +575,18 @@ pub enum MirExpr {
         stop: Option<Box<MirExpr>>,
         step: Option<Box<MirExpr>>,
     },
+    /// A list display `[e1, e2, ...]` bound to a CPython object slot (Part
+    /// 2d of #1371, D-258 rule 4): a fresh CPython `list` built by
+    /// `PyList_New`, each element boxed through a `pycc_ext_obj_pack_*`
+    /// helper and evaluated left to right. A node of its own rather than a
+    /// [`MirExpr::ListLiteral`], whose `ty()` answers a native `list[T]`;
+    /// [`MirExpr::ty`] answers [`Ty::Object`]. It can raise (a failed
+    /// element box or allocation), so
+    /// `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for it.
+    ObjList {
+        elements: Vec<MirExpr>,
+    },
     /// `isinstance(value, class)` where `value` is a CPython object (Part 1
     /// of #1371): a run-time `PyObject_IsInstance`, which can raise (a
     /// class argument that is not a class, or a raising
@@ -1024,7 +1036,7 @@ impl MirExpr {
             }
             MirExpr::ObjIsInstance { .. } | MirExpr::ObjContains { .. } => Ty::Bool,
             // Part 2b of #1371: CPython's own slice result, opaque.
-            MirExpr::ObjSlice { .. } => Ty::Object,
+            MirExpr::ObjSlice { .. } | MirExpr::ObjList { .. } => Ty::Object,
             // Hardcoded for `ObjLen`'s reason, not `ObjSubscript`'s: the
             // element type is known, it is just not recoverable from the
             // base. A `memoryview` parameter is one-dimensional and `"d"`-
@@ -1145,6 +1157,7 @@ impl MirExpr {
                 }
             }
             MirExpr::ListLiteral(elements)
+            | MirExpr::ObjList { elements }
             | MirExpr::SetLiteral { elements, .. }
             | MirExpr::TupleLiteral(elements) => {
                 for element in elements {

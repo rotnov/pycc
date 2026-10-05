@@ -498,6 +498,19 @@ pub enum HirExpr {
     /// literal is empty (`MirExpr::ty()`); carrying the resolved type on the
     /// node itself is what lets a resolved `[]` survive into MIR and codegen.
     EmptyList(Ty),
+    /// A list display `[e1, e2, ...]`, empty or not, assigned to a name
+    /// whose type is the opaque CPython object (Part 2d of #1371, D-258
+    /// rule 4): it builds a fresh CPython `list`, each element packed into a
+    /// `PyObject *`, and its own type is `Ty::Object`.
+    ///
+    /// **Construction invariant:** like [`HirExpr::EmptyList`], `lower_expr`
+    /// never builds this variant. Its only construction site is
+    /// `pycc_types::empty_container::resolve_empty_containers`, which
+    /// rewrites a `ListLiteral` into it before either checker walks the
+    /// module, so `pycc check` and `pycc build` consume the same node. Each
+    /// element must have a packable type (`int`, `float`, `bool`, `str` or
+    /// `object`); `pycc_types` refuses anything else with `I0404`.
+    ObjectList(Vec<HirExpr>),
     /// `base[index]`, a read (Load position). `Stmt::Assign`'s own target
     /// handling below special-cases an `Expr::Subscript` target on a bare
     /// name into a dedicated `HirStmt::DictSet` node instead of ever

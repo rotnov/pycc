@@ -682,6 +682,14 @@ pub(super) fn lower_expr(
                 })
                 .collect(),
         ),
+        // Part 2d of #1371: a list display the empty-container pre-pass
+        // resolved to an object slot.
+        HirExpr::ObjectList(elements) => MirExpr::ObjList {
+            elements: elements
+                .iter()
+                .map(|e| lower_expr(e, scopes, classes, current_class))
+                .collect(),
+        },
         HirExpr::ListLiteral(elements) => MirExpr::ListLiteral(
             elements
                 .iter()
@@ -1676,7 +1684,10 @@ pub(super) fn pre_bind_named_expr_targets(
                 }
             }
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 pre_bind_named_expr_targets(e, scopes, classes, current_class);
             }
