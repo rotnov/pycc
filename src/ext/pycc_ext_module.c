@@ -2502,6 +2502,42 @@ int pycc_ext_obj_unpack_float_tuple(PyObject *o, long long arity, double *out)
 }
 
 /*
+ * The `tp_name` CPython's "cannot unpack non-iterable" message prints, as a
+ * new `str` reference, or NULL with an exception set. A static type's
+ * `tp_name` is "module.name", from which CPython derives both `__module__`
+ * and `__name__`, so it is rebuilt from them, a `builtins` type printing
+ * its bare name (`int`, `builtin_function_or_method`); a heap type created
+ * by a `class` statement has its `__name__` as `tp_name`. A heap type built
+ * from a `PyType_Spec` whose spec name is dotted prints `__name__` here and
+ * the dotted name in CPython: the Limited API cannot tell the two heap kinds
+ * apart.
+ */
+static PyObject *pycc_ext_obj_unpack_type_name(PyTypeObject *type)
+{
+    PyObject *name;
+    PyObject *module;
+    PyObject *dotted;
+
+    name = PyType_GetName(type);
+    if (name == NULL || (PyType_GetFlags(type) & Py_TPFLAGS_HEAPTYPE) != 0) {
+        return name;
+    }
+    module = PyType_GetModuleName(type);
+    if (module == NULL) {
+        Py_DECREF(name);
+        return NULL;
+    }
+    if (PyUnicode_CompareWithASCIIString(module, "builtins") == 0) {
+        Py_DECREF(module);
+        return name;
+    }
+    dotted = PyUnicode_FromFormat("%U.%U", module, name);
+    Py_DECREF(module);
+    Py_DECREF(name);
+    return dotted;
+}
+
+/*
  * `t1, ..., tn = o` where `o` is a CPython object (Part 1 of #891,
  * `EXT_OBJ_UNPACK_SYMBOL` in `crates/pycc_codegen/src/ext.rs`): a new
  * reference to a `tuple` of exactly `n` items taken from `o`, or NULL with
@@ -2544,42 +2580,6 @@ int pycc_ext_obj_unpack_float_tuple(PyObject *o, long long arity, double *out)
  * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents;
  * `n` is guarded with it, codegen only ever emitting a positive arity.
  */
-/*
- * The `tp_name` CPython's "cannot unpack non-iterable" message prints, as a
- * new `str` reference, or NULL with an exception set. A static type's
- * `tp_name` is "module.name", from which CPython derives both `__module__`
- * and `__name__`, so it is rebuilt from them, a `builtins` type printing
- * its bare name (`int`, `builtin_function_or_method`); a heap type created
- * by a `class` statement has its `__name__` as `tp_name`. A heap type built
- * from a `PyType_Spec` whose spec name is dotted prints `__name__` here and
- * the dotted name in CPython: the Limited API cannot tell the two heap kinds
- * apart.
- */
-static PyObject *pycc_ext_obj_unpack_type_name(PyTypeObject *type)
-{
-    PyObject *name;
-    PyObject *module;
-    PyObject *dotted;
-
-    name = PyType_GetName(type);
-    if (name == NULL || (PyType_GetFlags(type) & Py_TPFLAGS_HEAPTYPE) != 0) {
-        return name;
-    }
-    module = PyType_GetModuleName(type);
-    if (module == NULL) {
-        Py_DECREF(name);
-        return NULL;
-    }
-    if (PyUnicode_CompareWithASCIIString(module, "builtins") == 0) {
-        Py_DECREF(module);
-        return name;
-    }
-    dotted = PyUnicode_FromFormat("%U.%U", module, name);
-    Py_DECREF(module);
-    Py_DECREF(name);
-    return dotted;
-}
-
 PyObject *pycc_ext_obj_unpack(PyObject *o, long long n)
 {
     PyObject *iter;
