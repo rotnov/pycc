@@ -309,6 +309,7 @@ fn match_enum_exhaustive_type_checks() {
             type_param: None,
             is_enum: false,
             implicit_object_init: false,
+            method_defaults: Vec::new(),
             enum_members: vec![
                 ("RED".to_string(), pycc_hir::EnumMemberValue::Int(1)),
                 ("GREEN".to_string(), pycc_hir::EnumMemberValue::Int(2)),
@@ -368,6 +369,7 @@ fn match_enum_non_exhaustive_reports_t0030() {
             type_param: None,
             is_enum: false,
             implicit_object_init: false,
+            method_defaults: Vec::new(),
             enum_members: vec![
                 ("RED".to_string(), pycc_hir::EnumMemberValue::Int(1)),
                 ("GREEN".to_string(), pycc_hir::EnumMemberValue::Int(2)),
@@ -419,6 +421,7 @@ fn match_enum_exhaustive_with_other_class_pattern() {
             type_param: None,
             is_enum: false,
             implicit_object_init: false,
+            method_defaults: Vec::new(),
             enum_members: vec![
                 ("RED".to_string(), pycc_hir::EnumMemberValue::Int(1)),
                 ("GREEN".to_string(), pycc_hir::EnumMemberValue::Int(2)),
@@ -448,6 +451,7 @@ fn match_enum_exhaustive_with_other_class_pattern() {
             type_param: None,
             is_enum: false,
             implicit_object_init: false,
+            method_defaults: Vec::new(),
             enum_members: Vec::new(),
             is_dataclass: false,
             dataclass_fields: Vec::new(),

@@ -9,8 +9,8 @@
 
 use super::export_name::ExtReceiver;
 use super::{
-    ExtCtor, ExtPublishedClass, arg_slot_locals, buffer_releases, c_param_list, source_level_name,
-    unpack_args,
+    ExtCtor, ExtPublishedClass, arg_slot_locals, buffer_releases, c_param_list, defaults,
+    source_level_name, unpack_args,
 };
 
 /// The exact C declaration of the generated method-class registration entry
@@ -232,7 +232,12 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
     }
     let layout_len = layout.len();
     let layout_literal = layout.replace('\0', "\\000");
-    let mut out = format!("extern void *fnptr_{symbol};\n");
+    // The method part of #1140, exactly as `wrapper_for` applies it: keyed
+    // by the class rather than the compiled `__init__` name, because two
+    // classes that inherit one `__init__` each get their own `Py_tp_init`.
+    let default_prefix = format!("init_{class}");
+    let mut out = defaults::default_object_helpers(&default_prefix, &ctor.defaults);
+    out.push_str(&format!("extern void *fnptr_{symbol};\n"));
     out.push_str(&format!(
         "static int pycc_ext_tp_init_{class}(PyObject *self, PyObject *args, PyObject *kwds)\n\
          {{\n    void *inst;\n"
@@ -243,16 +248,35 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
          PyErr_SetString(PyExc_TypeError, \"{source_name}() takes no keyword arguments\");\n        \
          return -1;\n    }}\n"
     ));
-    out.push_str(&format!(
-        "    if (PyTuple_Size(args) != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \
-         \"{source_name}() takes exactly {arity} argument{plural} (%zd given)\", \
-         PyTuple_Size(args));\n        return -1;\n    }}\n",
-        plural = if arity == 1 { "" } else { "s" },
-    ));
+    if ctor.defaults.is_empty() {
+        out.push_str(&format!(
+            "    if (PyTuple_Size(args) != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \
+             \"{source_name}() takes exactly {arity} argument{plural} (%zd given)\", \
+             PyTuple_Size(args));\n        return -1;\n    }}\n",
+            plural = if arity == 1 { "" } else { "s" },
+        ));
+    } else {
+        out.push_str(&defaults::range_arity_check(
+            source_name,
+            &default_prefix,
+            &ctor.defaults,
+            &defaults::ArgSource {
+                count: "PyTuple_Size(args)",
+                item: &|index| format!("PyTuple_GetItem(args, {index})"),
+                fail: "        return -1;\n",
+            },
+        ));
+    }
     out.push_str(&unpack_args(
         &slots,
         source_name,
-        &|index| format!("PyTuple_GetItem(args, {index})"),
+        &|index| {
+            defaults::arg_expr(
+                &ctor.defaults,
+                index,
+                format!("PyTuple_GetItem(args, {index})"),
+            )
+        },
         "        return -1;\n",
     ));
     out.push_str(&format!(

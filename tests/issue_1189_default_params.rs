@@ -140,12 +140,16 @@ fn a_default_of_the_wrong_type_fails_check_with_t0021() {
 }
 
 #[test]
-fn a_default_on_a_method_keeps_its_capability_refusal() {
+fn a_default_on_a_protocol_member_keeps_its_capability_refusal() {
+    // A method default is admitted since the method part of #1140
+    // (`tests/issue_1140_method_defaults.rs`); a `Protocol` member, which
+    // has no body to serve it, keeps the refusal.
     let dir = ScratchDir::new("e2e_issue_1189_method").expect("failed to create scratch dir");
     let rendered = check_err(
         &dir,
         "method",
-        "class C:\n    def m(self, a: int = 1) -> None:\n        print(a)\n",
+        "from typing import Protocol\n\nclass P(Protocol):\n    \
+         def m(self, a: int = 1) -> None: ...\n",
     );
     assert!(
         rendered.contains("C0001")

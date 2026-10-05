@@ -2844,6 +2844,7 @@ fn collect_expr_constraints_propagates_error_from_generic_class_instantiate_arg(
         class_methods: Vec::new(),
         is_enum: false,
         implicit_object_init: false,
+        method_defaults: Vec::new(),
         enum_members: Vec::new(),
         is_dataclass: false,
         dataclass_fields: Vec::new(),
