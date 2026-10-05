@@ -1989,9 +1989,10 @@ PyObject *pycc_ext_obj_none(void)
 /*
  * #1418: a *borrowed* pointer to CPython's `NotImplemented` singleton, the
  * value of an admitted `return NotImplemented` in a comparison method
- * (`EXT_OBJ_NOT_IMPLEMENTED_SYMBOL`). It is immortal on CPython 3.13+, and
- * the return path packs it through `pycc_ext_pack_object`, which takes its
- * own strong reference (`Py_NewRef`), so the borrow is safe either way.
+ * (`EXT_OBJ_NOT_IMPLEMENTED_SYMBOL`). It is immortal on CPython 3.13+, so a
+ * compiled return may hand the borrow back as is; when the result crosses
+ * the export boundary, `pycc_ext_pack_object` takes the strong reference
+ * (`Py_NewRef`) the host caller owns.
  */
 PyObject *pycc_ext_obj_not_implemented(void)
 {

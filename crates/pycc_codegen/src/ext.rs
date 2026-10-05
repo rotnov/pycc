@@ -309,8 +309,10 @@ pub const EXT_OBJ_NONE_SYMBOL: &str = "pycc_ext_obj_none";
 /// The fixed C shim's `NotImplemented` accessor (#1418): a *borrowed*
 /// pointer to CPython's `NotImplemented` singleton, the value of an
 /// admitted `return NotImplemented` in a comparison method
-/// (`MirExpr::NotImplemented`). Returning it packs it through
-/// [`EXT_OBJ_PACK_OBJECT_SYMBOL`], which takes its own strong reference.
+/// (`MirExpr::NotImplemented`). A compiled return hands the borrowed
+/// singleton back as is (it is immortal on CPython 3.13+); when the result
+/// crosses the export boundary, the C shim's `pycc_ext_pack_object` takes
+/// the strong reference the host caller owns.
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_NOT_IMPLEMENTED_SYMBOL: &str = "pycc_ext_obj_not_implemented";

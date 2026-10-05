@@ -63,6 +63,25 @@ fn a_native_return_in_a_widened_method_is_t0022_with_the_help() {
 }
 
 #[test]
+fn a_widened_method_falling_off_its_end_keeps_its_own_help() {
+    let source = "class C:\n\
+                  \x20   def __eq__(self, other: object) -> bool:\n\
+                  \x20       if other is None:\n            return NotImplemented\n";
+    let diagnostic = refusal(source, true);
+    assert_eq!(diagnostic.code, "T0022", "{diagnostic:#?}");
+    assert!(
+        diagnostic
+            .message
+            .contains("can exit without returning `object`"),
+        "{diagnostic:#?}"
+    );
+    assert_ne!(
+        diagnostic.help.as_deref(),
+        Some(pycc_hir::WIDENED_RETURN_HELP)
+    );
+}
+
+#[test]
 fn the_widened_method_result_flows_as_the_object() {
     let source = format!(
         "{}\
@@ -113,8 +132,8 @@ fn a_set_element_refusal_names_the_widened_return() {
     let help = diagnostic.help.expect("the set-element refusal has a help");
     assert!(
         help.ends_with(
-            "bases; its return is the CPython object, which a `return NotImplemented` makes \
-             it whatever its annotation says (#1418)"
+            "bases; its return is the CPython object (an `-> object` annotation, or a \
+             `return NotImplemented`, which makes it so whatever the annotation says, #1418)"
         ),
         "{help}"
     );

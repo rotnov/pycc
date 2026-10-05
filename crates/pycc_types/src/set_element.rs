@@ -136,10 +136,11 @@ fn check_eq_method(class: &str, mangled: &str, env: &Environment) -> Result<(), 
     }
     // #1418: a `return NotImplemented` widens the method's return to the
     // CPython object whatever its annotation says, so a written `-> bool`
-    // alone no longer explains this refusal.
+    // alone no longer explains this refusal. The environment holds only the
+    // signature, so the note names both ways to an `object` return.
     let widened = if *returns == Ty::Object {
-        "; its return is the CPython object, which a `return NotImplemented` makes it \
-         whatever its annotation says (#1418)"
+        "; its return is the CPython object (an `-> object` annotation, or a \
+         `return NotImplemented`, which makes it so whatever the annotation says, #1418)"
     } else {
         ""
     };

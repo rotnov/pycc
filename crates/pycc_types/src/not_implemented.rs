@@ -19,8 +19,15 @@ use pycc_hir::HirStmt;
 /// `diagnostic` with [`pycc_hir::WIDENED_RETURN_HELP`] as its help when it is
 /// a `T0022` return mismatch in a `body` that returns `NotImplemented`, and
 /// `diagnostic` unchanged otherwise.
+///
+/// Only the two mismatch spellings qualify (the solver's "return type
+/// mismatch: ..." and the check phase's "expected return type ..."): the
+/// other `T0022`, "function `f` can exit without returning `object`", is
+/// about a missing `return`, not a native value, and keeps its own help.
 pub(crate) fn widened_return_help(body: &[HirStmt], diagnostic: Diagnostic) -> Diagnostic {
-    if diagnostic.code == "T0022" && pycc_hir::body_returns_not_implemented(body) {
+    let mismatch = diagnostic.message.starts_with("return type mismatch")
+        || diagnostic.message.starts_with("expected return type");
+    if diagnostic.code == "T0022" && mismatch && pycc_hir::body_returns_not_implemented(body) {
         diagnostic.with_help(pycc_hir::WIDENED_RETURN_HELP)
     } else {
         diagnostic
@@ -53,5 +60,11 @@ mod tests {
         assert_eq!(widened_return_help(&widened, mismatch("T0021")).help, None);
         let plain = [HirStmt::Return(Some(HirExpr::NoneLiteral))];
         assert_eq!(widened_return_help(&plain, mismatch("T0022")).help, None);
+        let fall_off = Diagnostic::error(
+            "T0022",
+            "function `C.__eq__` can exit without returning `object`",
+            Span::new(0, 0),
+        );
+        assert_eq!(widened_return_help(&widened, fall_off).help, None);
     }
 }

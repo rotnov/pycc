@@ -25,6 +25,12 @@
 //! keeps lowering to an ordinary `HirExpr::Name` and `pycc_types` keeps its
 //! `T0021` "name `NotImplemented` is not defined" byte for byte (D-258
 //! rule 6).
+//!
+//! The gate reads the name only where it is an expression. A binding that
+//! carries no expression -- a parameter, `def`, `class` or `import ... as`
+//! named `NotImplemented` -- is not refused, so an admitted
+//! `return NotImplemented` under such a shadowing binding still yields the
+//! builtin singleton where CPython would return the shadowing value.
 
 use crate::{HirExpr, HirStmt, Ty};
 use pycc_ast::visitor::{self, Visitor};
@@ -36,13 +42,12 @@ const NOT_IMPLEMENTED: &str = "NotImplemented";
 
 /// The six rich-comparison methods whose `return NotImplemented` is
 /// admitted, in CPython's `tp_richcompare` operator order.
-pub const COMPARISON_DUNDERS: [&str; 6] =
+pub(crate) const COMPARISON_DUNDERS: [&str; 6] =
     ["__lt__", "__le__", "__eq__", "__ne__", "__gt__", "__ge__"];
 
-/// The `help` a `T0022` carries when a method that returns `NotImplemented`
-/// also returns a native value (`pycc_types` attaches it in both of its
-/// return checks, and to the D-255 set-element refusal of such an
-/// `__eq__`).
+/// The `help` a `T0022` return mismatch carries when a method that returns
+/// `NotImplemented` also returns a native value (`pycc_types` attaches it
+/// in both of its return checks).
 pub const WIDENED_RETURN_HELP: &str = "this method returns `NotImplemented`, so pycc types its \
      return as the CPython object, as CPython does, whatever its annotation says; return a \
      CPython object on every path (a comparison of two objects is one) -- boxing a native value \
