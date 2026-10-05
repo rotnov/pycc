@@ -229,8 +229,9 @@ fn a_generic_taking_a_foreign_object_keeps_i0404() {
 /// #1397 (D-258 rule 5) `build --ext` no longer refuses to export it: the
 /// boundary carries the object itself, unchecked against the class -- the
 /// interim answer until Part 2 (#1386) decides on a run-time class check.
-/// Only the absence of `C0003` is pinned here, so the test needs no C
-/// compiler; `tests/issue_1397_ext_any_object.rs` runs the artifact.
+/// The build now reaches the C step; only the absence of `C0003` and of a
+/// type error is pinned, so the test does not depend on that step
+/// succeeding. `tests/issue_1397_ext_any_object.rs` runs the artifact.
 #[test]
 fn a_public_function_taking_a_foreign_object_is_no_longer_refused_at_the_boundary() {
     let dir = ScratchDir::new("1367_public").expect("scratch");

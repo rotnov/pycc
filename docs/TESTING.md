@@ -890,9 +890,9 @@ whole past the first layer, so this list is a **lower bound**.
 | `class ...(Generic[StateT])` (11, 32) | `C0001` base class must be a bare name | #886 (v0.4) |
 | annotations naming a foreign class: `ParseTableBase[StateT]`, `ParserCallbacks`, `LexerThread`, `StateT`, the subject's `token: Token` (14-22, 35-40, 47, 67) | `C0001` type annotation not supported at `05bc7805`; Part 1 of #1367 resolves them to `object` (subscripts erased), and a probe with only the `Generic[...]` bases removed moves its first diagnostic from this row (line 14) to line 20, where `Dict[StateT, Dict[str, tuple]]` resolved `StateT` and stopped at the bare `tuple`; since [#1397](https://github.com/rotnov/pycc/issues/1397) (D-258 rule 4) that annotation is the CPython object, and the same probe, built with `--ext --foreign-relative-imports` against CPython 3.14.7, first stops at line 25:28, `self.start_state = self.parse_table.start_states[start]` (`C0001`, an `__init__` first assignment from a non-parameter expression, #1388); the whole subject still reports row 4's two errors. Still refused: the `__init__` assignments from non-parameter expressions (25-27, 43-44, [#1388](https://github.com/rotnov/pycc/issues/1388)) and `ParseConf[StateT]`, an attribute holding a pycc class instance (35, 40-41, [#1389](https://github.com/rotnov/pycc/issues/1389)) | [#1367](https://github.com/rotnov/pycc/issues/1367) (Part 1); [#1388](https://github.com/rotnov/pycc/issues/1388), [#1389](https://github.com/rotnov/pycc/issues/1389) |
 | method parameter defaults, the subject's own `is_end: bool = False` included (40, 59, 67) | `C0001` default parameter values | #1140 |
-| `__eq__(self, other)`: its only faithful annotation is `object`, which Part 1 of #1367 left unspellable (51) | `T0021` cannot infer parameter. Since [#1397](https://github.com/rotnov/pycc/issues/1397) `other: object` is spellable in an `--ext` module (D-258 rule 3); a probe `__eq__(self, other: object) -> bool` compiles, so the D-252 annotation-only addition clears the inference error. The method body's own operations on `other` are #1371's | #1367 (Part 3, [#1387](https://github.com/rotnov/pycc/issues/1387)) |
+| `__eq__(self, other)`: its only faithful annotation is `object`, which Part 1 of #1367 left unspellable (51) | cleared under `--ext` with the D-252 annotation `other: object`: `T0021` cannot infer parameter before. Since [#1397](https://github.com/rotnov/pycc/issues/1397) `other: object` is spellable in an `--ext` module (D-258 rule 3); a probe `__eq__(self, other: object) -> bool` compiles, so the D-252 annotation-only addition clears the inference error. The method body's own operations on `other` are #1371's | #1367 (Part 3, [#1387](https://github.com/rotnov/pycc/issues/1387)) |
 | `-> 'ParserState[StateT]'` string forward reference (59) | `C0001` | #889 (v0.4) |
-| the subject's `-> Any` (67) | `T0002` (inferred). The boundary question is decided by [D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md): in an `--ext` module `Any` is the opaque CPython object and crosses the boundary unchanged; implemented by [#1397](https://github.com/rotnov/pycc/issues/1397), so an `--ext` build no longer reports it. | #1285 |
+| the subject's `-> Any` (67) | cleared under `--ext`: `T0002` (inferred) before. The boundary question is decided by [D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md): in an `--ext` module `Any` is the opaque CPython object and crosses the boundary unchanged; implemented by [#1397](https://github.com/rotnov/pycc/issues/1397), so an `--ext` build no longer reports it. | #1285 |
 | function-local bindings of objects (`state_stack = self.state_stack`, 68-72) | `I0404` | #1333 / #1362 |
 | `action, arg = states[state][token.type]` (77) | `C0001` tuple target | #891 |
 | `{s for s in states[state].keys() if s.isupper()}` (79) | `C0001` comprehension iterable | #1255 |
@@ -900,9 +900,11 @@ whole past the first layer, so this list is a **lower bound**.
 | `.append` on an object stack (87, 88, 105, 106) | `I0404` | #1095 |
 
 Fourteen rows are listed. #1366 has cleared the relative-import row,
-Part 1 of #1138 the line-7 row out of package, and #1378 the `typing` import
-row, so eleven remain. Two of them are boundary questions inside the subject
-module rather than missing features: #1285, and #1367's `object` spelling.
+Part 1 of #1138 the line-7 row out of package, #1378 the `typing` import
+row, and #1397 the `-> Any` row and (with the annotation `other: object`) the
+`__eq__` row, so nine remain, and every one of them is a missing feature.
+The two that were boundary questions inside the subject module rather than
+missing features were #1285 and #1367's `object` spelling.
 [D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md) has since decided both for an `--ext` module (`Any` and `object` are
 the opaque CPython object there), and [#1397](https://github.com/rotnov/pycc/issues/1397) implemented that decision, so
 neither is reported by an `--ext` build any more. The subject's first errors are
