@@ -355,9 +355,11 @@ pub(crate) fn unsupported_boundary_ty(
 
 /// [`render_ty`], except that a compiled-class instance is named by its
 /// class (Part 1 of #1447): since #1449 the only instance refused is one of
-/// a class the boundary cannot carry -- an enum, an exception class, or a
-/// class this module does not define -- so naming it is what tells the
-/// reader which one, where "that type" would not.
+/// a class the boundary cannot carry -- an enum or an exception class (a
+/// name the module's class table lacks is refused too, defensively: a
+/// foreign class lowers to `Ty::Object`, never to `Ty::Instance`) -- so
+/// naming it is what tells the reader which one, where "that type" would
+/// not.
 fn render_offender(ty: &Ty) -> String {
     match ty {
         Ty::Instance(class) => (**class).clone(),

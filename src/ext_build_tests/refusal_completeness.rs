@@ -283,6 +283,7 @@ fn no_type_outside_the_admitted_set_is_carried_at_a_parameter_position() {
         Ty::Tuple(Box::new(vec![Ty::Object])),
         // Nor for a compiled-class instance (Part 1 of #1447).
         Ty::Tuple(Box::new(vec![Ty::Instance(name())])),
+        Ty::Optional(Box::new(Ty::Instance(name()))),
         // The two element shapes the boundary refuses: neither has an
         // `_at` helper, and both are unreachable from source today only
         // because `T0039` refuses the annotation first.

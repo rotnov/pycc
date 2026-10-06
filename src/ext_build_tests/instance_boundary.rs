@@ -155,21 +155,33 @@ fn an_instance_is_admitted_only_for_a_regular_class_of_the_module() {
 }
 
 #[test]
-fn a_tuple_of_instances_stays_a_capability_gap() {
+fn a_tuple_or_optional_of_instances_stays_a_capability_gap() {
     // Part 1 of #1447 (#1449): an instance has no `_at` element shim, so
     // `tuple[Conf]` is refused at both positions even though `Conf` alone
-    // is carried.
-    let tuple = || Ty::Tuple(Box::new(vec![Ty::Instance(Box::new("Conf".to_string()))]));
-    for item in [
-        func("take", &[("t", tuple())], Ty::Int),
-        func("give", &[], tuple()),
-    ] {
-        let hir = module_with_classes(
-            vec![item],
-            vec![("Conf".to_string(), class_def("Conf", None))],
-        );
-        let gaps = collect_exports(&hir).expect_err("tuple[Conf] is not carried");
-        assert!(gaps[0].message.contains("tuple`"), "{}", gaps[0].message);
+    // is carried, and so is `Optional[Conf]`, which has no carrier at all.
+    let tuple = || Ty::Tuple(Box::new(vec![conf()]));
+    let optional = || Ty::Optional(Box::new(conf()));
+    for (label, wrapped) in [("tuple", tuple()), ("Optional", optional())] {
+        for (item, position) in [
+            (
+                func("take", &[("t", wrapped.clone())], Ty::Int),
+                "parameter `t: ",
+            ),
+            (func("give", &[], wrapped.clone()), "return type `-> "),
+        ] {
+            let hir = module_with_classes(
+                vec![item],
+                vec![("Conf".to_string(), class_def("Conf", None))],
+            );
+            let gaps = collect_exports(&hir).expect_err(label);
+            assert_eq!(gaps.len(), 1, "{label}");
+            assert_eq!(gaps[0].code, EXT_CAPABILITY_CODE, "{label}");
+            assert!(
+                gaps[0].message.contains(position),
+                "{label}: {}",
+                gaps[0].message
+            );
+        }
     }
 }
 
