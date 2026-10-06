@@ -530,9 +530,10 @@ and discards it, passing the same null receiver every native
 `Class.method(...)` call site already passes. A `@property` getter or setter,
 and any method of a private class or of a user exception class, are **not**
 exported and are not `C0003`: they are excluded as representation, not as a
-capability gap. (Since #1442 a constructible class's getter is reachable as a
-read-only attribute descriptor instead -- "Reading a field through the
-published type" below -- never as a callable method.) A public `@staticmethod` or `@classmethod` of a public class
+capability gap. (Since #1442 a constructible class's getter is reachable as an
+attribute descriptor instead -- "Reading a field through the published type"
+below -- and since #1458 its setter through that descriptor's store --
+"Storing a field through the published type" -- never as a callable method.) A public `@staticmethod` or `@classmethod` of a public class
 whose signature the boundary cannot carry *is* a `C0003`, where it was
 previously skipped in silence.
 
@@ -592,8 +593,8 @@ the published class, and the walk never falls through to a base that exports
 the same name.
 
 So a `Derived` that binds `value` as a `@property` publishes no callable
-`value` at all (only, when `Derived` is constructible, the property's read-only
-descriptor, #1442), exactly as Python's own attribute lookup gives the derived
+`value` at all (only, when `Derived` is constructible, the property's
+descriptor, #1442, writable through a compiled setter since #1458), exactly as Python's own attribute lookup gives the derived
 property rather than `Base.value`; a derived ordinary method shadows a base
 `@property` in the same way; a derived `@staticmethod` shadows a base instance
 method, published under its own receiver kind; a base's `value: int = 2`
@@ -1784,9 +1785,10 @@ above. Four rules fix what that carrier is.
 - *Deviations from CPython, pinned by
   `tests/issue_1435_instance_argument.rs`.* A carrier of a constructible
   published class reads its fields through that type's descriptors (#1442,
-  "Reading a field through the published type" above) and stores into its
-  slots through their setters (Part 1 of #1443, "Storing a field through the
-  published type" above), as CPython does. Any other carrier -- a non-constructible published type's, or an
+  "Reading a field through the published type" above), stores into its
+  slots through their setters (Part 1 of #1443) and runs a property's
+  compiled setter on a store (#1458), with the boundary refusals "Storing a
+  field through the published type" above lists. Any other carrier -- a non-constructible published type's, or an
   on-demand carrier type's -- exposes exactly its type's exported methods and
   the shared `__copy__` (#1455, "Copying an instance through `copy.copy`"
   above): no attribute is readable, so `hasattr(x, 'n')` is `False` where CPython says
