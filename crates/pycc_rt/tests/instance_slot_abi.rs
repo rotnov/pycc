@@ -1,7 +1,8 @@
 //! #1388: the instance-slot entry points generated code calls --
 //! `pycc_rt_instance_new` with its layout descriptor and the checked read
 //! `pycc_rt_instance_get_slot_checked` -- and #1435's `--ext` carrier
-//! accessors the shim calls, exercised through the `rlib`.
+//! accessors and #1455's `copy.copy` clone the shim calls, exercised through
+//! the `rlib`.
 //!
 //! `crates/pycc_rt/src/instance.rs`'s unit tests own the semantics; this
 //! file pins them from outside the crate, which is also where the
@@ -13,9 +14,10 @@ use std::ffi::c_void;
 
 use pycc_rt::{
     EXCEPTION_TYPE_ATTRIBUTE_ERROR, pycc_rt_exception_active, pycc_rt_exception_clear,
-    pycc_rt_ext_instance_carrier, pycc_rt_ext_instance_class, pycc_rt_ext_instance_set_carrier,
-    pycc_rt_ext_pending_message, pycc_rt_ext_pending_type, pycc_rt_instance_get_slot,
-    pycc_rt_instance_get_slot_checked, pycc_rt_instance_new, pycc_rt_instance_set_slot,
+    pycc_rt_ext_instance_carrier, pycc_rt_ext_instance_class, pycc_rt_ext_instance_copy,
+    pycc_rt_ext_instance_set_carrier, pycc_rt_ext_pending_message, pycc_rt_ext_pending_type,
+    pycc_rt_instance_get_slot, pycc_rt_instance_get_slot_checked, pycc_rt_instance_new,
+    pycc_rt_instance_set_slot,
 };
 
 /// The pending exception's tag and message; clears it afterwards so the
@@ -86,4 +88,25 @@ fn the_ext_carrier_accessors_round_trip() {
     assert_eq!(unsafe { pycc_rt_ext_instance_carrier(q) }, carrier);
     unsafe { pycc_rt_ext_instance_set_carrier(q, std::ptr::null_mut()) };
     assert!(unsafe { pycc_rt_ext_instance_carrier(q) }.is_null());
+}
+
+/// #1455: the shim's `__copy__` clone copies the slot words into a new
+/// instance with no carrier, keeps an unassigned slot unassigned, and
+/// answers null for a kind string that does not match the slot count.
+#[test]
+fn the_ext_instance_copy_clones_the_slots() {
+    static LAYOUT: &[u8] = b"Q\0n\0m";
+    let q = unsafe { pycc_rt_instance_new(2, LAYOUT.as_ptr(), LAYOUT.len()) };
+    unsafe { pycc_rt_instance_set_slot(q, 0, 41) };
+    let mut host = 0u8;
+    unsafe { pycc_rt_ext_instance_set_carrier(q, (&mut host as *mut u8).cast::<c_void>()) };
+    assert!(unsafe { pycc_rt_ext_instance_copy(q, b"w".as_ptr(), 1) }.is_null());
+    assert!(unsafe { pycc_rt_ext_instance_copy(std::ptr::null_mut(), b"".as_ptr(), 0) }.is_null());
+    let copy = unsafe { pycc_rt_ext_instance_copy(q, b"ww".as_ptr(), 2) };
+    assert!(!copy.is_null());
+    assert!(unsafe { pycc_rt_ext_instance_carrier(copy) }.is_null());
+    assert_eq!(unsafe { pycc_rt_instance_get_slot(copy, 0) }, 41);
+    assert_eq!(unsafe { pycc_rt_instance_get_slot_checked(copy, 1) }, 0);
+    let (_, message) = take_pending();
+    assert_eq!(message, "'Q' object has no attribute 'm'");
 }

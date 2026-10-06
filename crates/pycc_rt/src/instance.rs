@@ -88,6 +88,8 @@ mod carrier;
 pub use carrier::{
     pycc_rt_ext_instance_carrier, pycc_rt_ext_instance_class, pycc_rt_ext_instance_set_carrier,
 };
+mod copy;
+pub use copy::pycc_rt_ext_instance_copy;
 
 /// Allocates a fresh instance with `slot_count` unassigned slots. A negative
 /// `slot_count` is an internal-error panic (impossible from real
