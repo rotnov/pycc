@@ -404,6 +404,7 @@ pub(super) fn check_with_environment_all(
     let mut collected = KeyedDiagnostics::new();
     for (index, (item, local_names)) in hir.items.iter().zip(function_local_names).enumerate() {
         if let HirItem::Function {
+            name,
             params,
             return_ty,
             body,
@@ -422,7 +423,10 @@ pub(super) fn check_with_environment_all(
                 check_generic_function_in(&env, item, local_names)
             } else {
                 check_function_in(&env, item, local_names)
-            };
+            }
+            // #1420: a receiver-exact copy must not infer a return its
+            // callers, typed through the origin, cannot see.
+            .and_then(|()| inherited_copies::check_copy_return(&env, name));
             if let Err(diagnostic) = checked {
                 // #1418: the check phase's half of the widened comparison
                 // method's `T0022` help (the solver's is in
