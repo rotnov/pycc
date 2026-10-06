@@ -397,7 +397,10 @@ subclass (#1337, D-254) whose body returns `self` from a method annotated \
 with the base class: the copy's `self` is the subclass, which the base-typed \
 return slot would silently widen, so the program is refused and the \
 diagnostic carries the note \"while compiling `D.m` inherited by subclass \
-`C`\".",
+`C`\". A CPython object (a foreign-import value, such as the result of \
+`o == 1`) returned from a `-> bool`, `-> int`, `-> float` or `-> str` \
+function is refused rather than converted implicitly (D-258, #1419): the \
+help names the explicit conversion, e.g. `return bool(o == 1)`.",
         example: "\
 def f() -> int:
     return \"not an int\"
@@ -464,7 +467,10 @@ subclass (#1337, D-254) whose body binds `self` to a local annotated with \
 the base class (`x: A = self`): the copy's `self` is the subclass, which \
 the annotation would silently widen, so the program is refused and the \
 diagnostic carries the note \"while compiling `D.m` inherited by subclass \
-`C`\".",
+`C`\". A CPython object (a foreign-import value) initializing a `bool`, \
+`int`, `float` or `str` annotation, such as `b: bool = o == 1`, is refused \
+rather than converted implicitly (D-258, #1419): the help names the \
+explicit conversion, e.g. `b: bool = bool(o == 1)`.",
         example: "\
 def f() -> None:
     x: int = \"hello\"
@@ -1463,10 +1469,18 @@ other evaluates CPython's own `PyObject_RichCompare` and yields an \
 `object` result usable as a condition or printed; an identity test \
 (`is`, `is not`) compares the object with another object or `None`; and \
 `isinstance(o, C)` is admitted when `C` is `int`, `float`, `bool`, `str` \
-or itself a CPython object. Part 2a of #1371 lets a second CPython \
+or itself a CPython object; since Part 7 of #1371 also when `C` is \
+`list`, `dict` or `tuple`, or a plain class compiled in the same module, \
+which is true of the host-side instances of its published family (an \
+`--ext` class with an exported method and its published subclasses). \
+Part 2a of #1371 lets a second CPython \
 object be a method or direct call's argument or a subscript key, and \
 admits a call of a subscript result (`callbacks[k](tok)`) under the same \
-argument rule; the result is another CPython object. Part 2b of #1371 \
+argument rule; the result is another CPython object. Part 8 of #1371 \
+lets each of those three call shapes take keyword arguments \
+(`o.split(\",\", maxsplit=1)`, `sorted(xs, reverse=True)`) under the same \
+argument rule, and admits `None` as a positional or keyword argument; \
+`**` unpacking stays refused by `C0001`. Part 2b of #1371 \
 admits a membership test (`k in o`, `k not in o`) of an `int`, `float`, \
 `bool`, `str` or `object` item in the object, evaluated by CPython's own \
 `PySequence_Contains` with a `bool` result, and a slice load \
@@ -1480,19 +1494,23 @@ or `object` elements. Part 6 of #1371 admits `and`/`or` with an \
 object operand: as a condition the object's truth is `PyObject_IsTrue`, \
 and as a value the result is an `object` when the other operand is an \
 `object`, `int`, `float`, `bool` or `str`, a native operand boxed only \
-when it is the one selected. The loop is \
+when it is the one selected. #1435 lets an instance of a regular pycc \
+class (not an enum or an exception class) be a positional or keyword \
+argument of a method call, a direct call or a call of a subscript \
+result, crossing as a carrier of its run-time class. The loop is \
 admitted when the iterable is written as an attribute load \
 (`for x in o.attr:`), a method call (`for x in o.method(...):`) or a bare \
 name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
 a bare imported module is iterated too, and raises CPython's own \
 `TypeError` at run time. Everything else is \
-still refused, including `isinstance` against a pycc class or a tuple of \
-classes, a comparison chain with an object link (`a < o < b`), an \
+still refused, including `isinstance` against a tuple of classes or a \
+pycc exception class, protocol, enum or generic class, a comparison chain with an object link (`a < o < b`), an \
 equality test against a bare `None`, a rich comparison with an operand \
 of any other type, a `match` subject, iterating over a subscript load \
 (`for x in o[k]:`) or inside a comprehension, \
-passing an argument of any other type to one of its methods, to the \
-object itself or to a subscript result, indexing or slicing with a key \
+passing an argument of any other type (an enum member, an exception \
+instance, a class method's `cls`) to one of its methods, to the object \
+itself or to a subscript result, indexing or slicing with a key \
 or bound of any other type, joining an object with a value of any other \
 type in an `and`/`or`, and testing membership of an item of any \
 other type in an object or of an `object` item in a native container \
@@ -1524,8 +1542,8 @@ this code still refuses iterating the object with `for` (Part 2 of \
 parameter would be inferred as the object and then used as a method-call \
 receiver or called reports `T0021` instead (Part 3 of #1333). The \
 refusal narrows as the later parts of #1026 (the boundary conversions) and \
-of #1371 (calls, subscripts and `raise` on an object, `isinstance` against \
-a pycc class, comparison chains over an object) land, and \
+of #1371 (calls, subscripts and `raise` on an object, comparison chains \
+over an object) land, and \
 this code is retired when they have.",
         example: "\
 import numpy

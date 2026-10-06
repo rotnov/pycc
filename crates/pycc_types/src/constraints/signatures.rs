@@ -161,6 +161,7 @@ pub(crate) fn annotated_function_environment(hir: &HirModule) -> Environment {
         // walk; `check_function_in` sets this per function.
         returns_inside_finally: false,
         return_inferred: false,
+        in_classmethod: false,
         narrowed: HashMap::new(),
         // Overwritten at `check_with_environment_all`'s entry, the common
         // sink of both `Environment` constructors (#962).
@@ -452,6 +453,9 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             body,
             Some(signature.2.clone()),
         ) {
+            // #1418: a widened comparison method's native return explains
+            // where its `object` return type came from.
+            let diagnostic = crate::not_implemented::widened_return_help(body, diagnostic);
             collected.push((DiagnosticKey::Function(index), diagnostic));
             continue;
         }

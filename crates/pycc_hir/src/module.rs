@@ -411,9 +411,18 @@ pub fn lower_module(
         } else {
             FuturePosition::Body
         };
+        // #1418: in an `ext` module, a `NotImplemented` outside an admitted
+        // `return NotImplemented` refuses its item the same way.
         let outcome = match assert_refusal.take_if(|(refused, _)| *refused == index) {
             Some((_, diagnostic)) => Err(diagnostic),
-            None => lower_top_level_item(stmt, &mut state, resolved, position),
+            None => match resolved
+                .ext_module()
+                .then(|| crate::not_implemented::refusal(stmt))
+                .flatten()
+            {
+                Some(diagnostic) => Err(diagnostic),
+                None => lower_top_level_item(stmt, &mut state, resolved, position),
+            },
         };
         match outcome {
             Ok(()) => {

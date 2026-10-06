@@ -442,6 +442,8 @@ fn inference_conflict(
         );
     };
     let actual = if left == *declared { right } else { left };
+    let help = crate::foreign::object_into_scalar_help(&actual, declared)
+        .unwrap_or_else(|| format!("return a `{}` value", declared.name()));
     Diagnostic::error(
         code,
         format!(
@@ -451,7 +453,7 @@ fn inference_conflict(
         ),
         Span::new(0, 0),
     )
-    .with_help(format!("return a `{}` value", declared.name()))
+    .with_help(help)
 }
 
 pub(crate) fn unify_terms(
@@ -828,6 +830,9 @@ pub(crate) fn collect_expr_constraints(
         HirExpr::BoolLiteral(_) => Ok(Some(Ok(Ty::Bool))),
         HirExpr::StringLiteral(_) => Ok(Some(Ok(Ty::Str))),
         HirExpr::NoneLiteral => Ok(Some(Ok(Ty::None))),
+        // #1418: `return NotImplemented` in a comparison method of an `ext`
+        // module is CPython's singleton, a CPython object.
+        HirExpr::NotImplemented => Ok(Some(Ok(Ty::Object))),
         HirExpr::Name(name) => {
             // D-136: a `pycc_hir`-qualified stdlib name (`"math.pi"`) is
             // checked before ordinary binding lookup. Post-review finding:
@@ -2039,6 +2044,19 @@ pub(crate) fn collect_expr_constraints(
             }
             Ok(object_lift::method_call_on_object(callee_term.as_ref()))
         }
+        // Part 8 of #1371: collected as its positional half, whose term it
+        // answers (an `object` callee answers `object` through that half's
+        // own arm), plus each keyword value. This solver never refuses the
+        // keywords; the check phase does, for every non-object callee
+        // (`foreign::keyword_call`).
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            let term =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, call)?;
+            for (_, value) in keywords {
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, value)?;
+            }
+            Ok(term)
+        }
         // #1411: `type(self)(args)` constructs the class `self` is typed
         // as, so its term is `self`'s own; an unbound `self` (a
         // `@classmethod` or `@staticmethod`) offers none and the check
@@ -2098,6 +2116,11 @@ pub(crate) fn collect_expr_constraints(
                 elt_term = collect_expr_constraints(
                     signatures, parents, concrete, deferred, &scoped, sub,
                 )?;
+            }
+            // Part 1 of #1255: a comprehension over a CPython object
+            // produces a CPython object, whatever its element.
+            if let CompIter::Iterable(_) = comp.iter {
+                return Ok(Some(Ok(Ty::Object)));
             }
             // A set comprehension's container term is chosen by
             // [`set_comp::set_comp_container`] (#1343, #1344), which owns the
@@ -2182,6 +2205,7 @@ fn bind_named_expr_targets(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => Ok(()),
         HirExpr::ListPop { list } => {
@@ -2291,6 +2315,13 @@ fn bind_named_expr_targets(
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, call)
         }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, call)?;
+            for (_, value) in keywords {
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, value)?;
+            }
+            Ok(())
+        }
         // #1411: `type(self)(args)` walks its arguments the same way.
         HirExpr::GenericClassInstantiate { args, .. } | HirExpr::ReceiverClassCall { args } => {
             for arg in args {
@@ -2360,6 +2391,13 @@ fn bind_comp_loop_var(
                 let term = fresh_term(parents, concrete);
                 env.bindings.insert(var.to_string(), term);
             }
+        }
+        // Part 1 of #1255: the iterable's own constraints are collected
+        // against the enclosing bindings; its loop variable is a CPython
+        // object, which the check phase verifies.
+        CompIter::Iterable(iterable) => {
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, iterable)?;
+            env.bindings.insert(var.to_string(), Ok(Ty::Object));
         }
     }
     Ok(())

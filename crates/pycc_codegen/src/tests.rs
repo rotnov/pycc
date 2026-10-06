@@ -38,11 +38,16 @@ mod object_binding;
 
 // Part 1 of #1333: passing a CPython object to a pycc function.
 mod object_argument;
+// #1418: CPython's `NotImplemented` singleton as a return value.
+mod not_implemented;
 mod object_compare;
+// Part 1 of #1255: a list or set comprehension over a CPython object.
+mod object_comprehension;
 // Part 2d of #1371: a list display built as a CPython `list`.
 mod object_list_display;
 // Part 2b of #1371: membership in, and slices of, a CPython object.
 mod object_membership_slice;
+mod object_raise;
 mod object_return;
 // Part 1 of #891: the run-time unpack of a CPython object.
 mod object_unpack;

@@ -407,6 +407,7 @@ pub(super) fn check_with_environment_all(
             name,
             params,
             return_ty,
+            body,
             ..
         } = item
         {
@@ -427,6 +428,10 @@ pub(super) fn check_with_environment_all(
             // callers, typed through the origin, cannot see.
             .and_then(|()| inherited_copies::check_copy_return(&env, name));
             if let Err(diagnostic) = checked {
+                // #1418: the check phase's half of the widened comparison
+                // method's `T0022` help (the solver's is in
+                // `constraints::signatures`).
+                let diagnostic = crate::not_implemented::widened_return_help(body, diagnostic);
                 collected.push((DiagnosticKey::Function(index), diagnostic));
             }
         }

@@ -796,3 +796,19 @@ fn instantiate_generic_class_methods_skips_duplicate_class_method_entry() {
         1
     );
 }
+
+/// Part 1 of #1255: a `CompIter::Iterable` never reaches a statement-form
+/// comprehension (`comp_assign_stmt` routes it to a plain `Assign`), but the
+/// statement walkers still visit its expression, so a generic call or a
+/// generic-class instantiation inside one cannot escape them. Pinned
+/// directly, since no source reaches these arms.
+#[test]
+fn the_statement_walkers_visit_an_iterable_comprehension_source() {
+    let iter = CompIter::Iterable(Box::new(gci_expr()));
+    let mut out = Vec::new();
+    collect_generic_class_instantiations_from_comp_iter(&iter, &mut out);
+    assert_eq!(out, vec![("C".to_string(), Ty::Int)]);
+    let mut exprs = Vec::new();
+    comp_iter_exprs(&iter, &mut exprs);
+    assert_eq!(exprs, vec![&gci_expr()]);
+}

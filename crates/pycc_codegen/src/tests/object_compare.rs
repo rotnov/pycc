@@ -102,8 +102,23 @@ fn isinstance_is_one_shim_call_with_a_builtin_selector_or_an_object_class() {
                 value: Box::new(numpy_pi()),
                 class: ObjIsInstanceClass::Object(Box::new(numpy_pi())),
             },
+            // Part 7 of #1371: a compiled class goes to its own shim with
+            // the class name as a C string.
+            MirExpr::ObjIsInstance {
+                value: Box::new(numpy_pi()),
+                class: ObjIsInstanceClass::Compiled("ParserState".to_string()),
+            },
         ],
         |ir| {
+            assert!(
+                ir.contains("c\"ParserState\\00\""),
+                "the class name is a NUL-terminated global: {ir}"
+            );
+            assert!(
+                ir.lines()
+                    .any(|line| line.contains("call i32 @pycc_ext_obj_isinstance_compiled(")),
+                "{ir}"
+            );
             assert!(
                 ir.lines()
                     .any(|line| line.contains("@pycc_ext_obj_isinstance(")
@@ -144,6 +159,10 @@ fn a_function_body_comparison_bridges_its_failure_and_releases_an_int_temporary(
                     value: Box::new(numpy_pi()),
                     class: ObjIsInstanceClass::Builtin(ObjBuiltinClass::Int),
                 }),
+                MirStmt::ExprStmt(MirExpr::ObjIsInstance {
+                    value: Box::new(numpy_pi()),
+                    class: ObjIsInstanceClass::Compiled("ParserState".to_string()),
+                }),
                 MirStmt::Return(None),
             ],
         }]),
@@ -151,6 +170,7 @@ fn a_function_body_comparison_bridges_its_failure_and_releases_an_int_temporary(
             assert!(ir.contains("@pycc_ext_obj_richcompare("), "{ir}");
             assert!(ir.contains("@pycc_ext_obj_error_bridge("), "{ir}");
             assert!(ir.contains("@pycc_ext_obj_isinstance("), "{ir}");
+            assert!(ir.contains("@pycc_ext_obj_isinstance_compiled("), "{ir}");
         },
     );
 }

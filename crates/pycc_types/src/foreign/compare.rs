@@ -32,16 +32,19 @@
 //! * **`isinstance(o, C)`** with an object `o` is a run-time
 //!   `PyObject_IsInstance` (`pycc_mir`'s `MirExpr::ObjIsInstance`), never
 //!   the compile-time fold every other first argument gets. `C` must be an
-//!   object-typed expression (a foreign class such as `mod.Cls`) or one of
-//!   the builtin type names `int`, `float`, `bool`, `str`. A pycc class has no CPython
-//!   type object compiled code can reach yet, and a tuple of classes has no
-//!   lowering yet; both are refused.
+//!   object-typed expression (a foreign class such as `mod.Cls`), one of
+//!   the builtin class names `int`, `float`, `bool`, `str`, `list`, `dict`,
+//!   `tuple` ([`is_object_isinstance_builtin`]), or -- Part 7 of #1371 -- a
+//!   plain class compiled in this module, answered against the host type
+//!   objects of the published classes whose MRO contains it
+//!   ([`compiled_class_refusal`] names the kinds that stay refused). A
+//!   tuple of classes has no lowering yet and is refused.
 
 use super::object_operation_unsupported;
 use crate::Environment;
 use crate::infer_expr_in;
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{CmpOpKind, HirExpr, Ty, is_builtin_type_name};
+use pycc_hir::{CmpOpKind, HirClassDef, HirExpr, Ty, is_builtin_type_name};
 
 /// Whether `ty` can sit opposite a CPython object in a rich comparison:
 /// another object, or a scalar one of the `pycc_ext_obj_pack_*` helpers
@@ -131,6 +134,43 @@ pub(crate) fn reject_object_in_chain(operand_tys: &[Ty]) -> Result<(), Diagnosti
     Ok(())
 }
 
+/// Whether `name` is a builtin class an object `isinstance` names by
+/// CPython's own type object (`pycc_mir::ObjBuiltinClass`): the four scalar
+/// type names and, since Part 7 of #1371, `list`, `dict` and `tuple`, which
+/// otherwise have no binding at all (`T0021` "name `list` is not defined").
+pub(crate) fn is_object_isinstance_builtin(name: &str) -> bool {
+    is_builtin_type_name(name) || matches!(name, "list" | "dict" | "tuple")
+}
+
+/// Why `isinstance(o, C)` with an object `o` refuses the compiled class
+/// `class_def`, or `None` for a class it admits (Part 7 of #1371).
+///
+/// Admitted is a plain class: its answer is `PyObject_IsInstance` against
+/// the host type object of every *published* class whose MRO contains it,
+/// since a published type is the only carrier a compiled instance has on
+/// the CPython side and none of them can be subclassed there. The refused
+/// kinds have another CPython identity that answer would miss:
+///
+/// * an **exception class** is registered as a real CPython exception
+///   class, so a host-raised `m.MyError` *is* an instance of it;
+/// * a **protocol** is checked structurally, not by type object;
+/// * an **enum**'s members are native values with no host carrier;
+/// * a **generic class** is compiled per specialization, so its bare name
+///   names no single class.
+pub(crate) fn compiled_class_refusal(class_def: &HirClassDef) -> Option<&'static str> {
+    if class_def.exception_type_tag.is_some() {
+        Some("exception class")
+    } else if class_def.is_protocol {
+        Some("protocol")
+    } else if class_def.is_enum {
+        Some("enum")
+    } else if class_def.type_param.is_some() {
+        Some("generic class")
+    } else {
+        None
+    }
+}
+
 /// Types `isinstance(o, class_arg)` once `o` is known to be an object (see
 /// the module doc for what `class_arg` may be).
 pub(crate) fn check_object_isinstance(
@@ -143,14 +183,21 @@ pub(crate) fn check_object_isinstance(
             "testing a CPython object with `isinstance` against a tuple of classes",
         ));
     }
-    if let HirExpr::Name(name) = class_arg {
-        if is_builtin_type_name(name) {
+    // A local or parameter spelled like a builtin or a compiled class
+    // shadows it, as in CPython: it is then the evaluated operand below.
+    if let HirExpr::Name(name) = class_arg
+        && !local_names.contains(&name.as_str())
+    {
+        if is_object_isinstance_builtin(name) {
             return Ok(Ty::Bool);
         }
-        if env.lookup_class(name).is_some() {
-            return Err(object_operation_unsupported(&format!(
-                "testing a CPython object with `isinstance` against the pycc class `{name}`"
-            )));
+        if let Some(class_def) = env.lookup_class(name) {
+            return match compiled_class_refusal(class_def) {
+                None => Ok(Ty::Bool),
+                Some(kind) => Err(object_operation_unsupported(&format!(
+                    "testing a CPython object with `isinstance` against the pycc {kind} `{name}`"
+                ))),
+            };
         }
     }
     match infer_expr_in(env, local_names, class_arg)? {
