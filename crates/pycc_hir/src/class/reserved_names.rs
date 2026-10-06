@@ -1,12 +1,12 @@
 //! Class-attribute names the interpreter reserves for itself, rejected in
-//! every class body (#910, #975, #1459), plus the names CPython's `_EnumDict`
+//! every class body (#910, #975, #1459, #1465), plus the names CPython's `_EnumDict`
 //! keeps out of an enum's member list (#979).
 //!
 //! Extracted from [`super::attrs`] under `AGENTS.md`'s "keep source files
 //! decomposable" rule when #975 added the second name set below, because
 //! `attrs.rs` is already past the ~1000-line bar.
 //!
-//! Four independent sets live here:
+//! Five independent sets live here:
 //!
 //! * `__slots__` (#910), which Python reads as a declaration of the instance
 //!   layout. Since #1368 a value-bound `__slots__` in a non-`@dataclass` body
@@ -80,6 +80,26 @@
 //!   lowered into a class's method table, and any class listing a protocol
 //!   among its bases is itself lowered as a protocol and cannot be
 //!   instantiated, so no store can reach a protocol's `__setattr__`.
+//! * The *attribute-read protocol* names `__getattribute__` and
+//!   `__getattr__` (#1465), the read-side sibling of the set above under the
+//!   same rule: Python calls `type(obj).__getattribute__` on every attribute
+//!   read on an instance, and `type(obj).__getattr__` whenever that normal
+//!   lookup raises `AttributeError`. This compiler reads a compiled field or
+//!   property without consulting either name, and an `--ext` descriptor
+//!   does the same from the host. Measured on `92f8971b`: a
+//!   `__getattribute__` returning `42` left `print(c.n)` at `1` (CPython
+//!   3.13.9: `42`); a `__getattr__` returning `42` behind a property whose
+//!   getter raises `AttributeError` raised here where CPython printed `42`;
+//!   and under `--ext` a host `c.zz` raised `AttributeError` and
+//!   `hasattr(c, "zz")` was `False` where CPython 3.14.7 answered `42` and
+//!   `True`. A `__getattr__` behind a read that never misses agrees with
+//!   CPython only because the fallback is never reached, so refusing it
+//!   regresses no working read; an explicit `c.__getattr__("x")` call is
+//!   refused with it, as #1459 refuses an explicit `__setattr__` call. It is
+//!   checked on the same two routes, at the same points, as the store set,
+//!   and a `Protocol` body is exempt for the same reason. A module-level
+//!   `def __getattr__` (PEP 562) is not a class body and never reaches this
+//!   module (#1467 tracks its `--ext` divergence).
 //!
 //! Scope notes that are easy to get wrong. Each bullet was measured at
 //! `28a1b194` unless it names a different commit, or names #984 -- this
@@ -135,11 +155,13 @@
 //!   the two names `DATACLASS_IMPLICIT_DUNDERS` omits (`__new__`,
 //!   `__init_subclass__`) on the dataclass path, without disturbing the six
 //!   messages that set already owns: `super::body` runs its own check first.
-//! * The four checks inside [`reject_reserved_class_attr_name`] run in a
+//! * The five checks inside [`reject_reserved_class_attr_name`] run in a
 //!   **fixed order**: `__slots__`, then the instantiation-protocol names,
 //!   then #979's `_EnumDict` shapes, then #1459's attribute-store protocol
-//!   names, which sit last for the same reason: on the `Enum` route the
-//!   shape check answers `__setattr__ = 1` first and keeps #979's message.
+//!   names, then #1465's attribute-read protocol names. The last two sit
+//!   after the shape check for the same reason: on the `Enum` route it
+//!   answers `__setattr__ = 1` and `__getattr__ = 1` first and keeps #979's
+//!   message.
 //!   `__slots__`, `__init__`, `__new__` and
 //!   `__init_subclass__` are all dunder-shaped, so putting the shape check
 //!   first would silently repoint every one of their pinned messages on the
@@ -189,11 +211,12 @@ use pycc_diag::Diagnostic;
 /// [`super::protocol`]'s calls [`reject_reserved_protocol_method_name`],
 /// because only part of this guard applies on a method route.
 ///
-/// The four checks run in a fixed order that is load-bearing rather than
+/// The five checks run in a fixed order that is load-bearing rather than
 /// stylistic: `__slots__` first, the instantiation-protocol names second,
-/// [`enum_non_member_message`] third (#979), and the attribute-store protocol
-/// names last (#1459) -- on the `Enum` route that last check is never
-/// reached for either name, because the dunder-shape arm answers both first,
+/// [`enum_non_member_message`] third (#979), then the attribute-store
+/// protocol names (#1459) and the attribute-read protocol names (#1465) --
+/// on the `Enum` route neither of the last two is ever reached for any of
+/// its four names, because the dunder-shape arm answers all four first,
 /// truthfully. Every name the first two own also
 /// matches the third's `__`-prefix shape, so any other order would silently
 /// repoint their pinned messages on the `Enum` route. The third also needs the
@@ -219,6 +242,9 @@ pub(super) fn reject_reserved_class_attr_name(
     }
     if is_store_protocol_name(attr_name) {
         return Err(unsupported(store_protocol_attr_message(attr_name), range));
+    }
+    if is_read_protocol_name(attr_name) {
+        return Err(unsupported(read_protocol_attr_message(attr_name), range));
     }
     Ok(())
 }
@@ -338,6 +364,13 @@ pub(super) fn reject_reserved_method_name(
             range,
         ));
     }
+    // #1465: the read-side sibling, at the same point for the same reason.
+    if is_read_protocol_name(method_name) {
+        return Err(unsupported(
+            read_protocol_method_message(method_name),
+            range,
+        ));
+    }
     if let MethodKind::PropertyGetter { prop_name } = kind {
         return reject_reserved_property_name(prop_name, range);
     }
@@ -417,6 +450,55 @@ fn store_protocol_attr_message(name: &str) -> String {
          (`del obj.x`), so binding it to a non-callable object makes CPython raise a \
          `TypeError` there, while this compiler never consults a class attribute of that name, \
          so the binding would be silently ignored rather than honored (#1459)"
+    )
+}
+
+/// Whether `name` is one of the attribute-read protocol names (#1465):
+/// `__getattribute__` or `__getattr__`.
+fn is_read_protocol_name(name: &str) -> bool {
+    matches!(name, "__getattribute__" | "__getattr__")
+}
+
+/// When CPython calls the attribute-read protocol name `name` (#1465):
+/// `__getattribute__` on every read, `__getattr__` only when that normal
+/// lookup raises `AttributeError`. The second must not claim "every read".
+fn read_protocol_trigger(name: &str) -> &'static str {
+    if name == "__getattribute__" {
+        "on every attribute read on an instance (`obj.x`, method lookups and `self.x` \
+         inside the class's own methods included)"
+    } else {
+        "whenever normal lookup of an attribute on an instance raises `AttributeError` (a \
+         missing name, or a property getter that raises it)"
+    }
+}
+
+/// The `C0001` message for a class-body `def` of an attribute-read protocol
+/// name (#1465), in any binding form -- a plain `def`, `@staticmethod`,
+/// `@classmethod`, `@abstractmethod`/`@override`, or a `@property` getter.
+///
+/// Like [`store_protocol_method_message`] it names no carrier and no slot,
+/// because a user exception class reaches it too.
+fn read_protocol_method_message(name: &str) -> String {
+    format!(
+        "a `def {name}` in a class body is not supported yet -- Python calls `{name}` \
+         implicitly {}, while this compiler never calls it on a read, so the method would be \
+         silently bypassed rather than honored (#1465)",
+        read_protocol_trigger(name)
+    )
+}
+
+/// The `C0001` message for a class attribute named after an attribute-read
+/// protocol name (#1465), on every attribute route: annotated, bare, and a
+/// value-less declaration. The `TypeError` claim is conditional for the
+/// reason [`store_protocol_attr_message`] gives.
+fn read_protocol_attr_message(name: &str) -> String {
+    format!(
+        "a class attribute named `{name}` is not supported yet -- Python calls whatever \
+         `{name}` is bound to implicitly {}, so binding it to a non-callable object makes \
+         CPython raise a `TypeError` there, while this compiler never consults a class \
+         attribute of that name, so the binding would be silently ignored rather than honored \
+         (#1465)",
+        read_protocol_trigger(name)
     )
 }
 
