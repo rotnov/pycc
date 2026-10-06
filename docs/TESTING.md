@@ -844,10 +844,10 @@ two errors (row 4), while the whole-package copy reports 14 (the `lark/utils.py`
 table below; the skeleton tree was not re-measured). #1394 then clears row 4: the
 same build of the subject copied alone (release build of the #1394 branch,
 based on `main` `496a64f9`) reports one error, row 5's `C0001` "type annotation `tuple` is not supported
-yet" at line 20. #1397 then clears that error: the same build on the #1397 branch merged with `main` `91e3fca7` also reports one error, row 5's `__init__` `C0001` at 25:28 (#1388). #1435 moves no count: the same `--ext --foreign-relative-imports` build of the unannotated subject at the pinned digest, copied alone (debug build of the #1435 branch merged with `main` `1e7de627`), reports one error, `T0021` "cannot infer return type of private helper `ParserState.__copy__`" (#1420, reported at 1:1); the #1435 row below records what a probe past it shows. Everything under them was measured by probes. A probe is a copy with the
+yet" at line 20. #1397 then clears that error: the same build on the #1397 branch merged with `main` `91e3fca7` also reports one error, row 5's `__init__` `C0001` at 25:28 (#1388). #1435 moves no count: the same `--ext --foreign-relative-imports` build of the unannotated subject at the pinned digest, copied alone (debug build of the #1435 branch merged with `main` `1e7de627`), reports one error, `T0021` "cannot infer return type of private helper `ParserState.__copy__`" (#1420, reported at 1:1); the #1435 row below records what a probe past it shows. #1421 then clears the last error: the same build of the unmodified subject (debug build of the #1421 branch merged with `main` `245984a9`) reports none (build only; see the lines 43-44 paragraph below). Everything under them was measured by probes. A probe is a copy with the
 reported lines replaced (for example, the sibling imports pointed at undotted
 stand-in modules), or a minimal module holding one construct inside a method
-body. Probes are never the workload. The subject module was never compiled
+body. Probes are never the workload. Until #1421 the subject module was never compiled
 whole past the first layer, so this list is a **lower bound**.
 
 | Blocker in the subject module (line) | Diagnostic | Issue |
@@ -888,7 +888,7 @@ row (new once the string on line 59 no longer hid it), #1095 the
 Part 1 of #1255 the comprehension row, and #1420 the `__copy__` return
 row, so two remain, and every one of them is a
 missing feature. Part 1 of #1371 narrows the #1371 row (the comparisons on lines 82,
-84, 104 and 108 compile) without clearing it, Part 2a narrows it again (the `callbacks[...](...)` calls on lines 88 and 101 and line 64's object argument compile), Part 2b narrows it once more (`not in` on line 88 and the slice load on line 95 compile), Part 2c narrows it again (the slice `del` on lines 96-97 compiles), Part 2d narrows it again (the `s = []` of line 99 compiles as a CPython `list`), Part 7 narrows it again (`isinstance(other, ParserState)` on line 52 compiles), Part 8 narrows it again (line 80's keyword call compiles; its `state=self` argument and the `raise` of its `object` result do not), and Part 9 narrows it once more (the `raise` of an `object` compiles; `state=self` does not), so it is still counted. #1435 then compiles that last argument (its own `state=self` row, which is listed apart from the count above): in the probe that row records, no construct of the #1371 row is reported. #1445 then clears line 99's `T0003` that probe still reported (its own row, also listed apart from the count). The two that were boundary questions inside the subject
+84, 104 and 108 compile) without clearing it, Part 2a narrows it again (the `callbacks[...](...)` calls on lines 88 and 101 and line 64's object argument compile), Part 2b narrows it once more (`not in` on line 88 and the slice load on line 95 compile), Part 2c narrows it again (the slice `del` on lines 96-97 compiles), Part 2d narrows it again (the `s = []` of line 99 compiles as a CPython `list`), Part 7 narrows it again (`isinstance(other, ParserState)` on line 52 compiles), Part 8 narrows it again (line 80's keyword call compiles; its `state=self` argument and the `raise` of its `object` result do not), and Part 9 narrows it once more (the `raise` of an `object` compiles; `state=self` does not), so it is still counted. #1435 then compiles that last argument (its own `state=self` row, which is listed apart from the count above): in the probe that row records, no construct of the #1371 row is reported. #1445 then clears line 99's `T0003` that probe still reported (its own row, also listed apart from the count). [#1421](https://github.com/rotnov/pycc/issues/1421) then clears the `T0034` that the #1445 probe still reported on lines 43-44: their list-display `or` operands compile as CPython `list`s. The two that were boundary questions inside the subject
 module rather than missing features were #1285 and #1367's `object`
 spelling.
 [D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md) has since decided both for an `--ext` module (`Any` and `object` are
@@ -964,7 +964,18 @@ only by #1371's series. Part 6 of #1371 admits the `or` itself; an isolated
 `--ext` build of the two assignments with their real list-display right operands
 (debug build of the Part 6 branch, based on `main` `6784d535`) stops at `T0034`
 "list[object] is not compiled yet", a build-only probe with no CPython run. So that row is not re-measured as cleared until the subject module is
-compiled again.
+compiled again. Since [#1421](https://github.com/rotnov/pycc/issues/1421)
+that `T0034` is cleared: a display in a value position of an object slot,
+an `or` operand stored into an object attribute included, builds a CPython
+`list` (`tests/issue_1421_object_slot_list_display.rs` runs the
+`ParserState.__init__` shape and matches CPython). The unmodified pinned
+subject (`419d76a7...`) copied alone, built with
+`--ext --foreign-relative-imports` by a debug build of the #1421 branch
+merged with `main` `245984a9`, reports no diagnostic and writes the
+extension; the same build from that `main` reports one error, this
+`T0034` (reported at 1:1). This is a build-only measurement: the extension
+was not imported, since its relative sibling imports need the `lark`
+package around it.
 
 **State on 2026-09-24 (import-closure reading, rescoped 2026-09-30 by D-257).** On 2026-09-24 the repository owner directed
 that the row (b) outcome below is a chicken-and-egg result and that the missing

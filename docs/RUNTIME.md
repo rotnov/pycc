@@ -1700,6 +1700,14 @@ unchanged for a packer failure and for a raising element. The display shares
 the packers' divergence: an `int` element outside the inline range raises
 `OverflowError` where CPython would build the list, until
 [#1040](https://github.com/rotnov/pycc/issues/1040) widens the packer.
+[#1421](https://github.com/rotnov/pycc/issues/1421) adds no runtime code: the
+same node is now also produced for a display stored into an object attribute
+slot and for a display operand of `and`/`or` or a conditional-expression
+branch bound to an object slot, so an operand is built only on the arm that
+selects it. `tests/issue_1421_object_slot_list_display.rs` pins the same
+leak through an attribute: across 100 calls `+200` for `self.s = [probe,
+probe]`, `+100` for `self.s = self.s or [probe]` with an empty slot, and
+unchanged when the slot is truthy.
 
 **`and`/`or` boxes a selected native operand and leaks it.** Part 6 of
 [#1371](https://github.com/rotnov/pycc/issues/1371) types `n or o` and
