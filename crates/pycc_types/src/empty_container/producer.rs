@@ -104,7 +104,7 @@ pub(super) fn scan_body(
 /// The middle variant is what makes the scan stop at the *first syntactic*
 /// producer rather than the first *inferring* one: a producer whose value
 /// fails to infer -- because it reads a name the flat whole-function
-/// environment never bound, such as one assigned inside a `try` suite --
+/// environment never bound, such as one assigned inside a `match` case body --
 /// ends the scan with a miss instead of falling through to a later producer
 /// that might carry an entirely different element type.
 pub(super) enum ProducerScan {

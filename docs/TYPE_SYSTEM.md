@@ -233,11 +233,14 @@ element, and panics on an empty one.
   Sources (2) and (3) share one exception, and it is a narrowing rather than a
   contract: both read the same flat whole-function environment built by a
   pre-existing pass shared with protocol monomorphization whose own statement
-  walk has no `match`/`try` arm. Source (2) reads a binding out of it directly;
+  walk has no `match` arm. Source (2) reads a binding out of it directly;
   source (3) infers the producer's value *in* it. So a name bound only inside
-  one of those suites is invisible to both. The cost is a missed resolution,
-  never a wrong element type. What a miss reports is `T0003` in a `try` suite,
-  but inside a `match` case the failing concrete path routes the module into
+  a `match` case body is invisible to both. The cost is a missed resolution,
+  never a wrong element type. That walk covers every `try`/`except`/`except*`/
+  `else`/`finally` suite since #1445, flat like an `if`'s two arms, and its
+  bindings there are demoted and re-promoted by the same per-body rules as any
+  other nested body (the handler's `as` name stays unbound). Inside a `match`
+  case the failing concrete path routes the module into
   the private-helper constraint solver, whose own `match` arm never binds
   pattern captures, and D-220's solver-first merge surfaces that pre-existing
   false `T0021` instead — see issue #1046; `main` emits the identical message
@@ -250,11 +253,13 @@ element, and panics on an empty one.
 - **The scan stops at the first *syntactic* producer, inferring or not.** A
   producer statement that names the target but whose value does not infer ends
   the scan with a miss, rather than falling through to a later producer. The
-  flat whole-function binder has no `match`/`try` arm, so a value bound inside
-  such a suite is invisible to it; letting the scan continue would resolve the
+  flat whole-function binder has no `match` arm, so a value bound inside a
+  case body is invisible to it; letting the scan continue would resolve the
   container from a producer the program's own first use contradicts — for
-  `try: v = 1; xs = []; xs.append(v); xs.append(True)` that was `list[bool]`,
-  reported as `T0034`, while the `xs = [v]` spelling compiles. The stop
+  `v = 1` and `xs = []` inside one case, then `xs.append(v); xs.append(True)`,
+  that would be `list[bool]`, reported as `T0034`, while the `xs = [v]`
+  spelling compiles. (The original `try`-suite spelling of this example resolves to
+  `list[int]` since #1445 taught the binder its `try` arm.) The stop
   propagates out of nested bodies, so a producer after the block cannot select
   a type either, and both halves of a `d[k] = v` producer count: either the key
   or the value failing to infer is the same match. The cost is once more a

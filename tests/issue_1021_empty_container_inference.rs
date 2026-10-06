@@ -1441,10 +1441,13 @@ print(f())
 /// producer. Review round 15 on PR #1035 showed the implementation returned
 /// the first *inferring* one: a producer whose value failed to infer fell
 /// through and a later producer chose the element type instead. Inside a
-/// `try` suite the value name is exactly that -- `bind_local_types_in_body`
-/// has no `try` arm, so a binding made there is invisible to the flat
-/// whole-function environment -- so `xs.append(v)` was skipped and
-/// `xs.append(True)` resolved `list[bool]`, reported as `T0034`. That is a
+/// `match` case body the value name is exactly that --
+/// `bind_local_types_in_body` has no `match` arm, so a binding made there is
+/// invisible to the flat whole-function environment -- so `xs.append(v)` was
+/// skipped and `xs.append(True)` resolved `list[bool]`, reported as `T0034`.
+/// (The round-15 reproduction used a `try` suite; #1445 gave the binder a
+/// `try` arm, so that spelling now resolves and runs, pinned by
+/// [`a_try_bound_producer_value_now_resolves_and_runs`].) That is a
 /// resolution the program's own first use contradicts, which the "never
 /// wrong, only missed" invariant forbids. The scan now stops at the match,
 /// and the outcome is the `T0003` a miss is supposed to produce.
@@ -1453,20 +1456,19 @@ fn an_uninferable_producer_ends_the_scan_rather_than_deferring_to_a_later_one() 
     let diagnostics = check_error(
         "uninferable_producer_ends_scan",
         "\
-def go() -> int:
+def go(n: int) -> int:
     total = 0
-    try:
-        v = 1
-        xs = []
-        xs.append(v)
-        xs.append(True)
-        total = len(xs)
-    except ValueError:
-        total = 0
+    match n:
+        case _:
+            v = 1
+            xs = []
+            xs.append(v)
+            xs.append(True)
+            total = len(xs)
     return total
 
 
-print(go())
+print(go(0))
 ",
     );
     assert!(
@@ -1508,16 +1510,37 @@ print(go())
     assert_eq!(output.stdout, b"2\n");
 }
 
-/// The stop has to propagate out of the recursion, not just out of the
-/// statement list it was found in: a nested body's matching-but-uninferable
-/// producer ends the *whole* scan, so a later producer sitting after the
-/// block at function top level cannot select a different element type
-/// either.
+/// #1445: the flat binder walks every `try` suite, so the round-15 program
+/// above, spelled with a `try` as it originally was, no longer misses: `v`
+/// is now visible to the producer scan, `xs.append(v)` resolves `list[int]`,
+/// and the later `xs.append(True)` is the ordinary `bool`-into-`int`
+/// append. Both forms run and print CPython's `2`, agreeing with the
+/// reference spelling below.
 #[test]
-fn an_uninferable_producer_in_a_nested_body_ends_the_enclosing_scan_too() {
-    let diagnostics = check_error(
-        "uninferable_producer_propagates",
-        "\
+fn a_try_bound_producer_value_now_resolves_and_runs() {
+    for (label, source) in [
+        (
+            "try_bound_producer_in_suite",
+            "\
+def go() -> int:
+    total = 0
+    try:
+        v = 1
+        xs = []
+        xs.append(v)
+        xs.append(True)
+        total = len(xs)
+    except ValueError:
+        total = 0
+    return total
+
+
+print(go())
+",
+        ),
+        (
+            "try_bound_producer_after_suite",
+            "\
 def go() -> int:
     xs = []
     try:
@@ -1530,6 +1553,36 @@ def go() -> int:
 
 
 print(go())
+",
+        ),
+    ] {
+        let output = check_build_and_run(label, source);
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"2\n");
+    }
+}
+
+/// The stop has to propagate out of the recursion, not just out of the
+/// statement list it was found in: a nested body's matching-but-uninferable
+/// producer ends the *whole* scan, so a later producer sitting after the
+/// block at function top level cannot select a different element type
+/// either.
+#[test]
+fn an_uninferable_producer_in_a_nested_body_ends_the_enclosing_scan_too() {
+    let diagnostics = check_error(
+        "uninferable_producer_propagates",
+        "\
+def go(n: int) -> int:
+    xs = []
+    match n:
+        case _:
+            v = 1
+            xs.append(v)
+    xs.append(True)
+    return len(xs)
+
+
+print(go(0))
 ",
     );
     assert!(
@@ -1550,18 +1603,17 @@ fn an_uninferable_dict_value_producer_ends_the_scan() {
     let diagnostics = check_error(
         "uninferable_dict_value_producer",
         "\
-def go() -> int:
+def go(n: int) -> int:
     d = {}
-    try:
-        v = 1
-        d[\"k\"] = v
-    except ValueError:
-        pass
+    match n:
+        case _:
+            v = 1
+            d[\"k\"] = v
     d[\"j\"] = True
     return len(d)
 
 
-print(go())
+print(go(0))
 ",
     );
     assert!(
@@ -1582,18 +1634,17 @@ fn an_uninferable_dict_key_producer_ends_the_scan() {
     let diagnostics = check_error(
         "uninferable_dict_key_producer",
         "\
-def go() -> int:
+def go(n: int) -> int:
     d = {}
-    try:
-        k = \"a\"
-        d[k] = 1
-    except ValueError:
-        pass
+    match n:
+        case _:
+            k = \"a\"
+            d[k] = 1
     d[True] = 2
     return len(d)
 
 
-print(go())
+print(go(0))
 ",
     );
     assert!(
