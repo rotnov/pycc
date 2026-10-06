@@ -288,6 +288,37 @@ fn an_assignment_binding_a_hook_name_is_refused_at_its_target() {
     );
 }
 
+/// A hook `def` inside a module-level block binds the hook in CPython only
+/// when its branch runs; the extension must not build without it. Today the
+/// frontend refuses any `def` nested in a block before the hook scan runs,
+/// and the scan refuses it too, so this pins the end-to-end outcome --
+/// a located `C0001` and no artifact -- rather than which layer answers.
+#[test]
+fn a_hook_def_inside_a_module_level_block_is_refused() {
+    let dir = ScratchDir::new("ext_module_getattr_nested").expect("scratch");
+    for (file, body, location) in [
+        (
+            "m_if.py",
+            "import sys\nif sys.version_info >= (3, 7):\n    def __getattr__(name: str) -> int:\n        return 1\n",
+            "m_if.py:3:5",
+        ),
+        (
+            "m_try.py",
+            "try:\n    def __dir__() -> str:\n        return \"a\"\nexcept ImportError:\n    pass\n",
+            "m_try.py:2:5",
+        ),
+    ] {
+        let source = write(&dir, file, body);
+        let out = dir.join(file.trim_end_matches(".py"));
+        let output = build_ext(&source, &out);
+        let stderr = stderr_of(&output);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert!(stderr.contains("error[C0001]"), "{stderr}");
+        assert!(stderr.contains(location), "{stderr}");
+        assert!(!out.exists(), "a refused build leaves no artifact");
+    }
+}
+
 /// A hook whose signature the boundary cannot carry is a `C0003` whose
 /// remedy is not "rename it private": that would silently stop the host
 /// from calling it, the defect #1467 removed.

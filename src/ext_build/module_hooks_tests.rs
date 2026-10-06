@@ -169,6 +169,51 @@ fn every_other_module_scope_binding_of_a_hook_name_is_refused() {
 }
 
 #[test]
+fn a_hook_def_inside_any_module_level_block_is_refused() {
+    let def = "def __getattr__(name: str) -> int:\n        return 1\n";
+    for source in [
+        format!("import sys\nif sys.version_info >= (3, 7):\n    {def}"),
+        format!("if True:\n    pass\nelse:\n    {def}"),
+        format!("try:\n    {def}except ImportError:\n    pass\n"),
+        format!("try:\n    pass\nexcept ImportError:\n    {def}"),
+        format!("try:\n    pass\nfinally:\n    {def}"),
+        format!("for i in range(1):\n    {def}"),
+        format!("while False:\n    {def}"),
+        format!("with open('f') as fh:\n    {def}"),
+        "match 1:\n    case 1:\n        def __dir__() -> str:\n            return 'a'\n"
+            .to_string(),
+    ] {
+        let refused = refusals(&source);
+        assert_eq!(refused.len(), 1, "{source}");
+        assert_eq!(refused[0].code, "C0001", "{source}");
+        assert!(
+            refused[0]
+                .message
+                .contains("defined by a `def` inside a module-level block"),
+            "{source}: {}",
+            refused[0].message
+        );
+    }
+}
+
+#[test]
+fn a_nested_hook_def_is_located_at_its_name() {
+    let refused = refusals("if True:\n    def __dir__() -> str:\n        return 'a'\n");
+    assert_eq!(refused[0].span, Some(Span::new(17, 24)));
+}
+
+#[test]
+fn a_hook_def_at_the_top_level_beside_a_block_is_still_published() {
+    assert_eq!(
+        defined(
+            "import sys\nif sys.version_info >= (3, 7):\n    x = 1\n\n\n\
+             def __getattr__(name: str) -> int:\n    return 1\n"
+        ),
+        ["__getattr__"]
+    );
+}
+
+#[test]
 fn a_store_is_located_at_its_target_name() {
     let refused = refusals("x = 1\n__getattr__ = 5\n");
     assert_eq!(refused[0].span, Some(Span::new(6, 17)));

@@ -22,9 +22,9 @@
 //! where a helper module's `def __getattr__` is an indistinguishable
 //! `HirItem::Function`. CPython never applies a helper's hook to the entry
 //! module, so only a `def` at the entry module's top level counts. Any
-//! other module-scope binding of a hook name in the entry module -- an
-//! import, an assignment, a `class` statement, an `except ... as` name --
-//! would put a value in
+//! other module-scope binding of a hook name in the entry module -- a `def`
+//! inside a module-level `if`/`try`/loop, an import, an assignment, a
+//! `class` statement, an `except ... as` name -- would put a value in
 //! CPython's dict that this boundary cannot publish, so it is refused with
 //! a located `C0001` rather than ignored.
 
@@ -62,9 +62,10 @@ impl EntryHooks {
     }
 
     /// Scans the entry module: a top-level `def` of a hook name defines it,
-    /// and every other binding of a hook name -- an import alias, a store
-    /// or `del` target, a `class` statement, an `except ... as` name, a
-    /// `match` capture -- at the top level, anywhere inside a top-level
+    /// and every other binding of a hook name -- a `def` inside a
+    /// module-level block, an import alias, a store or `del` target, a
+    /// `class` statement, an `except ... as` name, a `match` capture -- at
+    /// the top level, anywhere inside a top-level
     /// compound statement or in a `def`/`class` header, but not inside a
     /// function or class body, whose bindings are not module
     /// attributes, is one located `C0001`: CPython would call (or lose) a
@@ -106,6 +107,9 @@ impl EntryHooks {
 #[derive(Default)]
 struct HookBindings {
     refusals: Vec<Diagnostic>,
+    /// How many module-level compound statements enclose the statement
+    /// being visited; `0` is the module's own top level.
+    depth: u32,
 }
 
 impl HookBindings {
@@ -126,9 +130,19 @@ impl<'a> Visitor<'a> for HookBindings {
         match stmt {
             // The body is a local scope: nothing bound in it is a module
             // attribute, and a top-level `def` of a hook name is the
-            // published form. The header runs at module scope, so a walrus
-            // in a decorator, a default or an annotation binds there.
+            // published form. One nested in a module-level block binds the
+            // hook only when its branch runs, which `defined` (top level
+            // only) cannot model, so it is refused rather than dropped. The
+            // header runs at module scope, so a walrus in a decorator, a
+            // default or an annotation binds there.
             Stmt::FunctionDef(def) => {
+                if self.depth > 0 {
+                    self.check(
+                        def.name.as_str(),
+                        def.name.range,
+                        "defined by a `def` inside a module-level block",
+                    );
+                }
                 for decorator in &def.decorator_list {
                     self.visit_decorator(decorator);
                 }
@@ -170,7 +184,9 @@ impl<'a> Visitor<'a> for HookBindings {
             }
             _ => {}
         }
+        self.depth += 1;
         visitor::walk_stmt(self, stmt);
+        self.depth -= 1;
     }
 
     /// Every store or `del` target: an assignment, an augmented or

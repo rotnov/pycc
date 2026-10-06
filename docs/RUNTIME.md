@@ -535,7 +535,8 @@ default)` behave as in CPython. Which hooks are published is read from the
 entry module's own source (`src/ext_build/module_hooks.rs`), because a
 helper module's `def __getattr__` is linked into the same program (D-222)
 and CPython never applies it to the entry module. Any other module-scope
-binding of a hook name in the entry module -- an import (`from lib import
+binding of a hook name in the entry module -- a `def` inside a module-level
+`if`/`try`/loop body (`if sys.version_info >= ...:`), an import (`from lib import
 __getattr__`, `import x as __dir__`), an assignment or other store or `del`
 target (`__getattr__ = 5`, a `for`/`with` target, a walrus), a `class`
 statement, an `except ... as` name or a `match` capture -- at the top level,
