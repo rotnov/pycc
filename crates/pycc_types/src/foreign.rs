@@ -270,6 +270,26 @@ pub(crate) fn is_object_float_tuple_annotation(ty: &Ty) -> bool {
     matches!(ty, Ty::Tuple(elems) if !elems.is_empty() && elems.iter().all(|elem| matches!(elem, Ty::Float)))
 }
 
+/// The `help` of a `T0022` or `T0025` whose value is a CPython object and
+/// whose declared slot is one of the four scalars an explicit conversion
+/// produces (`bool`, `int`, `float`, `str`), or `None` for every other pair.
+///
+/// #1419 settled that such a slot keeps refusing the object rather than
+/// converting it implicitly (D-258's 2026-10-05 #1419 amendment). The
+/// motivating value is a rich comparison with an object operand, typed
+/// `object` because `__eq__` may return anything; a `-> bool` return of it
+/// stays the ordinary mismatch, and this help names the explicit way out
+/// (`bool(a == b)`), which D-258 rule 5 requires.
+pub(crate) fn object_into_scalar_help(actual: &Ty, declared: &Ty) -> Option<String> {
+    (matches!(actual, Ty::Object) && matches!(declared, Ty::Bool | Ty::Int | Ty::Float | Ty::Str))
+        .then(|| {
+            let name = declared.name();
+            format!(
+                "a CPython object reaches `{name}` slots only through an explicit conversion: wrap the value in `{name}(...)`"
+            )
+        })
+}
+
 /// The diagnostic every unsupported operation on a CPython object gets.
 ///
 /// `operation` is a noun phrase naming what the *consumer* was about to

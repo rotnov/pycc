@@ -397,7 +397,10 @@ subclass (#1337, D-254) whose body returns `self` from a method annotated \
 with the base class: the copy's `self` is the subclass, which the base-typed \
 return slot would silently widen, so the program is refused and the \
 diagnostic carries the note \"while compiling `D.m` inherited by subclass \
-`C`\".",
+`C`\". A CPython object (a foreign-import value, such as the result of \
+`o == 1`) returned from a `-> bool`, `-> int`, `-> float` or `-> str` \
+function is refused rather than converted implicitly (D-258, #1419): the \
+help names the explicit conversion, e.g. `return bool(o == 1)`.",
         example: "\
 def f() -> int:
     return \"not an int\"
@@ -464,7 +467,10 @@ subclass (#1337, D-254) whose body binds `self` to a local annotated with \
 the base class (`x: A = self`): the copy's `self` is the subclass, which \
 the annotation would silently widen, so the program is refused and the \
 diagnostic carries the note \"while compiling `D.m` inherited by subclass \
-`C`\".",
+`C`\". A CPython object (a foreign-import value) initializing a `bool`, \
+`int`, `float` or `str` annotation, such as `b: bool = o == 1`, is refused \
+rather than converted implicitly (D-258, #1419): the help names the \
+explicit conversion, e.g. `b: bool = bool(o == 1)`.",
         example: "\
 def f() -> None:
     x: int = \"hello\"
