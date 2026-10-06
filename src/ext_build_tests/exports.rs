@@ -928,8 +928,8 @@ fn a_constructible_class_yields_one_constructor_descriptor_with_the_carried_tail
             params: vec![Ty::Int, Ty::Int],
             param_writable: vec![false; 2],
             slot_names: vec!["w".to_string(), "h".to_string()],
-            // #1442: both `int` slots are carriable, so both are read-only
-            // descriptors, indexed in slot order.
+            // #1442: both `int` slots are carriable, so both are descriptors,
+            // indexed in slot order (writable since Part 1 of #1443).
             getsets: grid_slot_getsets(),
         }]
     );
@@ -1120,8 +1120,8 @@ fn an_implicit_object_init_is_still_resolved_when_it_is_the_only_one() {
             params: Vec::new(),
             param_writable: Vec::new(),
             slot_names: vec!["w".to_string(), "h".to_string()],
-            // #1442: both `int` slots are carriable, so both are read-only
-            // descriptors, indexed in slot order.
+            // #1442: both `int` slots are carriable, so both are descriptors,
+            // indexed in slot order (writable since Part 1 of #1443).
             getsets: grid_slot_getsets(),
         }]
     );
