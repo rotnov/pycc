@@ -89,10 +89,7 @@ fn assert_ok(run: &Output) {
 /// `ValueError` from the handler, `size` is derived from the try-bound
 /// `arg`, and `s` is either the object slice or the empty display. The
 /// callback gets `s` exactly as lark's `callbacks[rule](s)` does.
-const SUBJECT: &str = "import builtins\n\
-    \n\
-    \n\
-    def reduce(value_stack: object, states: object, state: int, callbacks: object) -> object:\n    \
+const SUBJECT: &str = "def reduce(value_stack: object, states: object, state: int, callbacks: object) -> object:\n    \
     try:\n        arg = states[state]\n    except KeyError:\n        \
     raise ValueError('no rule')\n    \
     size = len(arg)\n    \
@@ -140,19 +137,29 @@ fn the_try_bound_lark_shape_behaves_like_cpython_in_the_host() {
 
 /// Reference counts, measured on a mortal `object()` held three times in a
 /// fresh stack list and on the `states` mapping, across 100 calls of each
-/// branch with the result dropped by the host each time.
+/// branch with the result dropped by the host each time. CPython's own run
+/// prints `0` everywhere.
 ///
-/// CPython's own run prints `0` everywhere. The extension differs only by
-/// the documented #1092 leak-only rule (`docs/RUNTIME.md`, the
-/// `object` parameter row): the export wrapper's `pycc_ext_unpack_object`
-/// takes a reference to each object argument that is never released, so
-/// every call leaks one reference to `states` (`100`) and one to its stack,
-/// which therefore never dies and keeps its three `probe` references
-/// (`300`). Both branches print the same deltas: neither the try-bound
-/// slice nor the fresh list of the empty display adds a reference beyond
-/// that rule -- the slice result and the empty list are each returned to
-/// the host as the one new reference it releases. An unbalanced packer or
-/// a doubly-leaked slice would move one of the two columns.
+/// The extension's deltas are the #1092 leak-only rule and nothing else
+/// (`docs/RUNTIME.md`, "A function body adds no reference traffic of its
+/// own": the only reference that leaks is the one each producer returns,
+/// plus the export wrapper's one reference per object argument from the
+/// `object` parameter row). Per call:
+///
+/// - `states` column, both branches: `100`, the argument reference
+///   `pycc_ext_unpack_object` takes and never releases.
+/// - probe column, state 0 (`size == 2`): `300`. The leaked stack argument
+///   keeps the one probe the `del value_stack[-2:]` leaves (`100`), and the
+///   slice `value_stack[-2:]` is a producer whose new list is leaked with
+///   its two probes (`200`). Measured apart on the same build: a function
+///   that only slices leaks `500` (the stack's three probes plus the
+///   slice's two), one that only deletes leaks `100`.
+/// - probe column, state 1 (`size == 0`): `300`, the leaked stack argument
+///   keeping all three probes; the fresh list of `s = []` is leaked too but
+///   holds no probe.
+///
+/// A doubly-leaked slice or an unbalanced packer would move one of the
+/// columns.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn the_try_bound_lark_shape_keeps_reference_counts_like_cpython() {
@@ -181,7 +188,11 @@ fn the_try_bound_lark_shape_keeps_reference_counts_like_cpython() {
     );
     assert_ok(&oracle);
     assert_eq!(stdout_of(&oracle), "0 0 0\n1 0 0\n");
-    assert_eq!(stdout_of(&compiled), "0 300 100\n1 300 100\n");
+    let compiled = stdout_of(&compiled);
+    let lines: Vec<&str> = compiled.lines().collect();
+    assert_eq!(lines[0], "0 300 100", "state 0: 100 stack + 200 slice");
+    assert_eq!(lines[1], "1 300 100", "state 1: 300 stack, empty list");
+    assert_eq!(lines.len(), 2, "{compiled}");
 }
 
 /// The native face of the same binder change: a list bound inside a `try`
