@@ -116,8 +116,10 @@ static PyObject *pycc_ext_user_exception_class(unsigned char tag);
  * Returns 1 when `o` is an instance of the host type object of any
  * *published* class whose MRO contains `name`, -1 with the exception set
  * when `PyObject_IsInstance` raises, and 0 otherwise. A name no published
- * class descends from has no carrier on the CPython side at all, and is
- * answered by `pycc_ext_unpublished_class_isinstance` below.
+ * class descends from has no type object to test against, and is answered
+ * by `pycc_ext_unpublished_class_isinstance` below. A carrier of a compiled
+ * instance (#1435) never reaches it: `pycc_ext_obj_isinstance_compiled`
+ * answers that from the instance's run-time class first.
  */
 static int pycc_ext_compiled_class_isinstance(PyObject *o, const char *name);
 
@@ -2141,7 +2143,9 @@ int pycc_ext_obj_isinstance(PyObject *o, PyObject *cls, int builtin)
 /*
  * The answer for a compiled class no published type descends from (a
  * private class, one exporting no method, every class of an embedded
- * build): no CPython object is an instance of it, but CPython's own
+ * build), asked of an object that carries no compiled instance (a carrier,
+ * #1435, is answered before this is reached): no such object is an
+ * instance of the class, but CPython's own
  * `isinstance` does not answer False before it has looked up the object's
  * `__class__` (`object_isinstance` in `Objects/abstract.c`), so an error
  * raised there propagates as -1 here too. A missing `__class__` is 0, and
@@ -2157,23 +2161,6 @@ static int pycc_ext_unpublished_class_isinstance(PyObject *o)
     }
     Py_XDECREF(cls);
     return 0;
-}
-
-/*
- * Part 7 of #1371: `isinstance(o, C)` with an object `o` and a class `C`
- * compiled in this module (`EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL`). `o` is
- * borrowed; `name` is the class's NUL-terminated name, a constant string
- * compiled code owns. Same 1/0/-1 contract as `pycc_ext_obj_isinstance`;
- * the generated `pycc_ext_compiled_class_isinstance` declared above carries
- * the rule.
- */
-int pycc_ext_obj_isinstance_compiled(PyObject *o, const char *name)
-{
-    if (o == NULL || name == NULL) {
-        PyErr_SetString(PyExc_SystemError, "pycc_ext_obj_isinstance_compiled: NULL operand");
-        return -1;
-    }
-    return pycc_ext_compiled_class_isinstance(o, name);
 }
 
 /*
@@ -3288,6 +3275,44 @@ PyObject *pycc_ext_obj_pack_instance(void *inst)
     ((PyccExtInstance *)carrier)->inst = inst;
     pycc_rt_ext_instance_set_carrier(inst, carrier);
     return carrier;
+}
+
+/*
+ * Part 7 of #1371: `isinstance(o, C)` with an object `o` and a class `C`
+ * compiled in this module (`EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL`). `o` is
+ * borrowed; `name` is the class's NUL-terminated name, a constant string
+ * compiled code owns. Same 1/0/-1 contract as `pycc_ext_obj_isinstance`.
+ *
+ * #1435: a carrier of a compiled instance -- an object whose type
+ * deallocates through `pycc_ext_instance_dealloc`, which only the carrier
+ * types use and which nothing can subclass -- is answered from the
+ * instance's run-time class by the generated
+ * `pycc_ext_carrier_class_isinstance`, so a carrier of a class that
+ * publishes no method, or of an unpublished subclass of a published one,
+ * answers as CPython does for the same source. Every other object,
+ * including a published type's object no `tp_init` filled, goes to the
+ * generated `pycc_ext_compiled_class_isinstance` declared above, which
+ * carries the published-family rule. Defined after the companion include,
+ * which defines the generated function it calls first.
+ */
+int pycc_ext_obj_isinstance_compiled(PyObject *o, const char *name)
+{
+    void *inst;
+    const unsigned char *cls;
+    size_t len = 0;
+
+    if (o == NULL || name == NULL) {
+        PyErr_SetString(PyExc_SystemError, "pycc_ext_obj_isinstance_compiled: NULL operand");
+        return -1;
+    }
+    if (PyType_GetSlot(Py_TYPE(o), Py_tp_dealloc) == (void *)pycc_ext_instance_dealloc) {
+        inst = ((PyccExtInstance *)o)->inst;
+        if (inst != NULL) {
+            cls = pycc_rt_ext_instance_class(inst, &len);
+            return pycc_ext_carrier_class_isinstance(cls, len, name);
+        }
+    }
+    return pycc_ext_compiled_class_isinstance(o, name);
 }
 
 /*

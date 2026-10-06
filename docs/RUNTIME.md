@@ -1457,8 +1457,15 @@ the leaked set either. An out-of-range selector or a `NULL` operand raises
 
 Against a class compiled in the same module (Part 7 of #1371),
 `pycc_ext_obj_isinstance_compiled(o, name)` borrows `o` and the class's
-constant NUL-terminated name, and has the same `1`/`0`/`-1` contract. It
-calls the generated `pycc_ext_compiled_class_isinstance`, which tests `o`
+constant NUL-terminated name, and has the same `1`/`0`/`-1` contract. A
+carrier of a pycc instance (any object whose type uses the shared carrier
+deallocator, below) is answered first, without CPython: since
+[#1435](https://github.com/rotnov/pycc/issues/1435) the generated
+`pycc_ext_carrier_class_isinstance` matches the carried instance's run-time
+class name (`pycc_rt_ext_instance_class`) against a table of every regular
+class's MRO, so a carrier of an unpublished class, or of an unpublished
+subclass, answers as CPython would. Any other object goes to the generated
+`pycc_ext_compiled_class_isinstance`, which tests `o`
 against the type object of each published class whose MRO contains `name`.
 Those type objects are kept for that purpose in per-class file statics
 (`pycc_ext_type_object_<Class>`): registration moves the reference
@@ -1562,7 +1569,9 @@ above. Four rules fix what that carrier is.
   `tests/issue_1435_instance_argument.rs`.* A carrier exposes exactly its
   type's exported methods: no attribute is readable, so `hasattr(x, 'n')` is
   `False` (as for a host-constructed object since #1145). Published types are
-  flat, so `isinstance(derived, mod.Base)` is `False`. A class's dunder
+  flat, so the host's own `isinstance(derived, mod.Base)` is `False`; a
+  compiled `isinstance(x, Base)` on a carrier that comes back answers from
+  the run-time class's MRO instead (above), and matches CPython. A class's dunder
   overrides (`__eq__`, `__hash__`, `__repr__`, ...) are not wired to type
   slots, so the host sees `object`'s identity equality and default `repr`.
   And an instance whose `self` escapes during `__init__` is packed before

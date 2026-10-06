@@ -1,5 +1,5 @@
-//! #1435: an instance of a pycc class passed as a positional argument to a
-//! call on a CPython object, in an `--ext` build.
+//! #1435: an instance of a pycc class passed as a positional or keyword
+//! argument to a call on a CPython object, in an `--ext` build.
 //!
 //! The instance crosses as a `PyccExtInstance` carrier of its run-time
 //! class (`pycc_ext_obj_pack_instance` in `src/ext/pycc_ext_module.c`): the
@@ -16,8 +16,9 @@
 //! --include-ignored`. The changed lines are covered by
 //! `crates/pycc_types/src/foreign/instance_arg_tests.rs`,
 //! `crates/pycc_codegen/src/foreign_call/tests/call_tests.rs`,
-//! `crates/pycc_rt/src/instance/carrier.rs` and
-//! `src/ext_build_tests/generated_c.rs`.
+//! `crates/pycc_rt/src/instance/carrier.rs`,
+//! `src/ext_build_tests/generated_c.rs` and
+//! `src/ext_build_tests/compiled_isinstance.rs`.
 
 use pycc_scratch::ScratchDir;
 use std::path::{Path, PathBuf};
@@ -64,7 +65,11 @@ fn assert_one_error(tag: &str, body: &str, code: &str, needle: &str) {
 /// The module both sides import. `Q` is published and constructible, `R`
 /// inherits `Q`'s methods (so an inherited body hands out a derived
 /// `self`), `P` takes another pycc class in its constructor (lark's
-/// `ParserState` shape) and `Hidden` publishes nothing at all. `G` is a
+/// `ParserState` shape) and `Hidden` publishes nothing at all; `_D` is a
+/// private, so unpublished, subclass of the published `Q`. Compiled
+/// `isinstance` on a carrier that comes back from the host answers from its
+/// run-time class (`back_hidden`, `back_private`), and `kw`/`kwself` pass an
+/// instance as a keyword value (lark's `state=self`). `G` is a
 /// module-level instance that outlives its first carrier: the driver's
 /// first crossing keeps no reference (a call result `g` returns is leaked,
 /// so that crossing returns an `int`, not the carrier), the carrier dies
@@ -84,7 +89,8 @@ const MODULE: &str = "class Conf:\n    def __init__(self, n: int) -> None:\n    
     def go(self, cb: object) -> object:\n        return cb(self)\n\n    \
     def twice(self, cb: object) -> object:\n        return cb(self, self)\n\n    \
     def mixed(self, cb: object) -> object:\n        return cb(1, self, \"s\", cb)\n\n    \
-    def size(self) -> int:\n        return self.n\n\
+    def size(self) -> int:\n        return self.n\n\n    \
+    def kwself(self, cb: object) -> object:\n        return cb(state=self)\n\
     \n\
     \n\
     class R(Q):\n    def size(self) -> int:\n        return self.n * 10\n\
@@ -113,7 +119,20 @@ const MODULE: &str = "class Conf:\n    def __init__(self, n: int) -> None:\n    
     G = Q(9)\n\
     \n\
     \n\
-    def g(cb: object) -> object:\n    return cb(G)\n";
+    def g(cb: object) -> object:\n    return cb(G)\n\
+    \n\
+    \n\
+    class _D(Q):\n    pass\n\
+    \n\
+    \n\
+    def kw(cb: object) -> object:\n    return cb(1, state=Hidden(6))\n\
+    \n\
+    \n\
+    def back_hidden(cb: object) -> bool:\n    r = cb(Hidden(5))\n    return isinstance(r, Hidden)\n\
+    \n\
+    \n\
+    def back_private(cb: object) -> bool:\n    r = cb(_D(3))\n    \
+    return isinstance(r, Q) and isinstance(r, _D) and not isinstance(r, Hidden)\n";
 
 /// The host-side driver; `{module}` is the module it imports as `mod`.
 const DRIVER: &str = "import gc\n\
@@ -160,11 +179,16 @@ const DRIVER: &str = "import gc\n\
     gc.collect()\n\
     junk = [mod.Q(i) for i in range(1000)]\n\
     y = mod.g(lambda x: x)\n\
-    print(y.size(), mod.g(lambda x: x) is y)\n";
+    print(y.size(), mod.g(lambda x: x) is y)\n\
+    print(q.kwself(lambda state: state is q))\n\
+    print(mod.kw(lambda n, state: (n, type(state).__name__)))\n\
+    print(mod.back_hidden(lambda x: x), mod.back_hidden(lambda x: 1))\n\
+    print(mod.back_private(lambda x: x))\n";
 
 /// What `DRIVER` prints under CPython.
 const EXPECTED: &str = "True\nQ\nTrue True\n3\n(1, True, 's')\nR True 20\nP True\n\
-    Hidden Hidden\nTypeError\nTrue 7 True\nTrue\n200 {'Q'}\nTrue\nTrue\nZeroDivisionError\n9\n9 True\n";
+    Hidden Hidden\nTypeError\nTrue 7 True\nTrue\n200 {'Q'}\nTrue\nTrue\nZeroDivisionError\n9\n9 True\n\
+    True\n(1, 'Hidden')\nTrue False\nTrue\n";
 
 fn python(dir: &Path, script: &str) -> Output {
     host_python()
@@ -269,7 +293,9 @@ const EMBEDDED: &str = "import builtins\n\n\n\
     h.append(q)\n\
     h.append(q)\n\
     print(h[0] is h[1])\n\
-    print(builtins.type(q) is builtins.type(Q(2)))\n";
+    print(builtins.type(q) is builtins.type(Q(2)))\n\
+    r = h[0]\n\
+    print(isinstance(r, Q))\n";
 
 #[test]
 #[ignore = "needs a relocatable CPython 3.14 as python3.14 or PYCC_PYTHON; run with --include-ignored"]
@@ -294,11 +320,11 @@ fn an_embedded_executable_passes_an_instance_like_cpython() {
         .expect("python3 should spawn");
     assert_ok(&oracle);
     assert_eq!(stdout_of(&embedded), stdout_of(&oracle));
-    assert_eq!(stdout_of(&embedded), "Q\n<__main__.Q \nTrue\nTrue\n");
+    assert_eq!(stdout_of(&embedded), "Q\n<__main__.Q \nTrue\nTrue\nTrue\n");
 }
 
-/// The instance is admitted as a positional call argument of a regular
-/// class only; every other shape keeps a diagnostic, never a panic.
+/// The instance is admitted as a positional or keyword call argument of a
+/// regular class only; every other shape keeps a diagnostic, never a panic.
 #[test]
 fn the_shapes_outside_issue_1435_are_refused() {
     const HEAD: &str = "import builtins\n\ncb = builtins.len\n\n\n\
@@ -337,10 +363,11 @@ fn the_shapes_outside_issue_1435_are_refused() {
             "comparing a CPython object with a `Q` value",
         ),
         (
-            "inst_arg_keyword",
-            "cb(obj=Q(1))\n",
-            "C0001",
-            "keyword call arguments are not supported yet",
+            "inst_arg_keyword_cls",
+            "class K:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\n    \
+             @classmethod\n    def make(cls) -> None:\n        cb(state=cls)\n",
+            "I0404",
+            "passing a class method's `cls` argument to a CPython object's call",
         ),
     ] {
         assert_one_error(tag, &format!("{HEAD}{tail}"), code, needle);

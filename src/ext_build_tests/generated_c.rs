@@ -13,7 +13,14 @@ use super::*;
 /// asserts both generated class functions are still emitted with empty
 /// bodies so an artifact with no such class still links.
 pub(super) fn inc_no_classes(module_name: &str, exports: &[ExtExport]) -> String {
-    generate_exports_inc(module_name, exports, &[], &flat_publications(exports), &[])
+    generate_exports_inc(
+        module_name,
+        exports,
+        &[],
+        &flat_publications(exports),
+        &[],
+        &[],
+    )
 }
 
 /// The publication list of a program whose classes inherit nothing: one
@@ -53,7 +60,14 @@ fn inc_from_source(source: &str) -> String {
     std::fs::write(&src, source).expect("write source");
     let module = crate::frontend::resolve_frontend(&src, Some("m"))
         .unwrap_or_else(|_| panic!("the fixture must type-check"));
-    generate_exports_inc("m", &[], &collect_user_exception_classes(&module), &[], &[])
+    generate_exports_inc(
+        "m",
+        &[],
+        &collect_user_exception_classes(&module),
+        &[],
+        &[],
+        &[],
+    )
 }
 
 #[test]
@@ -1436,6 +1450,7 @@ fn a_constructor_buffer_parameter_its_body_stores_into_is_acquired_writable() {
             param_writable: vec![true],
             slot_names: vec!["w".to_string()],
         }],
+        &[],
     );
     assert!(
         inc.contains(
@@ -1999,6 +2014,7 @@ fn a_constructible_class_gets_a_tp_init_three_slots_and_a_carrier_sized_spec() {
         &[],
         &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
         &[grid_ctor(vec![Ty::Int, Ty::Int], &["w", "h"])],
+        &[],
     );
     assert!(
         inc.contains(
@@ -2103,6 +2119,7 @@ fn a_zero_argument_constructor_declares_a_receiver_only_parameter_list() {
         &[],
         &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
         &[grid_ctor(Vec::new(), &[])],
+        &[],
     );
     assert!(
         inc.contains(
@@ -2130,6 +2147,7 @@ fn a_one_argument_constructor_says_argument_in_the_singular() {
         &[],
         &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
         &[grid_ctor(vec![Ty::Int], &["w"])],
+        &[],
     );
     assert!(
         inc.contains("takes exactly 1 argument (%zd given)"),
@@ -2148,6 +2166,7 @@ fn a_memoryview_constructor_releases_its_buffer_on_every_exit_past_the_acquire()
         &[],
         &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
         &[grid_ctor(vec![Ty::MemoryView], &["w"])],
+        &[],
     );
     assert!(
         inc.contains("    Py_buffer b0;\n    PyccExtBufferView a0;\n"),
@@ -2180,7 +2199,7 @@ fn a_published_class_with_no_constructor_descriptor_is_a_non_instantiable_carrie
     // still a carrier type, with the carrier's `basicsize` and the shared
     // deallocator, because its instances can cross as call arguments.
     let exports = [instance_export("Grid", "area", vec![], Ty::Int)];
-    let without = generate_exports_inc("m", &exports, &[], &flat_publications(&exports), &[]);
+    let without = generate_exports_inc("m", &exports, &[], &flat_publications(&exports), &[], &[]);
     assert!(!without.contains("pycc_ext_tp_init_Grid"), "{without}");
     assert!(
         without.contains(
@@ -2207,7 +2226,7 @@ fn a_constructor_descriptor_for_an_unpublished_class_emits_nothing() {
     // The class list is `publications` alone, so a constructor descriptor
     // whose class publishes no method must not conjure a type object -- the
     // two sets are deliberately not the same set.
-    let inc = generate_exports_inc("m", &[], &[], &[], &[grid_ctor(vec![Ty::Int], &["w"])]);
+    let inc = generate_exports_inc("m", &[], &[], &[], &[grid_ctor(vec![Ty::Int], &["w"])], &[]);
     assert!(!inc.contains("pycc_ext_tp_init_Grid"), "{inc}");
     assert!(!inc.contains("PyType_FromSpec"), "{inc}");
 }
@@ -2280,7 +2299,7 @@ fn a_derived_class_table_carries_its_base_s_rows_and_its_own_tp_init() {
     let exports = collect_exports(&hir).expect("a carriable program");
     let publications = collect_class_publications(&hir, &exports);
     let ctors = collect_constructors(&hir, &publications);
-    let inc = generate_exports_inc("m", &exports, &[], &publications, &ctors);
+    let inc = generate_exports_inc("m", &exports, &[], &publications, &ctors, &[]);
     // One wrapper, two rows: the inherited row points at the base's own
     // compiled symbol, so nothing is generated twice.
     assert_eq!(
@@ -2693,7 +2712,7 @@ fn a_source_level_default_does_not_reach_the_generated_wrapper() {
     let exports = collect_exports(&module).expect("a carriable program");
     assert_eq!(exports.len(), 1, "{exports:?}");
     assert_eq!(exports[0].params, vec![Ty::Int, Ty::Int], "{exports:?}");
-    let inc = generate_exports_inc("m", &exports, &[], &flat_publications(&exports), &[]);
+    let inc = generate_exports_inc("m", &exports, &[], &flat_publications(&exports), &[], &[]);
     assert!(
         inc.contains("add() takes exactly 2 arguments (%zd given)"),
         "{inc}"
@@ -2732,7 +2751,7 @@ fn an_object_signature_crosses_the_boundary_as_the_pyobject_itself() {
     assert_eq!(exports.len(), 2, "{exports:?}");
     assert_eq!(exports[0].params, vec![Ty::Object, Ty::Object]);
     assert_eq!(exports[0].return_ty, Ty::Object);
-    let inc = generate_exports_inc("m", &exports, &[], &flat_publications(&exports), &[]);
+    let inc = generate_exports_inc("m", &exports, &[], &flat_publications(&exports), &[], &[]);
     for needle in [
         "pycc_ext_unpack_object(args[0], \"ident\", 0, &a0)",
         "pycc_ext_unpack_object(args[1], \"ident\", 1, &a1)",
