@@ -33,48 +33,110 @@
 //! display `{}` bound to an object stays `T0003`: D-258 rule 4's dict half
 //! is not implemented yet.
 //!
+//! **Value positions (#1421).** A slot a declaration states -- source 1's
+//! annotation, or a declared attribute slot (`attr_slot`'s object branch) --
+//! receives more than a bare display: the #1207 subject's lines 43-44 store
+//! `state_stack or [self.parse_conf.start_state]` and `value_stack or []`
+//! into object-declared attributes. [`rewrite_value_displays`] therefore
+//! rewrites every display in a *value position* of the stored expression:
+//! the expression itself, both operands of a value-context `and`/`or` (either
+//! may be the result), and both branches of a conditional expression. The
+//! test of a conditional expression and the operands of a truth-only
+//! `and`/`or` are consumed only for their truth and are never rewritten.
+//! Source 2 keeps its bare-`[]` rule, for the order-insensitivity reason
+//! above: its evidence is a binding, not a declaration written beside the
+//! value.
+//!
 //! **Safety.** As for the parent's own source 2, this pass resolves but
 //! never accepts: the check phase re-validates every assignment in program
 //! order, so a rewritten `s = []` is accepted only where an object is
 //! assignable to `s`, and `crate::foreign::list_display` refuses an element
-//! with no boxing helper (`I0404`).
+//! with no boxing helper (`I0404`). A rewritten operand is typed by the
+//! ordinary `and`/`or` and conditional-expression joins, which give an
+//! object only where the other operand joins with one.
 
 use super::*;
 
-/// The rewritten node for `value` when it is a list display bound to an
-/// object slot (see the module documentation for which), `None` otherwise.
-pub(super) fn object_list(
-    value: &HirExpr,
+/// Rewrites `value` in place when its slot is an object (see the module
+/// documentation for which displays qualify), returning whether anything
+/// was rewritten.
+pub(super) fn rewrite_object_slot(
+    value: &mut HirExpr,
     target: &str,
     annotation: Option<&Ty>,
     env: &Environment,
-) -> Option<HirExpr> {
-    let HirExpr::ListLiteral(elements) = value else {
-        return None;
-    };
-    let slot_is_object = match annotation {
-        Some(annotation) => *annotation == Ty::Object,
+) -> bool {
+    match annotation {
+        Some(Ty::Object) => rewrite_value_displays(value),
+        Some(_) => false,
         None => {
-            elements.is_empty()
-                && env
-                    .binding_state(target)
-                    .is_some_and(|state| *state.ty() == Ty::Object)
+            let empty = matches!(value, HirExpr::ListLiteral(elements) if elements.is_empty());
+            let bound_to_object = env
+                .binding_state(target)
+                .is_some_and(|state| *state.ty() == Ty::Object);
+            if empty && bound_to_object {
+                *value = HirExpr::ObjectList(Vec::new());
+            }
+            empty && bound_to_object
         }
-    };
-    slot_is_object.then(|| HirExpr::ObjectList(elements.clone()))
+    }
 }
 
-/// Whether `stmt` is an annotated assignment of a list display to an object
-/// slot -- the one shape [`object_list`] rewrites that the parent's
-/// empty-literal fast path does not already see, because the display may
-/// be non-empty.
+/// Rewrites every list display in a value position of `value` -- `value`
+/// itself, both operands of a value-context `and`/`or`, both branches of a
+/// conditional expression, recursively -- into [`HirExpr::ObjectList`],
+/// returning whether any was rewritten. A display's own elements are not
+/// value positions of the slot and are left alone.
+pub(super) fn rewrite_value_displays(value: &mut HirExpr) -> bool {
+    match value {
+        HirExpr::ListLiteral(elements) => {
+            *value = HirExpr::ObjectList(std::mem::take(elements));
+            true
+        }
+        HirExpr::BoolOp {
+            left,
+            right,
+            truth_only: false,
+            ..
+        } => rewrite_value_displays(left) | rewrite_value_displays(right),
+        HirExpr::IfExp { body, orelse, .. } => {
+            rewrite_value_displays(body) | rewrite_value_displays(orelse)
+        }
+        _ => false,
+    }
+}
+
+/// Whether [`rewrite_value_displays`] would rewrite anything in `value`.
+/// The fast-path triggers use it to decide whether the pass has work to do.
+pub(super) fn has_value_display(value: &HirExpr) -> bool {
+    match value {
+        HirExpr::ListLiteral(_) => true,
+        HirExpr::BoolOp {
+            left,
+            right,
+            truth_only: false,
+            ..
+        } => has_value_display(left) || has_value_display(right),
+        HirExpr::IfExp { body, orelse, .. } => has_value_display(body) || has_value_display(orelse),
+        _ => false,
+    }
+}
+
+/// Whether `stmt` is an annotated assignment of a value holding a list
+/// display to an object slot -- the one shape [`rewrite_object_slot`]
+/// rewrites that the parent's empty-literal fast path does not already see,
+/// because the display may be non-empty or an operand.
 pub(super) fn is_annotated_object_list(stmt: &HirStmt) -> bool {
     matches!(
         stmt,
         HirStmt::AnnAssign {
             annotation: Ty::Object,
-            value: Some(HirExpr::ListLiteral(_)),
+            value: Some(value),
             ..
-        }
+        } if has_value_display(value)
     )
 }
+
+#[cfg(test)]
+#[path = "object_slot_tests.rs"]
+mod tests;

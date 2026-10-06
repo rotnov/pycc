@@ -25,7 +25,10 @@
 //! 2. **Value rewrite.** Every `self.<attr> = []`/`{}` in a class's own
 //!    methods -- the establishing store in `__init__` and any later reset --
 //!    becomes `EmptyList`/`EmptyDict` typed from the class's flat slot layout,
-//!    when that slot is a concrete container of the same shape.
+//!    when that slot is a concrete container of the same shape. When the
+//!    slot is the CPython object instead (#1421), every list display in a
+//!    value position of the stored value becomes `ObjectList`, empty or not
+//!    (`rewrite_reset`'s object branch).
 //! 3. **Receiver identity (#1181).** A method whose source spells its
 //!    receiver `this` opens with the alias statement `this = self`, so "the
 //!    receiver" is `self` or that alias ([`receiver_spellings`]).
@@ -36,6 +39,7 @@
 //! refuses it with `T0003`. Without that gate the placeholder surfaced as a
 //! `T0052` naming `list[<inferred>]`, a type the source never wrote.
 
+use super::object_slot::{has_value_display, rewrite_value_displays};
 use super::producer::{ProducerScan, ProducerTarget, scan_body};
 use super::{
     Resolution, any_stmt, concrete, contains_infer, empty_literal, for_each_stmt_mut,
@@ -47,8 +51,16 @@ use pycc_hir::{HirClassDef, HirExpr, HirItem, HirModule, HirStmt, Ty};
 
 /// Whether the class phase has anything to do: some class carries a
 /// provisional slot, or some function body stores an empty literal into an
-/// attribute (a reset the rewrite may type from an existing slot).
+/// attribute (a reset the rewrite may type from an existing slot), or --
+/// when some class has an object slot (#1421) -- stores a value holding a
+/// list display into one (see [`rewrite_reset`]'s object branch). The last
+/// trigger is gated on the object slot so a native `self.xs = [1]` keeps
+/// the pass's no-clone fast path.
 pub(crate) fn needs_class_phase(hir: &HirModule) -> bool {
+    let has_object_slot = hir
+        .class_defs
+        .iter()
+        .any(|(_, class)| class.attrs.iter().any(|(_, ty)| *ty == Ty::Object));
     hir.class_defs
         .iter()
         .any(|(_, class)| class.attrs.iter().any(|(_, ty)| contains_infer(ty)))
@@ -56,6 +68,7 @@ pub(crate) fn needs_class_phase(hir: &HirModule) -> bool {
             matches!(item, HirItem::Function { body, .. } if any_stmt(body, &|stmt| matches!(
                 stmt,
                 HirStmt::AttrSet { value, .. } if empty_literal(value).is_some()
+                    || (has_object_slot && has_value_display(value))
             )))
         })
 }
@@ -209,7 +222,8 @@ pub(super) fn receiver_spellings(body: &[HirStmt]) -> Vec<&str> {
 }
 
 /// Step 2: types every `self.<attr> = []`/`{}` in each class's own methods
-/// from the class's flat slot layout.
+/// from the class's flat slot layout, and builds every list display stored
+/// into an object slot as a CPython `list` (#1421).
 fn rewrite_attr_resets(resolved: &mut HirModule) {
     for (_, class) in &resolved.class_defs {
         let mro: Vec<&HirClassDef> = class
@@ -250,19 +264,36 @@ fn rewrite_attr_resets(resolved: &mut HirModule) {
     }
 }
 
-/// Rewrites one empty-literal store into `attr` when `layout` gives it a
-/// concrete container slot of the literal's shape. A shape mismatch
+/// Rewrites one store into `attr` from its slot in `layout`.
+///
+/// **Object slot (#1421).** When the slot is [`Ty::Object`] -- a class-body
+/// declaration D-258 lowers to the object (`List[StateT]`, a bare `list`,
+/// `Any`), or an attribute established from an object -- every list display
+/// in a value position of the stored value, empty or not, becomes a fresh
+/// CPython `list` ([`rewrite_value_displays`]), exactly as an
+/// object-annotated local's does: the slot is declared, so it says what the
+/// display is. This is the #1207 subject's lines 43-44,
+/// `self.state_stack = state_stack or [self.parse_conf.start_state]` and
+/// `self.value_stack = value_stack or []`. A dict display there stays
+/// `T0003`, as it does for a local.
+///
+/// **Container slot.** Otherwise an empty literal is typed when the slot is
+/// a concrete container of the literal's shape. A shape mismatch
 /// (`self.xs = {}` into a list slot) is left alone and reports `T0003`,
 /// exactly as `Resolution::matches` leaves a local one.
 fn rewrite_reset(value: &mut HirExpr, layout: &[(String, Ty)], attr: &str) {
+    let slot = layout
+        .iter()
+        .find(|(name, _)| name == attr)
+        .map(|(_, ty)| ty);
+    if slot == Some(&Ty::Object) {
+        rewrite_value_displays(value);
+        return;
+    }
     let Some(literal) = empty_literal(value) else {
         return;
     };
-    let resolution = layout
-        .iter()
-        .find(|(name, _)| name == attr)
-        .and_then(|(_, ty)| from_container_ty(ty))
-        .and_then(concrete);
+    let resolution = slot.and_then(from_container_ty).and_then(concrete);
     if let Some(resolution) = resolution.filter(|resolution| resolution.matches(literal)) {
         *value = resolution.into_expr();
     }

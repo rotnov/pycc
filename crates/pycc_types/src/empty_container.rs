@@ -700,8 +700,7 @@ fn rewrite_value(
 ) {
     // Part 2d of #1371: a list display bound to an object slot builds a
     // CPython `list` (`object_slot`), ahead of the native resolution.
-    if let Some(object_list) = object_slot::object_list(value, target, annotation, env) {
-        *value = object_list;
+    if object_slot::rewrite_object_slot(value, target, annotation, env) {
         return;
     }
     let Some(literal) = empty_literal(value) else {

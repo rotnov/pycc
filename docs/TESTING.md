@@ -882,7 +882,7 @@ row (new once the string on line 59 no longer hid it), #1095 the
 Part 1 of #1255 the comprehension row, so two remain, and every one
 of them is a
 missing feature. Part 1 of #1371 narrows the #1371 row (the comparisons on lines 82,
-84, 104 and 108 compile) without clearing it, Part 2a narrows it again (the `callbacks[...](...)` calls on lines 88 and 101 and line 64's object argument compile), Part 2b narrows it once more (`not in` on line 88 and the slice load on line 95 compile), Part 2c narrows it again (the slice `del` on lines 96-97 compiles), Part 2d narrows it again (the `s = []` of line 99 compiles as a CPython `list`), and Part 7 narrows it once more (`isinstance(other, ParserState)` on line 52 compiles), so it is still counted. The two that were boundary questions inside the subject
+84, 104 and 108 compile) without clearing it, Part 2a narrows it again (the `callbacks[...](...)` calls on lines 88 and 101 and line 64's object argument compile), Part 2b narrows it once more (`not in` on line 88 and the slice load on line 95 compile), Part 2c narrows it again (the slice `del` on lines 96-97 compiles), Part 2d narrows it again (the `s = []` of line 99 compiles as a CPython `list`), Part 7 narrows it once more (`isinstance(other, ParserState)` on line 52 compiles), and [#1421](https://github.com/rotnov/pycc/issues/1421) narrows it again (the list-display `or` operands of lines 43-44 compile as CPython `list`s), so it is still counted. The two that were boundary questions inside the subject
 module rather than missing features were #1285 and #1367's `object`
 spelling.
 [D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md) has since decided both for an `--ext` module (`Any` and `object` are
@@ -946,7 +946,17 @@ only by #1371's series. Part 6 of #1371 admits the `or` itself; an isolated
 `--ext` build of the two assignments with their real list-display right operands
 (debug build of the Part 6 branch, based on `main` `6784d535`) stops at `T0034`
 "list[object] is not compiled yet", a build-only probe with no CPython run. So that row is not re-measured as cleared until the subject module is
-compiled again.
+compiled again. Since [#1421](https://github.com/rotnov/pycc/issues/1421)
+that `T0034` is cleared: a display in a value position of an object slot,
+an `or` operand stored into an object attribute included, builds a CPython
+`list` (`tests/issue_1421_object_slot_list_display.rs` runs the
+`ParserState.__init__` shape and matches CPython). A probe-grade
+`--ext --foreign-relative-imports` build of the subject copied alone, with
+other rows' constructs patched out (the line-80 keyword arguments,
+`__eq__`'s body, `__copy__`'s annotation), reports no diagnostic on lines
+43-44 with a debug build of the #1421 branch (based on `main` `a28ef867`).
+The same probe built from that `main` also reports the `T0034`. This is a
+build-only probe, so the row is still not re-measured as cleared.
 
 **State on 2026-09-24 (import-closure reading, rescoped 2026-09-30 by D-257).** On 2026-09-24 the repository owner directed
 that the row (b) outcome below is a chicken-and-egg result and that the missing
