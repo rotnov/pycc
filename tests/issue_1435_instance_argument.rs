@@ -249,6 +249,7 @@ const DEVIATION_DRIVER: &str = "import pycc_inst_dev_mod as mod\n\
     print(isinstance(s, mod.Q))\n\
     print(hasattr(s, 'n'))\n\
     a, b = mod.same(lambda a, b: (a, b))\n\
+    print(hasattr(a, 'n'))\n\
     print(a == b)\n\
     print(repr(a).startswith('<pycc_inst_dev_mod.Same object at '))\n\
     seen = []\n\
@@ -256,12 +257,15 @@ const DEVIATION_DRIVER: &str = "import pycc_inst_dev_mod as mod\n\
     print(seen[0] is e, type(seen[0]) is mod.Esc)\n";
 
 /// `isinstance` against a base: CPython `True` (published carrier types are
-/// flat); attribute read: CPython `True` (a carrier exposes methods only);
+/// flat); attribute read through `R`'s carrier: CPython `True`, and since
+/// #1442 pycc's too (a constructible class's type carries a read-only
+/// descriptor per field); attribute read through `Same`'s on-demand
+/// carrier, which carries no descriptor table: CPython `True` (#1448);
 /// `__eq__` and `__repr__` overrides: CPython `True` and `Same!` (dunders
 /// are not wired to type slots); a `self` escaping during `__init__`:
 /// CPython `True True` (the escape is packed before `tp_init` links the
 /// host's object, so it gets its own carrier of the same type).
-const DEVIATION_PINNED: &str = "False\nFalse\nFalse\nTrue\nFalse True\n";
+const DEVIATION_PINNED: &str = "False\nTrue\nFalse\nFalse\nTrue\nFalse True\n";
 
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]

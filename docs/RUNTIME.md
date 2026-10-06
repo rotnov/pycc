@@ -1605,9 +1605,13 @@ above. Four rules fix what that carrier is.
   syntactic check reaches the packer's `NULL` guard, which raises
   `SystemError`.
 - *Deviations from CPython, pinned by
-  `tests/issue_1435_instance_argument.rs`.* A carrier exposes exactly its
-  type's exported methods: no attribute is readable, so `hasattr(x, 'n')` is
-  `False` (as for a host-constructed object since #1145). Published types are
+  `tests/issue_1435_instance_argument.rs`.* A carrier of a constructible
+  published class reads its fields through that type's read-only descriptors
+  (#1442, "Reading a field through the published type" above), as CPython
+  does. Any other carrier -- a non-constructible published type's, or an
+  on-demand carrier type's -- exposes exactly its type's exported methods: no
+  attribute is readable, so `hasattr(x, 'n')` is `False` where CPython says
+  `True` ([#1448](https://github.com/rotnov/pycc/issues/1448)). Published types are
   flat, so the host's own `isinstance(derived, mod.Base)` is `False`; a
   compiled `isinstance(x, Base)` on a carrier that comes back answers from
   the run-time class's MRO instead (above), and matches CPython. A class's dunder
