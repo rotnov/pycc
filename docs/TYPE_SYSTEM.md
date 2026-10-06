@@ -53,6 +53,28 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   own: a helper constrained only by its own recursion stays `T0021`, and one
   with another constraining return (a base case such as `if n == 0: return
   1`) resolves from that return.
+- **A constructor call of a user class** ([#1342](https://github.com/rotnov/pycc/issues/1342))
+  answers that class's instance: `def _mk(): return R(1)`, or a local bound
+  from `R(1)` and returned, infers `R`, and `R(1).get()` composes with the
+  method-call rule above. Only a non-generic class of the module's own class
+  table answers. A `class C[T]:` called bare as `C(x)` answers nothing and
+  keeps the prior `T0021`. A callee the solver already reads some other way
+  keeps that reading: a value binding, a foreign import, a function, or a
+  known callable builtin. So a class named like a builtin (`class range:`)
+  and a builtin exception class (`ValueError("x")`) keep their `C0001`. The
+  solver does not validate the call: the check phase still resolves the
+  constructor through the MRO and checks the arguments against `__init__`
+  (`T0021` on a mistyped or miscounted argument). It also still refuses an
+  abstract class with its own `C0001`, which the solver's answer no longer
+  hides behind "cannot infer return type". A protocol class answers nothing,
+  so a helper returning `P()` keeps the prior `T0021`, and an enum call
+  `E(1)` is refused by lowering before the solver runs. As with a method
+  call, the arguments are not unified with `__init__`'s parameters. A set
+  comprehension of constructor calls (`{R(i) for i in range(n)}`) therefore
+  infers `set[R]`, and `frozenset(...)` of one `frozenset[R]`. An annotated
+  return the solver can now type (`def f() -> set[int]: return {R(i) ...}`)
+  reports the solver's own `T0022` "return type mismatch" wording, as every
+  annotated return it types already did.
 - **An inherited copy must agree with its origin's return.** A D-254
   receiver-exact copy of an inherited method is solved per receiver class,
   while a caller types `recv.m()` through the origin's signature. With
@@ -1677,11 +1699,10 @@ exactly as `.add` does (one `__hash__` call, identity before
 `stored.__eq__(new)`, the refusals above), and a list or dict comprehension
 over a set of instances follows its own element rules (`list[int]`,
 `dict[str, int]`, ...). The constraint solver types the container from the
-element's resolved type, for example an annotated factory's return. It
-cannot type a class-constructor element
-([#1342](https://github.com/rotnov/pycc/issues/1342)) or a set-typed name's
-element in the loop ([#1360](https://github.com/rotnov/pycc/issues/1360))
-yet, so an unannotated private helper returning such a comprehension is
+element's resolved type, for example an annotated factory's return or,
+since [#1342](https://github.com/rotnov/pycc/issues/1342), a
+class-constructor call. It cannot type a set-typed name's element in the
+loop ([#1360](https://github.com/rotnov/pycc/issues/1360)) yet, so an unannotated private helper returning such a comprehension is
 `C0001` "cannot infer an unannotated private helper's `set[C]` return yet";
 annotate its return (`-> set[C]`). An annotated caller of that helper also
 reports a `T0025` against its still-`set[int]` inferred signature (D-255's
