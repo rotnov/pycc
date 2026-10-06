@@ -750,6 +750,14 @@ pub fn is_ext_exportable_name(name: &str) -> bool {
     if name.starts_with("0gen_") {
         return false;
     }
+    // #1467: the two PEP 562 module hooks, which the driver publishes from
+    // the entry module although D-038's predicate refuses every dunder. The
+    // driver admits only the entry module's own `def`, which this lexical
+    // mirror cannot see, so a helper module's hook gets a dead thunk -- the
+    // safe superset direction described above.
+    if name == "__getattr__" || name == "__dir__" {
+        return true;
+    }
     let mut segments = name.split('.');
     // `str::split` always yields at least one segment, so the fallback is
     // unreachable rather than a second refusal path; an empty first segment

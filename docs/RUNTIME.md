@@ -516,6 +516,38 @@ carry as a `METH_FASTCALL` wrapper, runs the module body in a PEP 489
 `Py_mod_exec` slot, refuses to initialize on a free-threaded interpreter, and
 rejects any other public signature at compile time as `C0003`.
 
+[#1467](https://github.com/rotnov/pycc/issues/1467) adds the two PEP 562
+module hooks to that export set although D-038's public-name predicate
+refuses every dunder: a `def __getattr__` or `def __dir__` written at the top
+level of the **entry** module is published as a module attribute, so a host
+read of a name the module does not publish calls the compiled
+`__getattr__`, and `dir(mod)` calls the compiled `__dir__` (which builtin
+`dir()` sorts, as in CPython). The hook is added by `pycc_ext_exec_module`
+with `PyModule_AddFunctions` only **after** the module body has run,
+through its own `pycc_ext_module_hooks[]` table rather than
+`pycc_ext_methods[]`: importlib reads attributes of the half-initialised
+module before `Py_mod_exec`, and the wrapper calls through a `fnptr_` slot
+only the body fills, so a creation-time row would be called through a null
+slot. A re-import after `del sys.modules[...]` runs the body again and
+rebinds the hooks. A compiled `raise AttributeError` in the hook reaches
+the host as `AttributeError`, so `hasattr` and `getattr(mod, name,
+default)` behave as in CPython. Which hooks are published is read from the
+entry module's own source (`src/ext_build/module_hooks.rs`), because a
+helper module's `def __getattr__` is linked into the same program (D-222)
+and CPython never applies it to the entry module. An import that binds a
+hook name in the entry module (`from lib import __getattr__`, `import x as
+__dir__`), at the top level or inside a top-level `if`/`try`, is refused
+with a located `C0001`, since CPython would install a hook the boundary
+cannot publish; a hook whose signature the boundary cannot carry is a
+`C0003` whose remedy is to change the signature, not to rename it. Two
+residuals are recorded in D-244's #1467 amendment: a name CPython's module
+dict holds but the extension does not publish -- a module global, a private
+function or class, an imported name -- reaches the hook, where CPython
+would return the dict value; and a host read of the module's own attributes
+from inside the body, after the `def` but before the body returns, does
+not see the hook yet. `tests/issue_1467_module_getattr.rs` pins every
+shape against CPython, the first residual included.
+
 [#1143](https://github.com/rotnov/pycc/issues/1143) extends that export set
 past module-level functions: a public `@staticmethod` and a public
 `@classmethod` of a public class are exported too, when the class is not a

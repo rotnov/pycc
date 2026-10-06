@@ -406,6 +406,14 @@ pub(crate) fn render_ty(ty: &Ty) -> &'static str {
     }
 }
 
+/// The boundary's carriable signature, as both `C0003` gaps state it.
+/// `docs/RUNTIME.md`'s admissibility matrix is the canonical statement.
+const CARRIABLE_TYPES: &str = "a parameter must be `int`, `float`, `bool`, `str`, `memoryview` \
+     (or its other spellings `ndarray` and `NDArray`), a CPython object (`Any`, `object`, a \
+     foreign class, or a container of objects), an instance of a class compiled in this module \
+     (not an enum or an exception class), or a `tuple` of `int`/`float`/`bool`, and a return \
+     type must be one of those, or `None`";
+
 /// Builds the `C0003` diagnostic for one unexportable public function or
 /// method.
 ///
@@ -440,19 +448,35 @@ pub(crate) fn capability_gap(name: &str, offender: &str) -> Diagnostic {
         severity: Severity::Error,
         message: format!(
             "--ext cannot export the public {noun} `{source_name}`: its {offender} is not a type \
-             this pycc version's CPython boundary can carry -- a parameter must be `int`, \
-             `float`, `bool`, `str`, `memoryview` (or its other spellings `ndarray` and \
-             `NDArray`), a CPython object (`Any`, `object`, a foreign class, or a container \
-             of objects), an instance of a class compiled in this module (not an enum or \
-             an exception class), or a \
-             `tuple` of `int`/`float`/`bool`, and a \
-             return type must be one of those, or `None` \
+             this pycc version's CPython boundary can carry -- {CARRIABLE_TYPES} \
              (D-244 rule \
              1 exports every public module-level function, and a public method of a public \
              class -- an instance method as well as a `@staticmethod` or `@classmethod` -- so \
              there is no way to opt one \
              out) -- rename it to `{owner}_{member}` to keep it out of the export set, or build \
              without --ext"
+        ),
+        span: None,
+        label: None,
+        help: None,
+    }
+}
+
+/// Builds the `C0003` diagnostic for a PEP 562 module hook (#1467) whose
+/// signature the boundary cannot carry.
+///
+/// Not [`capability_gap`]: its remedy, renaming the function private, would
+/// silently stop the host from calling the hook -- exactly the defect
+/// #1467 removed. Span-less for the same reason as that one.
+pub(crate) fn module_hook_gap(name: &str, offender: &str) -> Diagnostic {
+    Diagnostic {
+        code: EXT_CAPABILITY_CODE,
+        severity: Severity::Error,
+        message: format!(
+            "--ext cannot publish the module hook `{name}`: its {offender} is not a type this \
+             pycc version's CPython boundary can carry -- {CARRIABLE_TYPES} (PEP 562: the host \
+             calls a module's own `{name}` implicitly, so it cannot be left out of the export \
+             set) -- change its signature, or build without --ext (#1467)"
         ),
         span: None,
         label: None,

@@ -213,7 +213,33 @@ pub(crate) fn carrier_class_names(module: &HirModule) -> BTreeSet<String> {
 /// are constructed at 693 and 174 sites across this workspace, and a new
 /// field would put hundreds of mechanically-updated non-test lines into the
 /// 100%-coverage denominator for no behavioural gain.
+///
+/// Since #1467 this is the hook-free form the unit tests call; the build
+/// calls [`collect_exports_with_hooks`] with the entry module's hooks.
+#[cfg(test)]
 pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<Diagnostic>> {
+    collect_exports_with_hooks(module, &BTreeSet::new())
+}
+
+/// The export set [`collect_exports`] documents, plus the PEP 562 module
+/// hooks the entry module defines (#1467, [`super::module_hooks`]): a
+/// compiled function named in `hooks` is a module-level export although
+/// [`classify_export_name`] refuses every dunder.
+///
+/// `hooks` comes from the entry module's own source
+/// ([`super::EntryHooks::defined`]), never from the linked program: a
+/// helper module's `def __getattr__` is a `HirItem::Function` of the same
+/// name, and CPython never applies it to the entry module. A hook defined
+/// in both is already a `C0001` of D-222's import closure, so the one
+/// compiled item a name in `hooks` matches is the entry module's own.
+///
+/// Every rule below applies to a hook unchanged -- last-wins dedup, the
+/// buffer-slice union, the boundary check -- except the gap's wording: a
+/// hook's remedy is not "rename it private" ([`module_hook_gap`]).
+pub(crate) fn collect_exports_with_hooks(
+    module: &HirModule,
+    hooks: &BTreeSet<String>,
+) -> Result<Vec<ExtExport>, Vec<Diagnostic>> {
     let mut exports: Vec<ExtExport> = Vec::new();
     // Every compiled name any definition of which returns a buffer
     // sub-range; see the union pass after the loop for why the fact is
@@ -237,7 +263,9 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
         else {
             continue;
         };
-        let Some(spelling) = classify_export_name(name) else {
+        let Some(spelling) = classify_export_name(name)
+            .or_else(|| hooks.contains(name).then_some(ExportName::ModuleLevel))
+        else {
             continue;
         };
         // The driver-only exception-class filter, layered on top of the
@@ -323,7 +351,11 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
         };
         if let Some(offender) = unsupported_boundary_ty(carried_params, return_ty, &carrier_classes)
         {
-            gaps.push(capability_gap(name, &offender));
+            gaps.push(if hooks.contains(name) {
+                module_hook_gap(name, &offender)
+            } else {
+                capability_gap(name, &offender)
+            });
             continue;
         }
         let (class, method) = match &spelling {

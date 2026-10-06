@@ -4243,6 +4243,18 @@ static int pycc_ext_exec_module(PyObject *module)
         return -1;
     }
     pycc_ext_bridge_release_to(mark);
+    /*
+     * #1467: the module's PEP 562 `__getattr__` / `__dir__`, published
+     * only now. Their wrappers call through `fnptr_` slots the body has
+     * just filled, and importlib reads attributes of the half-initialised
+     * module before this function runs, so a row in `pycc_ext_methods[]`
+     * would be called through a null slot. CPython's own hook likewise
+     * enters the dict only when its `def` executes. A re-import after
+     * `del sys.modules[...]` runs this again and rebinds them.
+     */
+    if (PyModule_AddFunctions(module, pycc_ext_module_hooks) != 0) {
+        return -1;
+    }
     return 0;
 }
 
