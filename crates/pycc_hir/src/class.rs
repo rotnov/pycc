@@ -69,6 +69,7 @@ mod exception_dunders;
 pub(crate) mod generic_base;
 mod inherited_copy;
 mod method;
+mod method_default_fill;
 pub use inherited_copy::{
     CopiedMemberKind, InheritedCopy, SUPER_TARGET_MARKER, binds_member, first_definer,
     inherited_copy_name, inherited_copy_origin,
@@ -222,12 +223,25 @@ pub struct HirClassDef {
     /// `@staticmethod` has no receiver entry), each other entry the lowered
     /// literal `func::params::check_default` admitted, or `None`.
     ///
-    /// **Consumer.** Only the `--ext` host boundary reads it: the generated
-    /// `METH_FASTCALL` wrapper and `Py_tp_init` supply a default for an
-    /// argument the host omitted. An in-module method or constructor call
-    /// still passes every argument -- `pycc_types` keeps refusing a short
-    /// one with its arity `T0021` -- so no native call site ever reads a
-    /// default. A redefinition of a method replaces its entry, matching the
+    /// **Consumers.**
+    ///
+    /// * The `--ext` host boundary. The generated `METH_FASTCALL` wrapper and
+    ///   `Py_tp_init` supply a default for an argument the host omitted.
+    /// * An in-module call of a regular instance method (Part 1 of #1191,
+    ///   #1438). A call that omits defaulted trailing parameters has those
+    ///   defaults appended, through
+    ///   [`HirClassDef::omitted_method_defaults`]. A `None` default at an
+    ///   `object` parameter is not filled: `pycc_types` refuses that call.
+    ///   A PEP 695 generic class's specializations carry these entries
+    ///   re-keyed to the specialized mangled names
+    ///   (`pycc_types::monomorphize::method_defaults`).
+    ///
+    /// Every other in-module call shape still passes every argument, and
+    /// `pycc_types` keeps refusing a short one with its arity `T0021`. Those
+    /// shapes are a constructor, `super().m()`, a static method and a class
+    /// method.
+    ///
+    /// A redefinition of a method replaces its entry, matching the
     /// last-wins rebind of the method itself.
     pub method_defaults: Vec<(String, Vec<Option<HirExpr>>)>,
     /// PEP 695 (#387): the class's single type parameter name, if it is a

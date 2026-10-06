@@ -499,6 +499,60 @@ fn bind_local_types_in_stmt_for_list_skips_when_list_not_bound() {
     assert_eq!(env.lookup("i"), None);
 }
 
+/// #1445: the flat binder walks every suite of a `try` and a `try`/`except*`
+/// -- the body, each handler, the `else` and the `finally` -- in source
+/// order, exactly as it walks an `if`'s two arms. Before, the statement fell
+/// into the catch-all arm, so a name bound inside any suite stayed unbound
+/// and every binding derived from it (lark's `size = len(rule.expansion)`
+/// after `action, arg = ...` inside a `try`) failed to infer.
+#[test]
+fn bind_local_types_in_stmt_walks_every_suite_of_a_try() {
+    let assign = |target: &str, value: HirExpr| HirStmt::Assign {
+        target: target.to_string(),
+        value,
+    };
+    let suites = |body, handler, orelse, finalbody| {
+        (
+            body,
+            vec![pycc_hir::HirExceptHandler {
+                exc_type: Some(vec!["ValueError".to_string()]),
+                name: None,
+                body: handler,
+            }],
+            orelse,
+            finalbody,
+        )
+    };
+    let local_names = ["a", "b", "c", "d"];
+    let (body, handlers, orelse, finalbody) = suites(
+        vec![assign("a", HirExpr::IntLiteral(1))],
+        vec![assign("b", HirExpr::StringLiteral("s".to_string()))],
+        vec![assign("c", HirExpr::BoolLiteral(true))],
+        // A later suite reads an earlier suite's binding.
+        vec![assign("d", HirExpr::Name("a".to_string()))],
+    );
+    let try_stmt = HirStmt::Try {
+        body: body.clone(),
+        handlers: handlers.clone(),
+        orelse: orelse.clone(),
+        finalbody: finalbody.clone(),
+    };
+    let try_star = HirStmt::TryStar {
+        body,
+        handlers,
+        orelse,
+        finalbody,
+    };
+    for stmt in [try_stmt, try_star] {
+        let mut env = Environment::new();
+        bind_local_types_in_stmt(&mut env, &local_names, &stmt);
+        assert_eq!(env.lookup("a"), Some(Ty::Int), "{stmt:?}");
+        assert_eq!(env.lookup("b"), Some(Ty::Str), "{stmt:?}");
+        assert_eq!(env.lookup("c"), Some(Ty::Bool), "{stmt:?}");
+        assert_eq!(env.lookup("d"), Some(Ty::Int), "{stmt:?}");
+    }
+}
+
 #[test]
 fn mangle_protocol_instantiation_skips_non_instance_substitutions() {
     let substitutions = vec![("P".to_string(), Ty::Int)];

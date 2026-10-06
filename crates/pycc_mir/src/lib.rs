@@ -98,6 +98,12 @@ pub enum MirExpr {
     /// that target type is *not* simply "the slot's already-established
     /// type" -- see its own doc comment.
     NoneLiteral,
+    /// CPython's `NotImplemented` singleton, the value of an admitted
+    /// `return NotImplemented` in a comparison method of an `ext` module
+    /// (#1418, mirroring `HirExpr::NotImplemented`). Statically
+    /// `Ty::Object`; codegen loads it through the
+    /// `pycc_ext_obj_not_implemented` shim.
+    NotImplemented,
     /// Wraps a bare `inner`-typed value or a `NoneLiteral` so `.ty()`
     /// reports `Ty::Optional(inner)` regardless of the wrapped value's own
     /// static type (D-197, #763, Part 1 of #747). Exactly mirroring
@@ -454,8 +460,9 @@ pub enum MirExpr {
     /// loop target's slot) -- goes to `pycc_ext_obj_call_borrowed`, which
     /// takes its own reference first.
     ///
-    /// `args` are already-checked packable operands (scalars or `object`)
-    /// under the method call's rule
+    /// `args` are already-checked call arguments (scalars, `object`, or
+    /// since #1435 an instance of a regular class) under the method call's
+    /// rule
     /// (`pycc_types`' `check_object_call_args`). The call can fail -- the
     /// object is not callable, or the call raises -- which is why
     /// `pycc_codegen::exception::expression_can_set_exception` answers
@@ -466,6 +473,14 @@ pub enum MirExpr {
         callee: Box<MirExpr>,
         args: Vec<MirExpr>,
     },
+    /// Part 8 of #1371: a call of a CPython object that passes keyword
+    /// arguments -- `o.method(x, key=v)`, `f(a, b=c)` with `f` a foreign
+    /// function, `Cls(arg, flag=True)` with `Cls` a foreign class -- lowered
+    /// from `pycc_hir`'s `HirExpr::KeywordCall` once `pycc_types` admitted
+    /// its callee as an object. Boxed so the enum does not grow (see
+    /// [`ObjKeywordCall`]); [`MirExpr::ty`] answers [`Ty::Object`] for it,
+    /// as for the positional call it wraps.
+    ObjKeywordCall(Box<ObjKeywordCall>),
     /// `len(base)` where `base` is a foreign CPython object (D-244, Part 3
     /// of #1026, PR 3a of #1082). The result is always [`Ty::Int`], so the
     /// variant carries no `ty` field -- the same size argument
@@ -875,6 +890,25 @@ pub enum InstanceHashVia {
     Method,
 }
 
+/// The payload of [`MirExpr::ObjKeywordCall`] (Part 8 of #1371).
+///
+/// `call` is the positional half of the call, exactly the node the same
+/// call without its keywords lowers to: a [`MirExpr::ObjMethodCall`] or a
+/// [`MirExpr::ObjCall`]. `names` and `values` are the keyword arguments in
+/// source order, one name per value; `pycc_parser` already refuses a
+/// repeated name (`L0001`), so the names are distinct. Codegen evaluates the
+/// callee (and, for a method call, looks the method up), then the
+/// positional arguments, then the keyword values, which is CPython's order,
+/// and marshals the values after the positional arguments in one vectorcall
+/// argument array with the names as its `kwnames` tuple. The values follow
+/// the positional argument rule (`pycc_types`' `check_object_call_args`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjKeywordCall {
+    pub call: MirExpr,
+    pub names: Vec<String>,
+    pub values: Vec<MirExpr>,
+}
+
 /// `MirExpr::Instantiate`'s payload, boxed (not inlined into that variant
 /// directly) to keep `MirExpr`'s own size close to its other variants --
 /// `ctor: String` + the slot count + `args: Vec<MirExpr>` + `ty: Ty`
@@ -914,6 +948,7 @@ impl MirExpr {
             MirExpr::BoolLiteral(_) => Ty::Bool,
             MirExpr::StringLiteral(_) | MirExpr::FString(_) => Ty::Str,
             MirExpr::NoneLiteral => Ty::None,
+            MirExpr::NotImplemented => Ty::Object,
             MirExpr::OptionalWrap(_, inner) => Ty::Optional(inner.clone()),
             MirExpr::OptionalUnwrap(_, inner) => (**inner).clone(),
             MirExpr::Name { ty, .. }
@@ -1036,7 +1071,9 @@ impl MirExpr {
             // opaque by construction (see the variant's own documentation,
             // which also records why it carries no field where `ObjAttrGet`
             // does).
-            MirExpr::ObjMethodCall { .. } | MirExpr::ObjCall { .. } => Ty::Object,
+            MirExpr::ObjMethodCall { .. }
+            | MirExpr::ObjCall { .. }
+            | MirExpr::ObjKeywordCall(_) => Ty::Object,
             // Likewise hardcoded: `len` is an `int` for every operand the
             // shim can answer for. See the variant's own documentation.
             MirExpr::ObjLen { .. } => Ty::Int,
@@ -1129,6 +1166,7 @@ impl MirExpr {
             | MirExpr::EmptyList(_)
             | MirExpr::EmptyDict(_)
             | MirExpr::NoneLiteral
+            | MirExpr::NotImplemented
             | MirExpr::Name { .. }
             | MirExpr::NullInstance { .. } => {}
             MirExpr::ListPop { list, .. } => {
@@ -1270,6 +1308,14 @@ impl MirExpr {
                 base.collect_named_expr_bindings(out);
                 for arg in args {
                     arg.collect_named_expr_bindings(out);
+                }
+            }
+            // Part 8 of #1371: the positional half, then every keyword
+            // value (`o.m(k=(n := 1))`).
+            MirExpr::ObjKeywordCall(call) => {
+                call.call.collect_named_expr_bindings(out);
+                for value in &call.values {
+                    value.collect_named_expr_bindings(out);
                 }
             }
             // Both sides too, for the identical reason: a walrus can hide in
@@ -1606,6 +1652,18 @@ pub enum MirStmt {
     },
     /// Bare `raise` (re-raise, #382). Only valid inside an except handler.
     Reraise,
+    /// `raise value` where `value` is a CPython object (Part 9 of #1371,
+    /// from a cause-less `HirStmt::Raise` whose operand is `Ty::Object`).
+    /// CPython decides what is raised, as its own `raise` does: an
+    /// exception instance is raised, an exception class is instantiated
+    /// with no arguments, and anything else raises `TypeError`. Codegen
+    /// hands the CPython exception to the foreign-operation bridge, so it
+    /// propagates as a pending pycc exception whose original the host sees.
+    /// Carries no frame name: the bridged original keeps CPython's own
+    /// traceback, unlike [`MirStmt::Raise`]'s pycc-rendered one.
+    ObjRaise {
+        value: MirExpr,
+    },
     /// A foreign (CPython-object) import nested in a module-level `if`/`try`
     /// block (#1291), the statement counterpart of
     /// [`MirItem::ForeignImport`]: each `(local_name, module_path)` pair, in
@@ -1956,6 +2014,7 @@ fn set_frame_function(body: &mut [MirStmt], frame_name: &str) {
             | MirStmt::ReturnBufferSlice { .. }
             | MirStmt::AttrSet { .. }
             | MirStmt::ObjDelSlice { .. }
+            | MirStmt::ObjRaise { .. }
             | MirStmt::ForeignImport { .. }
             | MirStmt::Reraise => {}
         }

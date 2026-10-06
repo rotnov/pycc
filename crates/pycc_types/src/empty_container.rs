@@ -117,14 +117,18 @@
 //! Sources 2 and 3 are the ones that do not, and they share one cause rather
 //! than differing: both read the flat whole-function `Environment` built by
 //! `bind_local_types_in_body`, a pre-existing pass shared with protocol
-//! monomorphization whose own statement walk has no `match`/`try` arm. Source
+//! monomorphization whose own statement walk has no `match` arm. Source
 //! 2 reads a binding out of that environment directly; source 3 infers the
 //! producer's value *in* it ([`find_producer`] calls `infer_expr_in` with
-//! exactly that environment). So a name bound only inside a `match` case or a
-//! `try` suite is invisible to both, and `case y: xs = []; xs.append(y)` is
-//! not resolved even though `case y: xs: list[int] = []; xs.append(y)` is.
-//! That costs a missed resolution, never a wrong element type, and widening a
-//! shared pass belongs to its own change rather than to this one.
+//! exactly that environment). So a name bound only inside a `match` case is
+//! invisible to both, and `case y: xs = []; xs.append(y)` is not resolved
+//! even though `case y: xs: list[int] = []; xs.append(y)` is. That costs a
+//! missed resolution, never a wrong element type. The binder walks every
+//! `try`/`except`/`except*`/`else`/`finally` suite since #1445 (lark's
+//! `action, arg = ...` inside a `try`, whose `arg` the object slice bound of
+//! `s = value_stack[-size:]` derives from), so a name bound in one of those
+//! is visible like an `if` branch's, demoted and re-promoted by the same
+//! rules below.
 //!
 //! What a miss then *reports* is not always `T0003`. A miss leaves the
 //! concrete path failing, which routes the module into the private-helper

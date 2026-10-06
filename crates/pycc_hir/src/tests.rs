@@ -2031,15 +2031,29 @@ fn a_param_spec_type_parameter_is_rejected() {
 }
 
 #[test]
-fn a_keyword_call_argument_is_rejected_instead_of_being_erased() {
+fn a_keyword_call_argument_is_kept_instead_of_being_erased() {
     // Part 1 of #884 (#1125) made a keyword call to a module-level `def`
     // bind by name, so this regression needs a callee the signature table
     // cannot answer for. An undefined name is the simplest such callee, and
     // the point of the test is unchanged: the keyword is rejected, never
-    // silently dropped on the way to `HirExpr::Call`.
-    assert_capability_error_message(
-        "f(extra=undefined)\n",
-        "keyword call arguments are not supported yet",
+    // silently dropped on the way to `HirExpr::Call`. Since Part 8 of #1371
+    // a bare-name callee could be a CPython object, so lowering keeps the
+    // keyword in a `HirExpr::KeywordCall` and `pycc_types` refuses it.
+    let hir = lower_checked(&pycc_parser_test_helper::parse("f(extra=undefined)\n"))
+        .expect("a bare-name keyword call is deferred to pycc_types");
+    let Some(HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::KeywordCall {
+        call, keywords, ..
+    }))) = hir.items.last()
+    else {
+        panic!("{:?}", hir.items);
+    };
+    assert!(
+        matches!(call.as_ref(), HirExpr::Call { callee, args } if callee == "f" && args.is_empty()),
+        "{call:?}"
+    );
+    assert_eq!(
+        keywords,
+        &vec![("extra".to_string(), HirExpr::Name("undefined".to_string()))]
     );
 }
 

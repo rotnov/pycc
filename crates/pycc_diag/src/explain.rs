@@ -116,8 +116,8 @@ definition because a raised exception value would silently ignore that \
 dunder (Part 3 of #541). Since #1344 an unannotated private helper that \
 returns a set comprehension whose user-class instance element the \
 constraint solver cannot type yet is C0001 too, \"cannot infer an \
-unannotated private helper's `set[C]` return yet\", with help naming #1342 \
-and #1360; annotating the helper's return (`-> set[C]`) compiles today. \
+unannotated private helper's `set[C]` return yet\", with help naming \
+#1360; annotating the helper's return (`-> set[C]`) compiles today. \
 Apart from the two permanent refusals above, the \
 construct remains reserved and stops \
 producing C0001 the moment the corresponding roadmap slice is implemented; \
@@ -397,7 +397,10 @@ subclass (#1337, D-254) whose body returns `self` from a method annotated \
 with the base class: the copy's `self` is the subclass, which the base-typed \
 return slot would silently widen, so the program is refused and the \
 diagnostic carries the note \"while compiling `D.m` inherited by subclass \
-`C`\".",
+`C`\". A CPython object (a foreign-import value, such as the result of \
+`o == 1`) returned from a `-> bool`, `-> int`, `-> float` or `-> str` \
+function is refused rather than converted implicitly (D-258, #1419): the \
+help names the explicit conversion, e.g. `return bool(o == 1)`.",
         example: "\
 def f() -> int:
     return \"not an int\"
@@ -464,7 +467,10 @@ subclass (#1337, D-254) whose body binds `self` to a local annotated with \
 the base class (`x: A = self`): the copy's `self` is the subclass, which \
 the annotation would silently widen, so the program is refused and the \
 diagnostic carries the note \"while compiling `D.m` inherited by subclass \
-`C`\".",
+`C`\". A CPython object (a foreign-import value) initializing a `bool`, \
+`int`, `float` or `str` annotation, such as `b: bool = o == 1`, is refused \
+rather than converted implicitly (D-258, #1419): the help names the \
+explicit conversion, e.g. `b: bool = bool(o == 1)`.",
         example: "\
 def f() -> None:
     x: int = \"hello\"
@@ -1470,7 +1476,11 @@ which is true of the host-side instances of its published family (an \
 Part 2a of #1371 lets a second CPython \
 object be a method or direct call's argument or a subscript key, and \
 admits a call of a subscript result (`callbacks[k](tok)`) under the same \
-argument rule; the result is another CPython object. Part 2b of #1371 \
+argument rule; the result is another CPython object. Part 8 of #1371 \
+lets each of those three call shapes take keyword arguments \
+(`o.split(\",\", maxsplit=1)`, `sorted(xs, reverse=True)`) under the same \
+argument rule, and admits `None` as a positional or keyword argument; \
+`**` unpacking stays refused by `C0001`. Part 2b of #1371 \
 admits a membership test (`k in o`, `k not in o`) of an `int`, `float`, \
 `bool`, `str` or `object` item in the object, evaluated by CPython's own \
 `PySequence_Contains` with a `bool` result, and a slice load \
@@ -1484,7 +1494,10 @@ or `object` elements. Part 6 of #1371 admits `and`/`or` with an \
 object operand: as a condition the object's truth is `PyObject_IsTrue`, \
 and as a value the result is an `object` when the other operand is an \
 `object`, `int`, `float`, `bool` or `str`, a native operand boxed only \
-when it is the one selected. The loop is \
+when it is the one selected. #1435 lets an instance of a regular pycc \
+class (not an enum or an exception class) be a positional or keyword \
+argument of a method call, a direct call or a call of a subscript \
+result, crossing as a carrier of its run-time class. The loop is \
 admitted when the iterable is written as an attribute load \
 (`for x in o.attr:`), a method call (`for x in o.method(...):`) or a bare \
 name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
@@ -1495,8 +1508,9 @@ pycc exception class, protocol, enum or generic class, a comparison chain with a
 equality test against a bare `None`, a rich comparison with an operand \
 of any other type, a `match` subject, iterating over a subscript load \
 (`for x in o[k]:`) or inside a comprehension, \
-passing an argument of any other type to one of its methods, to the \
-object itself or to a subscript result, indexing or slicing with a key \
+passing an argument of any other type (an enum member, an exception \
+instance, a class method's `cls`) to one of its methods, to the object \
+itself or to a subscript result, indexing or slicing with a key \
 or bound of any other type, joining an object with a value of any other \
 type in an `and`/`or`, and testing membership of an item of any \
 other type in an object or of an `object` item in a native container \

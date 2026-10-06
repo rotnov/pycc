@@ -35,6 +35,31 @@ fn lowers_a_bare_none_literal_unchanged() {
 }
 
 #[test]
+fn lowers_not_implemented_unchanged() {
+    // `HirExpr::NotImplemented -> MirExpr::NotImplemented` (#1418): the HIR
+    // admits it only as a comparison method's `return NotImplemented` in an
+    // `--ext` module, but the lowering arm itself is context-free.
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+            target: "x".to_string(),
+            value: HirExpr::NotImplemented,
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![MirItem::TopLevelStmt(MirStmt::Assign {
+            target: "x".to_string(),
+            value: MirExpr::NotImplemented,
+        })]
+    );
+}
+
+#[test]
 fn builds_a_compare_expression_with_bool_type() {
     let hir = HirModule {
         seeded_builtin_exception_classes: false,

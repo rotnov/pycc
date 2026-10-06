@@ -20,6 +20,7 @@ use std::collections::HashMap;
 mod foreign_static;
 mod instance_hash;
 mod receiver_dispatch;
+mod regular_method;
 mod sequence;
 pub(crate) mod set_ops;
 
@@ -104,6 +105,7 @@ pub(super) fn lower_expr(
         HirExpr::BoolLiteral(b) => MirExpr::BoolLiteral(*b),
         HirExpr::StringLiteral(s) => MirExpr::StringLiteral(s.clone()),
         HirExpr::NoneLiteral => MirExpr::NoneLiteral,
+        HirExpr::NotImplemented => MirExpr::NotImplemented,
         // #1021: a `[]`/`{}` whose element type `pycc_types`'
         // empty-container pre-pass resolved. The carried `Ty` crosses
         // straight into MIR, because MIR has nothing to derive it from --
@@ -1437,40 +1439,15 @@ pub(super) fn lower_expr(
                     ty,
                 };
             }
-            // #432: walk the MRO to find the method's mangled name.
-            let (owner, mangled) = class_def
-                .mro
-                .iter()
-                .find_map(|mro_class| {
-                    let mro_def = mro_class_def(mro_class, classes);
-                    mro_def
-                        .methods
-                        .iter()
-                        .find(|(name, _)| name == method)
-                        .map(|(_, mangled)| (mro_class, mangled.clone()))
-                })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "pycc_mir: internal error: method `{method}` not declared on class `{}` or \
-                     any base in its MRO -- pycc_types::check should have rejected this HIR \
-                     before it reached pycc_mir",
-                        class_def.name
-                    )
-                });
-            // #1337 (D-254): the receiver-exact copy when one exists.
-            let mangled = exact_callee(&class_def.name, owner, mangled, scopes, classes);
-            let ty = lookup(scopes, &format!("$fn:{mangled}"));
-            let mut call_args = Vec::with_capacity(args.len() + 1);
-            call_args.push(base);
-            call_args.extend(
-                args.iter()
-                    .map(|a| lower_expr(a, scopes, classes, current_class)),
-            );
-            MirExpr::Call {
-                callee: mangled,
-                args: call_args,
-                ty,
-            }
+            regular_method::lower_regular_method_call(
+                base,
+                class_def,
+                method,
+                args,
+                scopes,
+                classes,
+                current_class,
+            )
         }
         // Part 2a of #1371: `table[k](args)`. `pycc_types` admits the node
         // only when the callee is a CPython object, so it is the existing
@@ -1492,6 +1469,29 @@ pub(super) fn lower_expr(
                     .map(|a| lower_expr(a, scopes, classes, current_class))
                     .collect(),
             }
+        }
+        // Part 8 of #1371: `pycc_types` admits a keyword call only on a
+        // CPython object, so its positional half lowers to `ObjCall` or
+        // `ObjMethodCall` through the arms above, and the keyword values
+        // ride beside it.
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            // Any other positional half is a front-end defect that
+            // `pycc_codegen::foreign_call_emit::emit_keyword_call` reports.
+            let call = lower_expr(call, scopes, classes, current_class);
+            let (names, values) = keywords
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.clone(),
+                        lower_expr(value, scopes, classes, current_class),
+                    )
+                })
+                .unzip();
+            MirExpr::ObjKeywordCall(Box::new(crate::ObjKeywordCall {
+                call,
+                names,
+                values,
+            }))
         }
         // PEP 695 (#387): `GenericClassInstantiate` should never reach MIR
         // — `pycc_types::monomorphize` rewrites every
@@ -1658,6 +1658,7 @@ pub(super) fn pre_bind_named_expr_targets(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => {}
         HirExpr::ListPop { list } => {
@@ -1764,6 +1765,12 @@ pub(super) fn pre_bind_named_expr_targets(
             pre_bind_named_expr_targets(callee, scopes, classes, current_class);
             for arg in args {
                 pre_bind_named_expr_targets(arg, scopes, classes, current_class);
+            }
+        }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            pre_bind_named_expr_targets(call, scopes, classes, current_class);
+            for (_, value) in keywords {
+                pre_bind_named_expr_targets(value, scopes, classes, current_class);
             }
         }
     }

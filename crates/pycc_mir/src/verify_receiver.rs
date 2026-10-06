@@ -242,7 +242,9 @@ impl Verifier<'_> {
 
     fn stmt(&self, stmt: &MirStmt) {
         match stmt {
-            MirStmt::ExprStmt(value) | MirStmt::Assign { value, .. } => self.expr(value),
+            MirStmt::ExprStmt(value)
+            | MirStmt::Assign { value, .. }
+            | MirStmt::ObjRaise { value } => self.expr(value),
             MirStmt::NoOp
             | MirStmt::Unreachable
             | MirStmt::Reraise
@@ -364,6 +366,7 @@ impl Verifier<'_> {
             | MirExpr::BoolLiteral(_)
             | MirExpr::StringLiteral(_)
             | MirExpr::NoneLiteral
+            | MirExpr::NotImplemented
             | MirExpr::Name { .. }
             | MirExpr::EmptyList(_)
             | MirExpr::EmptyDict(_)
@@ -506,6 +509,10 @@ impl Verifier<'_> {
             MirExpr::ObjCall { callee, args } => {
                 self.expr(callee);
                 self.exprs(args);
+            }
+            MirExpr::ObjKeywordCall(call) => {
+                self.expr(&call.call);
+                self.exprs(&call.values);
             }
             MirExpr::Comprehension(comp) => {
                 self.source(&comp.source);

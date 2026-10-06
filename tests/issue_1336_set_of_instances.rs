@@ -869,11 +869,11 @@ fn an_uncompiled_set_element_type_is_still_refused() {
 const COMP_R: &str = "class R:\n    def __init__(self, v: int) -> None:\n        self.v = v\n\n\n";
 
 /// A set comprehension of instances is admitted since #1344
-/// (`tests/issue_1344_set_comprehensions.rs` carries its differentials);
-/// an unannotated helper returning one from a class-constructor element
-/// still cannot be inferred and is one honest `C0001` naming #1342.
+/// (`tests/issue_1344_set_comprehensions.rs` carries its differentials).
+/// Since #1342 an unannotated helper returning one from a class-constructor
+/// element infers `set[R]` as well, so the program runs like CPython.
 #[test]
-fn an_unannotated_helper_returning_a_set_comprehension_of_instances_is_c0001() {
+fn an_unannotated_helper_returning_a_set_comprehension_of_instances_matches_cpython() {
     for (kind, body) in [
         ("expr", "def _h():\n    return {R(i) for i in range(3)}\n"),
         (
@@ -881,12 +881,10 @@ fn an_unannotated_helper_returning_a_set_comprehension_of_instances_is_c0001() {
             "def _h():\n    t = {R(i) for i in range(3)}\n    return t\n",
         ),
     ] {
-        assert_one_error(
+        assert_native_matches_cpython(
             &format!("e2e_1343_comp_unannotated_{kind}"),
             &format!("{COMP_R}{body}\n\nprint(len(_h()))\n"),
-            "C0001",
-            "cannot infer an unannotated private helper's `set[R]` return yet",
-            "#1342",
+            "3\n",
         );
     }
 }

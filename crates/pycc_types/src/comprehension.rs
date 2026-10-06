@@ -271,8 +271,7 @@ pub(crate) fn comp_container_of(elt: &CompElt) -> Ty {
 
 /// The `help` of [`inferred_set_return_limit`]'s `C0001`.
 const INFERRED_SET_RETURN_HELP: &str = "annotate the helper's return, for example `-> set[C]`; \
-     inferring it needs solver typing of a class-constructor call (#1342) and of a set-typed \
-     name's element in a comprehension (#1360)";
+     inferring it needs solver typing of a set-typed name's element in a comprehension (#1360)";
 
 /// #1344 (Part 2 of #1336): the honest `C0001` for an unannotated private
 /// helper whose solver-inferred return is `set[int]`/`frozenset[int]` while
@@ -280,8 +279,9 @@ const INFERRED_SET_RETURN_HELP: &str = "annotate the helper's return, for exampl
 ///
 /// The solver types a set comprehension's container from its element term
 /// (`crate::constraints::set_comp`), and falls back to `set[int]` when it
-/// has no term for the element: a class-constructor call (#1342), or the
-/// loop variable of a comprehension over a set-typed name (#1360). The
+/// has no term for the element: the loop variable of a comprehension over a
+/// set-typed name (#1360). A class-constructor element has a term since
+/// #1342 (`crate::constraints::constructor_call`). The
 /// check phase does type that element, so without this relabel the program
 /// would meet a false `T0022` "expected return type `set[int]`". Returns
 /// `None` for every other mismatch, which keeps its own diagnostic; the
@@ -329,7 +329,7 @@ mod tests {
                 assert_eq!(diag.code, "C0001");
                 assert!(diag.message.contains(&actual.name()), "{}", diag.message);
                 let help = diag.help.as_deref().unwrap_or_default();
-                assert!(help.contains("#1342") && help.contains("#1360"), "{help}");
+                assert!(help.contains("#1360") && !help.contains("#1342"), "{help}");
             }
         }
     }

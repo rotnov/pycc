@@ -1442,7 +1442,12 @@ function body), so a raising `__eq__` or `__lt__` surfaces CPython's own
 exception. An identity test (`is`, `is not`) is a plain pointer comparison in
 compiled code with no failure edge; a `None` operand adds only the
 infallible `pycc_ext_obj_none` call, which returns the borrowed `Py_None`, so
-it creates no reference either. `pycc_ext_obj_isinstance(o, cls, builtin)` wraps `PyObject_IsInstance`
+it creates no reference either. The admitted `return NotImplemented` of a comparison method
+([#1418](https://github.com/rotnov/pycc/issues/1418)) is likewise one infallible call,
+`pycc_ext_obj_not_implemented`, which returns the borrowed `Py_NotImplemented`
+(immortal on CPython 3.13+); a compiled return hands that borrow back as is,
+and only a result crossing the export boundary is packed through
+`pycc_ext_pack_object`, which takes the new reference the host caller owns. `pycc_ext_obj_isinstance(o, cls, builtin)` wraps `PyObject_IsInstance`
 and answers a C `int` (`-1` on failure); it borrows both operands, and when
 `cls` is `NULL` the `builtin` selector (`0`..`6` for `int`, `str`, `float`,
 `bool`, `list`, `dict`, `tuple`; the last three since Part 7 of #1371) names
@@ -1452,8 +1457,17 @@ the leaked set either. An out-of-range selector or a `NULL` operand raises
 
 Against a class compiled in the same module (Part 7 of #1371),
 `pycc_ext_obj_isinstance_compiled(o, name)` borrows `o` and the class's
-constant NUL-terminated name, and has the same `1`/`0`/`-1` contract. It
-calls the generated `pycc_ext_compiled_class_isinstance`, which tests `o`
+constant NUL-terminated name, and has the same `1`/`0`/`-1` contract. A
+carrier of a pycc instance (an object whose type uses the shared carrier
+deallocator, below, and that holds an instance) is answered first, without
+CPython: since
+[#1435](https://github.com/rotnov/pycc/issues/1435) the generated
+`pycc_ext_carrier_class_isinstance` matches the carried instance's run-time
+class name (`pycc_rt_ext_instance_class`) against a table of every regular
+class's MRO, so a carrier of an unpublished class, or of an unpublished
+subclass, answers as CPython would. Any other object -- including a
+published type's object that `__new__` made and no `tp_init` filled -- goes to the generated
+`pycc_ext_compiled_class_isinstance`, which tests `o`
 against the type object of each published class whose MRO contains `name`.
 Those type objects are kept for that purpose in per-class file statics
 (`pycc_ext_type_object_<Class>`): registration moves the reference
@@ -1489,6 +1503,82 @@ as every other producer. One edge leaks: when an argument raises after the
 callee was produced, the call is never reached and the produced callee is not
 released -- the [#1092](https://github.com/rotnov/pycc/issues/1092) leak-only
 rule, once per failure.
+
+**A keyword call reuses that ownership and adds one tuple.** Part 8 of
+[#1371](https://github.com/rotnov/pycc/issues/1371) admits keyword arguments on
+all three object-call shapes (`MirExpr::ObjKeywordCall`). Codegen packs the
+positional arguments and then the keyword values into one slot array, and
+passes the keyword names as global C strings to `pycc_ext_obj_call_kw` (a
+method call's bound method, or a produced callee) or
+`pycc_ext_obj_call_kw_borrowed` (a borrowed callee, which takes one extra
+reference and delegates). The helper builds a `kwnames` tuple of interned
+strings, calls `PyObject_Vectorcall(callable, args, nargs, kwnames)` and then
+releases the tuple, the callable and every packed slot on every path, exactly
+as `pycc_ext_obj_call` does for its own slots; a packing failure in any slot
+(positional or keyword) is checked first and fails the call without calling
+it. `PyObject_Vectorcall` with `kwnames` is a deviation in mechanism from
+`PyObject_Call` with a keyword `dict`, not in behaviour (D-258's 2026-10-05
+Part 8 amendment). The result is a new reference leaked under the #1092 rule.
+A `None` argument (positional or keyword) is CPython's own `Py_None`, borrowed
+from `pycc_ext_obj_none` and packed by `pycc_ext_obj_pack_object`, which takes
+the reference the call then consumes.
+
+**A pycc instance argument crosses as a carrier of its run-time class.**
+[#1435](https://github.com/rotnov/pycc/issues/1435) adds
+`pycc_ext_obj_pack_instance(inst)`, the packer for an instance of a regular
+pycc class passed to a call on a CPython object, positionally or (with Part 8
+of #1371's keyword calls) as a keyword value -- `cb(self)`, `o.m(1, q)`,
+`table[k](q)`, `E(t, state=self)`. It returns a new reference to a
+`PyccExtInstance` (the `{PyObject_HEAD; void *inst;}` carrier #1145
+introduced for constructed instances) and keeps the packers' one contract
+above. Four rules fix what that carrier is.
+
+- *Its type is the run-time class's.* The class name is field 0 of the
+  instance's layout descriptor (`pycc_rt_ext_instance_class`), so an
+  instance of a subclass crosses as the subclass even through a base-typed
+  name. A **published** class answers with its own type object -- every
+  published type is now a carrier type, sized `sizeof(PyccExtInstance)` with
+  the shared deallocator, and a non-constructible one keeps
+  `Py_TPFLAGS_DISALLOW_INSTANTIATION` -- so the host can call the class's
+  exported methods on what it received. Any other class (private, publishing
+  nothing, or a generic class) gets a method-less type named
+  `<module>.<Class>` (`__main__.<Class>` in an embedded executable), created
+  on first use with `Py_TPFLAGS_DISALLOW_INSTANTIATION` and cached by class
+  name for the module's lifetime. The cache key is the bare class name, which
+  is unique per artifact because the project namespace is flat (a second
+  top-level `Q` is a `C0001`); a generic class's instantiations share one
+  layout name and are never published, so they share one method-less type.
+- *Identity is CPython's while a carrier lives.* The instance keeps a weak
+  back-pointer to its live carrier (`pycc_rt_ext_instance_carrier` /
+  `_set_carrier`), set by `tp_init` for a host-constructed object and by the
+  packer for a fresh one, and cleared by the carrier's deallocator only when
+  it still names that carrier. So `q.go(lambda x: x) is q`, two crossings of
+  one instance are `is`-equal, and a host that drops every reference gets a
+  fresh carrier for the next crossing -- the instance itself is never freed
+  (D-107, as for a constructed instance above).
+- *Only the call-argument position is admitted.* The checker's
+  `is_carriable_instance` (`crates/pycc_types/src/foreign.rs`) admits a
+  `Ty::Instance` of a non-enum class with no exception type tag and no
+  builtin exception on its MRO; a `Protocol`-typed value, an enum member and
+  an exception instance stay `I0404`. A subscript key, a comparison operand
+  and a list-display element stay refused, because the class's
+  `__hash__`/`__eq__` would not run there (below). A `@classmethod`'s own
+  `cls` is refused by name (`Environment::in_classmethod`): it is typed as
+  an instance but is a null receiver, and an alias that slips past the
+  syntactic check reaches the packer's `NULL` guard, which raises
+  `SystemError`.
+- *Deviations from CPython, pinned by
+  `tests/issue_1435_instance_argument.rs`.* A carrier exposes exactly its
+  type's exported methods: no attribute is readable, so `hasattr(x, 'n')` is
+  `False` (as for a host-constructed object since #1145). Published types are
+  flat, so the host's own `isinstance(derived, mod.Base)` is `False`; a
+  compiled `isinstance(x, Base)` on a carrier that comes back answers from
+  the run-time class's MRO instead (above), and matches CPython. A class's dunder
+  overrides (`__eq__`, `__hash__`, `__repr__`, ...) are not wired to type
+  slots, so the host sees `object`'s identity equality and default `repr`.
+  And an instance whose `self` escapes during `__init__` is packed before
+  `tp_init` links the constructed carrier, so that escape gets a different
+  carrier than the host's object.
 
 **A slice load is one more producer; a membership test is not.** Part 2b of
 [#1371](https://github.com/rotnov/pycc/issues/1371) adds
@@ -1631,6 +1721,37 @@ packer `NULL` -- the `OverflowError` for an `int` outside the inline range,
 until [#1040](https://github.com/rotnov/pycc/issues/1040) -- takes the node's
 foreign failure edge. The hosted test runs the object-operand shapes 200 times
 inside a function and pins `sys.getrefcount` of each object operand unchanged.
+
+**A raised object is CPython's own `raise`.** Part 9 of
+[#1371](https://github.com/rotnov/pycc/issues/1371) lowers `raise o`, for an
+object `o`, to `MirStmt::ObjRaise` and to one call of
+`pycc_ext_obj_raise(o)`, which returns `void`. The helper mirrors CPython's
+`raise`. An exception instance is raised as it is. An exception class is
+called with no arguments: a constructor that fails raises its own exception,
+and one that returns a non-exception raises CPython's `TypeError` ("calling
+... should have returned an instance of BaseException"). Any other value
+raises `TypeError: exceptions must derive from BaseException`. A `NULL`
+operand raises `SystemError` as a defence. The instance is set with
+`PyErr_SetObject`, as CPython's `raise` does. That keeps its identity, and
+sets its implicit `__context__` from the exception CPython is handling, such
+as the host's own `except` around the call. A pycc `except` handler is not a
+CPython handler, so an object raised inside one gets no `__context__` from
+the pycc exception it handles. Every path ends in
+`pycc_ext_obj_error_bridge()`, so the raise always becomes the pending pycc
+exception through the same tag map as a failed object operation, and the
+original object is kept for `pycc_ext_raise_pending` to restore. An uncaught
+`raise o` therefore reaches the host as the identical object, not as a
+copy. The operand is borrowed (an operand produced by a call is leaked on
+the same terms as any object call result). The statement ends its block
+exactly like a native `raise`, with `unreachable` that the body emitter
+replaces with a branch to the innermost exception target. It does not take
+the module-exec failure edge, so a module-level `try` still catches it
+(`crates/pycc_codegen/src/foreign_raise.rs`). Two shapes are refused at
+check time: `raise ... from ...` with an object as the exception or the
+cause (`C0001`), and an `except` clause naming a foreign class (`T0021`).
+`except Exception` and the builtin classes catch an object raise through
+the tag map. The hosted tests compare the caught, uncaught and embedded
+(D-248) results with CPython 3.14.7 (`tests/issue_1371_object_raise.rs`).
 
 `len`, a truth test, Part 4's four conversions and Part 4's tuple unpack are
 the operations that add nothing to that leaked set. `pycc_ext_obj_len` answers a `Py_ssize_t` and
