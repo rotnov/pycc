@@ -317,10 +317,15 @@ fn a_same_module_instance_slot_and_property_get_a_descriptor() {
     assert_eq!(names, ["parse_conf", "k", "conf"]);
     assert_eq!(getsets[0], slot("parse_conf", 0, conf_ty()));
     assert_eq!(getsets[1], slot("k", 3, Ty::Int));
-    match &getsets[2] {
-        ExtGetset::Property { getter, .. } => assert_eq!(getter.return_ty, conf_ty()),
-        ExtGetset::Slot { .. } => panic!("`conf` is a property descriptor"),
-    }
+    // The slots come first, so the walk passes both arms before `conf`.
+    let property_return = getsets
+        .iter()
+        .find_map(|getset| match getset {
+            ExtGetset::Property { getter, .. } => Some(getter.return_ty.clone()),
+            ExtGetset::Slot { .. } => None,
+        })
+        .expect("`conf` is a property descriptor");
+    assert_eq!(property_return, conf_ty());
 }
 
 /// The instance slot's getter packs its word through #1449's egress, which
