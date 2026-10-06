@@ -11,14 +11,14 @@
 //!
 //! [`object_return_value`] folds the bare form into the literal one, and
 //! [`object_return_none`] turns the literal into
-//! [`foreign_compare::none_pointer`]'s borrowed `Py_None`. Borrowed is the
+//! [`foreign_pack::none_pointer`]'s borrowed `Py_None`. Borrowed is the
 //! leak-only ownership model's convention for a compiled body
 //! (`docs/RUNTIME.md`): the export wrapper's `pycc_ext_pack_object` takes
 //! the new reference the host receives, exactly as it does for a borrowed
 //! object parameter returned by name.
 
 use super::*;
-use crate::foreign_compare::none_pointer;
+use crate::foreign_pack::none_pointer;
 
 /// The value a `return` statement hands back: `value` itself, except that a
 /// bare `return` in an `object`-returning function is `return None`, spelled

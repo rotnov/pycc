@@ -44,6 +44,10 @@ pub(crate) struct CompView<'a> {
 /// `ForList`'s; a comprehension adds nothing new here. Since #1344 that
 /// includes a `set[C]`/`frozenset[C]` of user-class instances, whose loop
 /// variable is the instance.
+///
+/// An iterable expression ([`CompIter::Iterable`], Part 1 of #1255) must be
+/// a CPython object (D-258), whose loop variable is an object too; every
+/// other type is refused with [`non_object_iterable`].
 pub(crate) fn resolve_comp_iter(
     env: &Environment,
     local_names: &[&str],
@@ -72,7 +76,56 @@ pub(crate) fn resolve_comp_iter(
                 )),
             }
         }
+        CompIter::Iterable(iterable) => match infer_expr_in(env, local_names, iterable)? {
+            Ty::Object => Ok(Ty::Object),
+            other => Err(non_object_iterable(&other)),
+        },
     }
+}
+
+/// The `C0001` for a comprehension whose iterable expression is not a
+/// CPython object (Part 1 of #1255). Before #1255 the HIR refused every
+/// such shape by syntax; the type is what decides it now, and a native
+/// container must still be bound to a name first.
+fn non_object_iterable(ty: &Ty) -> Diagnostic {
+    Diagnostic::error(
+        "C0001",
+        format!(
+            "only `range(...)`, a bare name or a CPython object is supported so far as a comprehension's iterable, got an expression of type `{}`",
+            ty.name()
+        ),
+        Span::new(0, 0),
+    )
+    .with_help("bind a native container to a name first and iterate the name")
+}
+
+/// The container a list or set comprehension over a CPython object produces
+/// (Part 1 of #1255): a fresh CPython `list` or `set`, typed as the opaque
+/// [`Ty::Object`] (D-258). Each element is packed across the boundary, so it
+/// must be packable ([`crate::foreign::is_packable_operand`]); a dict
+/// comprehension over an object is not compiled yet.
+fn object_comp_container_ty(
+    env: &Environment,
+    local_names: &[&str],
+    elts: &CompElts<'_>,
+) -> Result<Ty, Diagnostic> {
+    let (elt, kind) = match *elts {
+        CompElts::List(elt) => (elt, "list"),
+        CompElts::Set(elt) => (elt, "set"),
+        CompElts::Dict(..) => {
+            return Err(crate::foreign::object_operation_unsupported(
+                "a dict comprehension over a CPython object",
+            ));
+        }
+    };
+    let elt_ty = infer_expr_in(env, local_names, elt)?;
+    if !crate::foreign::is_packable_operand(&elt_ty) {
+        return Err(crate::foreign::object_operation_unsupported(&format!(
+            "collecting a `{}` element into a CPython {kind}",
+            elt_ty.name()
+        )));
+    }
+    Ok(Ty::Object)
 }
 
 /// Checks `cond` and the element expressions against `env`, in which the
@@ -82,15 +135,21 @@ pub(crate) fn resolve_comp_iter(
 /// `DictLiteral`'s own gates; no new diagnostic code is minted).
 /// A set comprehension may also produce a `set[C]` of a hashable user class
 /// (#1344), through the same `crate::set_element::check_set_element` gate a
-/// set literal uses.
+/// set literal uses. Over a CPython object (`object_source`, Part 1 of
+/// #1255) the container is a CPython object instead
+/// ([`object_comp_container_ty`]).
 pub(crate) fn comp_container_ty(
     env: &Environment,
     local_names: &[&str],
     cond: Option<&HirExpr>,
     elts: &CompElts<'_>,
+    object_source: bool,
 ) -> Result<Ty, Diagnostic> {
     if let Some(cond) = cond {
         infer_expr_in(env, local_names, cond)?;
+    }
+    if object_source {
+        return object_comp_container_ty(env, local_names, elts);
     }
     match *elts {
         CompElts::List(elt) => {
@@ -161,7 +220,9 @@ pub(crate) fn check_comp_assign(
 ) -> Result<(), Diagnostic> {
     let var_ty = resolve_comp_iter(env, local_names, comp.iter)?;
     check_assignment(env, comp.var, var_ty)?;
-    let container_ty = comp_container_ty(env, local_names, comp.cond, &comp.elts)?;
+    // A statement form never holds an iterable expression: the HIR lowers
+    // that comprehension to a plain `Assign` (Part 1 of #1255).
+    let container_ty = comp_container_ty(env, local_names, comp.cond, &comp.elts, false)?;
     check_assignment(env, target, container_ty)
 }
 
@@ -193,6 +254,7 @@ pub(crate) fn infer_comprehension(
         local_names,
         comp.cond.as_ref(),
         &CompElts::from(&comp.elt),
+        matches!(comp.iter, CompIter::Iterable(_)),
     )
 }
 
@@ -244,6 +306,9 @@ pub(crate) fn inferred_set_return_limit(declared: &Ty, actual: &Ty) -> Option<Di
         .with_help(INFERRED_SET_RETURN_HELP),
     )
 }
+
+#[cfg(test)]
+mod object_tests;
 
 #[cfg(test)]
 mod tests {

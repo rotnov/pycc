@@ -84,21 +84,69 @@ pub(super) fn lower_raise(
     let Some(exc) = exc else {
         return MirStmt::Reraise;
     };
-    let exception = lower_exception_value(exc, scopes, classes, current_class);
-    if let Some(cause) = cause {
-        return MirStmt::RaiseFrom {
-            exception,
-            cause: lower_exception_value(cause, scopes, classes, current_class),
-            // Filled in by `set_frame_function`'s post-pass over the
-            // enclosing item's whole body, once `frame_name` is known;
-            // `lower_raise` never sees it directly (see
-            // `MirStmt::Raise::frame_function`'s doc comment).
-            frame_function: String::new(),
+    let Some(cause) = cause else {
+        return match lower_raise_operand(exc, scopes, classes, current_class) {
+            RaiseOperand::Object(value) => MirStmt::ObjRaise { value },
+            // `frame_function` is filled in by `set_frame_function`'s
+            // post-pass over the enclosing item's whole body, once
+            // `frame_name` is known; `lower_raise` never sees it directly
+            // (see `MirStmt::Raise::frame_function`'s doc comment).
+            RaiseOperand::Exception(exception) => MirStmt::Raise {
+                exception,
+                frame_function: String::new(),
+            },
         };
-    }
-    MirStmt::Raise {
-        exception,
+    };
+    MirStmt::RaiseFrom {
+        exception: lower_exception_value(exc, scopes, classes, current_class),
+        cause: lower_exception_value(cause, scopes, classes, current_class),
+        // Filled in by `set_frame_function`, as for `Raise` above.
         frame_function: String::new(),
+    }
+}
+
+/// A lowered `raise` operand without a cause (Part 9 of #1371).
+enum RaiseOperand {
+    /// A CPython object, raised by [`MirStmt::ObjRaise`].
+    Object(MirExpr),
+    /// A pycc exception, raised by [`MirStmt::Raise`].
+    Exception(MirExceptionValue),
+}
+
+/// Lowers the operand of a cause-less `raise`, deciding by type whether it
+/// is a CPython object (Part 9 of #1371) or a pycc exception.
+///
+/// A call is decided before [`lower_exception_value`] can claim it by
+/// name: [`exception_type_tag`] resolves the flat seven builtin names
+/// without consulting any binding, so a call of a foreign class that spells
+/// one (`from builtins import ValueError`, then `raise ValueError("x")`)
+/// must be recognised as an object call first, with the same non-panicking
+/// scope probe `lower_expr`'s `ObjCall` arm uses. Any other shape is
+/// lowered once, exactly as [`lower_exception_value`]'s `Existing` arm
+/// lowers it, and its type decides. `pycc_types` refuses a cause next to an
+/// object operand, so a `raise ... from ...` never comes here.
+fn lower_raise_operand(
+    expr: &HirExpr,
+    scopes: &mut [HashMap<String, Ty>],
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) -> RaiseOperand {
+    if let HirExpr::Call { callee, .. } = expr {
+        if scopes.iter().rev().find_map(|scope| scope.get(callee)) == Some(&Ty::Object) {
+            return RaiseOperand::Object(lower_expr(expr, scopes, classes, current_class));
+        }
+        return RaiseOperand::Exception(lower_exception_value(
+            expr,
+            scopes,
+            classes,
+            current_class,
+        ));
+    }
+    let value = lower_expr(expr, scopes, classes, current_class);
+    if value.ty() == Ty::Object {
+        RaiseOperand::Object(value)
+    } else {
+        RaiseOperand::Exception(MirExceptionValue::Existing(value))
     }
 }
 

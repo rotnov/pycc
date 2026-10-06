@@ -520,6 +520,7 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         | MirExpr::IntBoundary(_)
         | MirExpr::StringLiteral(_)
         | MirExpr::NoneLiteral
+        | MirExpr::NotImplemented
         | MirExpr::Call { .. }
         | MirExpr::BinOp { .. }
         | MirExpr::Compare { .. }
@@ -598,6 +599,8 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         | MirExpr::ObjMethodCall { .. }
         // #1313: `ObjCall`'s `.ty()` is always `Ty::Object` too.
         | MirExpr::ObjCall { .. }
+        // Part 8 of #1371: and so is its keyword form's.
+        | MirExpr::ObjKeywordCall(_)
         // PR 3a of #1082: `ObjLen`'s own `.ty()` *is* `Ty::Int`, so unlike
         // the three nodes above it really can reach this function. It joins
         // the "owning" answer on the scalar `len`'s own argument, restated

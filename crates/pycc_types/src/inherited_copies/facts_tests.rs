@@ -115,3 +115,22 @@ fn merging_unions_every_fact() {
     assert_eq!(a.receiver_type_tests, set(&["T"]));
     assert!(a.constructs_via_receiver && a.bare_use);
 }
+
+/// Part 1 of #1255: no statement-form comprehension carries a
+/// `CompIter::Iterable` today (`comp_assign_stmt` routes it to a plain
+/// `Assign`), but the walker still visits its expression, so a receiver use
+/// inside one cannot escape the facts. Pinned directly, since no source
+/// reaches the arm.
+#[test]
+fn an_iterable_comprehension_source_is_walked() {
+    let stmt = pycc_hir::HirStmt::ListCompAssign {
+        target: "xs".to_string(),
+        var: "_v0".to_string(),
+        iter: pycc_hir::CompIter::Iterable(Box::new(pycc_hir::HirExpr::Name("self".to_string()))),
+        cond: None,
+        elt: Box::new(pycc_hir::HirExpr::Name("_v0".to_string())),
+    };
+    let mut walker = Walker::new(Some("self"));
+    walker.stmts(&[stmt]);
+    assert!(walker.facts.bare_use);
+}

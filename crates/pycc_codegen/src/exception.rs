@@ -81,6 +81,9 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // argument -- a non-callable object or a raising call makes
         // `pycc_ext_obj_call_borrowed` return `NULL`.
         | MirExpr::ObjCall { .. }
+        // Part 8 of #1371: the keyword form, on the same argument (an
+        // unexpected keyword is CPython's own `TypeError`).
+        | MirExpr::ObjKeywordCall(_)
         // PR 3a of #1082: `ObjLen` joins them on the identical argument --
         // `PyObject_Size` raises `TypeError` for an operand with no length,
         // and `foreign_len::emit_len` owns the `-1` check that actually
@@ -180,6 +183,7 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         | MirExpr::IntBoundary(_)
         | MirExpr::StringLiteral(_)
         | MirExpr::NoneLiteral
+        | MirExpr::NotImplemented
         | MirExpr::Name { .. }
         | MirExpr::Compare { .. }
         | MirExpr::FString(_)

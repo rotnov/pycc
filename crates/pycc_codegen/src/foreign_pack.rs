@@ -41,9 +41,12 @@ pub(super) fn shim_fn<'ctx>(
 /// Every admitted operand has exactly one packer, and the mapping is total
 /// over what `pycc_types` admits as an argument of a call on a `Ty::Object`
 /// or as the key of a `Ty::Object` subscript: `int`/`float`/`bool`/`str`,
-/// and since Part 2a of #1371 a second `object`. Any other `Scalar` is a
-/// front-end defect: the checker refuses a container, an instance and
-/// `None` there before lowering ever runs.
+/// since Part 2a of #1371 a second `object`, and since #1435 an instance of
+/// a regular user class -- a call argument only, never a key, a list
+/// element or a comparison operand. A `None` call argument (Part 8 of
+/// #1371) reaches here already replaced by [`none_pointer`]'s `object`. Any
+/// other `Scalar` is a front-end defect: the checker refuses a container
+/// there before lowering ever runs.
 pub(super) fn packer_for<'ctx>(scalar: Scalar<'ctx>) -> (&'static str, BasicValueEnum<'ctx>) {
     match scalar {
         Scalar::Int(value) => (EXT_OBJ_PACK_INT_SYMBOL, value.into()),
@@ -51,10 +54,11 @@ pub(super) fn packer_for<'ctx>(scalar: Scalar<'ctx>) -> (&'static str, BasicValu
         Scalar::Bool(value) => (EXT_OBJ_PACK_BOOL_SYMBOL, value.into()),
         Scalar::Str(value) => (EXT_OBJ_PACK_STR_SYMBOL, value.into()),
         Scalar::Object(value) => (EXT_OBJ_PACK_OBJECT_SYMBOL, value.into()),
+        Scalar::Instance(value) => (EXT_OBJ_PACK_INSTANCE_SYMBOL, value.into()),
         _ => panic!(
             "pycc_codegen: internal error: an operand of a foreign object operation did not \
              evaluate to a marshallable scalar -- pycc_types admits only `int`, `float`, \
-             `bool`, `str` and `object` there"
+             `bool`, `str`, `object` and a class instance there"
         ),
     }
 }
@@ -82,5 +86,32 @@ pub(super) fn emit_pack<'ctx>(
         .unwrap_or_else(|_| panic!("build_call should not fail for {symbol}"))
         .try_as_basic_value()
         .expect_basic("a pycc_ext_obj_pack_* helper returns PyObject *")
+        .into_pointer_value()
+}
+
+/// A borrowed pointer to CPython's `None` ([`EXT_OBJ_NONE_SYMBOL`]).
+///
+/// Shared by an identity test's `None` side (`foreign_compare.rs`, Part 1
+/// of #1371), a `None` call argument (Part 8 of #1371) and a `None`
+/// returned as an object (`object_return.rs`, Part 1 of #1387). pycc's own
+/// `None` is an all-zero placeholder with no `PyObject *`, so
+/// [`packer_for`] has no row for it; a `None` argument instead becomes this
+/// pointer as a [`Scalar::Object`], which [`emit_pack`] packs through the
+/// `object` packer like any other object operand. The packer's new
+/// reference is the one the consuming call helper releases, so `None`'s
+/// refcount is unchanged by the call (and `None` is immortal on every
+/// supported CPython anyway).
+pub(crate) fn none_pointer<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+) -> PointerValue<'ctx> {
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let none_fn = shim_fn(module, EXT_OBJ_NONE_SYMBOL, ptr.fn_type(&[], false));
+    builder
+        .build_call(none_fn, &[], "foreign_none")
+        .expect("build_call should not fail for pycc_ext_obj_none")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_none returns PyObject *")
         .into_pointer_value()
 }

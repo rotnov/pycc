@@ -29,6 +29,10 @@ mod matching;
 mod narrow;
 mod obj_bind;
 mod obj_call;
+mod obj_keyword_call;
+mod obj_raise;
+// Part 1 of #1255: a comprehension over a CPython object.
+mod object_comprehension;
 mod protocol;
 mod receiver_class_call;
 mod scope;

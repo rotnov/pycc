@@ -193,6 +193,12 @@ impl SignatureTable {
         self.container_method_names.extend(names);
     }
 
+    /// Part 8 of #1371: whether `name` is a module `def` this table can bind
+    /// keyword arguments against.
+    pub(crate) fn binds(&self, name: &str) -> bool {
+        self.by_name.contains_key(name)
+    }
+
     /// Part 2a of #1371: whether `name` is one of the module's class-like
     /// names (see the field's own documentation).
     pub(crate) fn is_class_like(&self, name: &str) -> bool {
@@ -460,6 +466,35 @@ mod tests {
         crate::lower_checked(&module).expect_err("fixture must be rejected")
     }
 
+    /// Part 8 of #1371: a keyword call the binder cannot bind is either
+    /// refused here with the keyword `C0001` (`true`), or -- when its callee
+    /// could be a CPython object -- deferred to `pycc_types` as a
+    /// `HirExpr::KeywordCall` (`false`), which reports the same `C0001` for
+    /// any callee that is not one (`pycc_types`' `foreign::keyword_call`).
+    /// Either way the keywords are never bound or erased.
+    fn keyword_call_refused_here(source: &str) -> bool {
+        let module = pycc_parser::parse(source).expect("test fixture must parse");
+        match crate::lower_checked(&module) {
+            Err(diagnostic) => {
+                assert_eq!(diagnostic.code, "C0001", "source: {source}");
+                assert_eq!(
+                    diagnostic.message,
+                    crate::KEYWORD_CALL_UNSUPPORTED,
+                    "source: {source}"
+                );
+                true
+            }
+            Ok(hir) => {
+                let rendered = format!("{hir:?}");
+                assert!(
+                    rendered.contains("KeywordCall {"),
+                    "source: {source}: {rendered}"
+                );
+                false
+            }
+        }
+    }
+
     /// The argument vector of the first top-level `HirExpr::Call` statement.
     fn first_call_args(source: &str) -> Vec<HirExpr> {
         lower(source)
@@ -660,16 +695,27 @@ mod tests {
         // Runtime dispatch of a redefined name is source-order sensitive,
         // while the table is static: neither `def`'s parameter order may
         // bind the keywords, so the name is left out of the table entirely.
-        for source in [
-            "def f(a: int, b: int) -> None:\n    print(a - b)\n\nf(a=10, b=1)\n\n\
-             def f(b: int, a: int) -> None:\n    print(a - b)\n\nf(a=10, b=1)\n",
-            "f = 3\ndef f(a: int, b: int) -> None:\n    print(a - b)\n\nf(a=10, b=1)\n",
-            "from math import sqrt\ndef sqrt(a: float, b: float) -> float:\n    return a - b\n\nprint(sqrt(b=1.0, a=10.0))\n",
+        // Since Part 8 of #1371 the bare-name call is deferred to
+        // `pycc_types` (`keyword_call_refused_here`), which refuses it
+        // because the name is not a CPython object.
+        for (source, refused_here) in [
+            (
+                "def f(a: int, b: int) -> None:\n    print(a - b)\n\nf(a=10, b=1)\n\n\
+                 def f(b: int, a: int) -> None:\n    print(a - b)\n\nf(a=10, b=1)\n",
+                false,
+            ),
+            (
+                "f = 3\ndef f(a: int, b: int) -> None:\n    print(a - b)\n\nf(a=10, b=1)\n",
+                false,
+            ),
+            (
+                "from math import sqrt\ndef sqrt(a: float, b: float) -> float:\n    return a - b\n\nprint(sqrt(b=1.0, a=10.0))\n",
+                false,
+            ),
         ] {
-            let diagnostic = lower_err(source);
-            assert_eq!(diagnostic.code, "C0001", "source: {source}");
             assert_eq!(
-                diagnostic.message, "keyword call arguments are not supported yet",
+                keyword_call_refused_here(source),
+                refused_here,
                 "source: {source}"
             );
         }
@@ -717,31 +763,49 @@ mod tests {
     }
 
     #[test]
-    fn every_call_shape_outside_the_bindable_one_keeps_the_capability_rejection() {
-        for source in [
+    fn every_call_shape_outside_the_bindable_one_is_refused_or_deferred() {
+        // `false`: deferred to `pycc_types` since Part 8 of #1371, because
+        // the callee could be a CPython object (`keyword_call_refused_here`).
+        for (source, refused_here) in [
             // An undefined callee is not in the table.
-            "undefined_callee(extra=1)\n",
+            ("undefined_callee(extra=1)\n", false),
             // A method call.
-            "class C:\n    def m(self, a: int) -> None:\n        print(a)\n\nc = C()\nc.m(a=1)\n",
+            (
+                "class C:\n    def m(self, a: int) -> None:\n        print(a)\n\nc = C()\nc.m(a=1)\n",
+                false,
+            ),
             // A `super()` method call.
-            "class B:\n    def m(self, a: int) -> None:\n        print(a)\n\nclass C(B):\n    def m(self, a: int) -> None:\n        super().m(a=1)\n",
+            (
+                "class B:\n    def m(self, a: int) -> None:\n        print(a)\n\nclass C(B):\n    def m(self, a: int) -> None:\n        super().m(a=1)\n",
+                true,
+            ),
             // A bare `super()` call.
-            "class C:\n    def m(self) -> None:\n        super(x=1)\n",
+            (
+                "class C:\n    def m(self) -> None:\n        super(x=1)\n",
+                true,
+            ),
             // A class instantiation.
-            "class C:\n    def __init__(self, a: int) -> None:\n        self.a = a\n\nc = C(a=1)\n",
+            (
+                "class C:\n    def __init__(self, a: int) -> None:\n        self.a = a\n\nc = C(a=1)\n",
+                false,
+            ),
             // A builtin.
-            "print(sep=1)\n",
+            ("print(sep=1)\n", false),
             // A container method.
-            "xs = [1]\nxs.append(value=2)\n",
+            ("xs = [1]\nxs.append(value=2)\n", true),
             // A stdlib intrinsic through an aliased receiver.
-            "import math as m\n\nx = m.sqrt(x=1.0)\n",
+            ("import math as m\n\nx = m.sqrt(x=1.0)\n", true),
             // A generic class instantiation through a subscript callee.
-            "class C[T]:\n    def __init__(self, a: int) -> None:\n        self.a = a\n\nc = C[int](a=1)\n",
+            (
+                "class C[T]:\n    def __init__(self, a: int) -> None:\n        self.a = a\n\nc = C[int](a=1)\n",
+                true,
+            ),
+            // `**` unpacking.
+            ("d = {}\nundefined_callee(**d)\n", true),
         ] {
-            let diagnostic = lower_err(source);
-            assert_eq!(diagnostic.code, "C0001", "source: {source}");
             assert_eq!(
-                diagnostic.message, "keyword call arguments are not supported yet",
+                keyword_call_refused_here(source),
+                refused_here,
                 "source: {source}"
             );
         }
@@ -939,18 +1003,19 @@ mod tests {
     fn a_default_the_recognizer_rejects_keeps_the_def_out_of_the_table() {
         // `signature_of` is infallible and purely syntactic: a `def` whose
         // default it cannot represent is simply absent from the table, so a
-        // keyword call against it falls back to the capability rejection
-        // rather than binding against a signature pycc cannot materialize.
-        // The `def` reports its own `C0001` as well, so read the whole set.
-        let module = crate::pycc_parser_test_helper::parse(
-            "def f(a: int = len(\"x\")) -> None:\n    return\n\nf(a=1)\n",
-        );
+        // keyword call against it is never bound against a signature pycc
+        // cannot materialize. Since Part 8 of #1371 the call is deferred to
+        // `pycc_types` (which refuses it, `f` not being a CPython object),
+        // so the `def`'s own `C0001` is the only diagnostic lowering reports.
+        let source = "def f(a: int = len(\"x\")) -> None:\n    return\n\nf(a=1)\n";
+        let module = crate::pycc_parser_test_helper::parse(source);
+        let table = super::SignatureTable::collect(&module.body, |_| false);
+        assert!(!table.binds("f"));
         let diagnostics = crate::lower_all(&module).expect_err("fixture must be rejected");
-        assert!(
-            diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == "C0001"
-                    && diagnostic.message == "keyword call arguments are not supported yet"
-            }),
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_ne!(
+            diagnostics[0].message,
+            crate::KEYWORD_CALL_UNSUPPORTED,
             "{diagnostics:?}"
         );
     }

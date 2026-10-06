@@ -19,7 +19,7 @@ fn companion(source: &str) -> String {
     let exports = collect_exports(&module).expect("the module exports");
     let publications = collect_class_publications(&module, &exports);
     let ctors = collect_constructors(&module, &publications);
-    generate_exports_inc("m", &exports, &[], &publications, &ctors)
+    generate_exports_inc("m", &exports, &[], &publications, &ctors, &[])
 }
 
 const MODULE: &str = "class S:\n\
@@ -174,7 +174,7 @@ fn ext_companion(tag: &str, source: &str) -> String {
     let exports = collect_exports(&module).expect("the module exports");
     let publications = collect_class_publications(&module, &exports);
     let ctors = collect_constructors(&module, &publications);
-    generate_exports_inc("m", &exports, &[], &publications, &ctors)
+    generate_exports_inc("m", &exports, &[], &publications, &ctors, &[])
 }
 
 /// #1409: an unannotated defaulted parameter in an `--ext` module is the

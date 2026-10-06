@@ -14,6 +14,7 @@ mod if_exp;
 mod import;
 mod int_boundary;
 mod module;
+mod not_implemented;
 mod program;
 mod stmt;
 mod typecheck;
@@ -41,6 +42,7 @@ pub use exception::{
     builtin_exception_parent, except_handler_binding_type_name, is_builtin_exception_class,
     is_flat_builtin_exception_class,
 };
+pub use expr::object_keyword_call::KEYWORD_CALL_UNSUPPORTED;
 pub use expr::receiver_takes_method_path;
 pub(crate) use func::{
     annotation_to_ty, lower_arg_list, lower_function, lower_return_annotation, type_param_name,
@@ -59,6 +61,7 @@ pub(crate) use import::{
     import_local_name, lower_import_stmt, lower_legacy_type_alias_ann_assign, lower_type_alias_stmt,
 };
 pub use module::{LoweredModule, lower_all, lower_checked, lower_module};
+pub use not_implemented::{WIDENED_RETURN_HELP, body_returns_not_implemented};
 pub use program::{LinkInput, finalize, link};
 pub use stmt::del::{deleted_names, mentioned_names};
 pub use typecheck::{
@@ -398,6 +401,12 @@ pub enum HirExpr {
     /// existing `HirStmt::Return(None)` encoding for a bare `return`
     /// (no expression at all), which this variant does not replace.
     NoneLiteral,
+    /// CPython's `NotImplemented` singleton, as the value of `return
+    /// NotImplemented` in a comparison method of an `ext` module (#1418).
+    /// Typed `Ty::Object`. `crate::not_implemented` owns where it may
+    /// appear: nowhere else, and never in a `native` build, where the name
+    /// stays an undefined `HirExpr::Name`.
+    NotImplemented,
     Name(String),
     Call {
         callee: String,
@@ -780,6 +789,23 @@ pub enum HirExpr {
         callee: Box<HirExpr>,
         args: Vec<HirExpr>,
     },
+    /// Part 8 of #1371: a call that passes keyword arguments and that
+    /// the keyword binder (`expr::keyword_bind`) cannot bind at lowering time, kept whole
+    /// because only the callee's static type decides whether pycc can
+    /// compile it (`expr::object_keyword_call` owns the lowering rule).
+    /// `call` is the positional part of the same call: a
+    /// [`HirExpr::Call`] of a bare name, a [`HirExpr::MethodCall`] or a
+    /// [`HirExpr::ExprCall`]. `keywords` holds each `name=value` pair in
+    /// source order, after every positional argument, which is CPython's
+    /// evaluation order. `pycc_types` admits the node only when the callee
+    /// is a CPython object (`Ty::Object`) and otherwise reports the
+    /// pre-Part-8 `C0001` "keyword call arguments are not supported yet" at
+    /// `span`, the whole call's source range.
+    KeywordCall {
+        call: Box<HirExpr>,
+        keywords: Vec<(String, HirExpr)>,
+        span: Span,
+    },
     /// #1411: `type(self)(args)` inside an instance method -- a construction
     /// of the receiver's own class. The class is not carried here: it is the
     /// static type of the canonical receiver `self` in the body being
@@ -853,14 +879,16 @@ pub struct HirComprehension {
 }
 
 impl HirComprehension {
-    /// Every sub-expression, in evaluation order: the range operands (in
-    /// the enclosing scope), then `cond`, then the element expressions (a
+    /// Every sub-expression, in evaluation order: the range operands or an
+    /// iterable expression (in the enclosing scope), then `cond`, then the element expressions (a
     /// dict's key before its value). For walkers that only need to visit
     /// each sub-expression once, whatever scope it is evaluated in.
     pub fn sub_exprs(&self) -> Vec<&HirExpr> {
         let mut out = Vec::new();
-        if let CompIter::Range { start, stop, step } = &self.iter {
-            out.extend([start, stop, step]);
+        match &self.iter {
+            CompIter::Range { start, stop, step } => out.extend([start, stop, step]),
+            CompIter::Iterable(iterable) => out.push(iterable),
+            CompIter::Name(_) => {}
         }
         out.extend(self.body_exprs());
         out
@@ -933,6 +961,14 @@ pub enum CompIter {
         step: HirExpr,
     },
     Name(String),
+    /// Any other iterable expression (Part 1 of #1255), such as
+    /// `o.keys()` or `d[k].values()`, lowered in the enclosing scope. Only
+    /// a CPython object (D-258) is iterable this way: `pycc_types` refuses
+    /// every other type, and the comprehension then produces a CPython
+    /// `list` or `set` object. A comprehension's statement form with this
+    /// source lowers to a plain `HirStmt::Assign` of a
+    /// [`HirExpr::Comprehension`], not to a `*CompAssign` statement.
+    Iterable(Box<HirExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

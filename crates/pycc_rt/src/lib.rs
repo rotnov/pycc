@@ -74,7 +74,8 @@ pub use exception::{
 };
 pub use hash::{pycc_rt_hash_int, pycc_rt_hash_pointer, pycc_rt_hash_slot_int, pycc_rt_hash_tuple};
 pub use instance::{
-    PyInstanceObj, pycc_rt_instance_get_slot, pycc_rt_instance_get_slot_checked,
+    PyInstanceObj, pycc_rt_ext_instance_carrier, pycc_rt_ext_instance_class,
+    pycc_rt_ext_instance_set_carrier, pycc_rt_instance_get_slot, pycc_rt_instance_get_slot_checked,
     pycc_rt_instance_new, pycc_rt_instance_set_slot,
 };
 pub use int_bitwise::{
