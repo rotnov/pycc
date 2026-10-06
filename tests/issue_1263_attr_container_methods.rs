@@ -276,8 +276,11 @@ fn an_imported_object_s_attribute_receiver_is_refused() {
 }
 
 /// Known limit: an unannotated private helper returning an attribute
-/// `.pop()` or `.get()` cannot have its return type inferred, exactly like
-/// the bare-name forms; annotating it works, and a `None`-returning helper
+/// `.pop()` or `.get()` cannot have its return type inferred from its own
+/// body, exactly like the bare-name forms. Since #1420 a call to it whose
+/// result an annotation constrains (`def run(self) -> int: return
+/// self._take()`) supplies the type, so the limit shows only where no such
+/// call exists; annotating the helper works, and a `None`-returning helper
 /// needs no annotation.
 #[test]
 fn an_unannotated_private_helper_needs_a_return_annotation() {
@@ -296,8 +299,8 @@ fn an_unannotated_private_helper_needs_a_return_annotation() {
         let text = check_fails(
             category,
             &format!(
-                "{SLOTS}\n\nclass D(C):\n{helper}\n    def run(self) -> int:\n        \
-                 return self.{name}()\n"
+                "{SLOTS}\n\nclass D(C):\n{helper}\n    def run(self) -> None:\n        \
+                 print(self.{name}())\n"
             ),
         );
         assert!(
@@ -308,6 +311,18 @@ fn an_unannotated_private_helper_needs_a_return_annotation() {
             "{text}"
         );
     }
+    // #1420: the annotated caller's `-> int` constrains each helper.
+    let out = matches_cpython(
+        "e2e_1263_caller_constrained",
+        "class C:\n    def __init__(self, xs: list[int], d: dict[str, int]) -> None:\n        \
+         self.xs = xs\n        self.d = d\n\n\
+         \x20   def _take(self):\n        return self.xs.pop()\n\n\
+         \x20   def _look(self):\n        return self.d.get(\"a\", 0)\n\n\
+         \x20   def run(self) -> int:\n        return self._take()\n\n\
+         \x20   def peek(self) -> int:\n        return self._look()\n\n\n\
+         c = C([1, 2], {\"a\": 7})\nprint(c.run(), c.peek(), len(c.xs))\n",
+    );
+    assert_eq!(out, "2 7 1\n");
     let out = matches_cpython(
         "e2e_1263_annotated",
         "class C:\n    def __init__(self, xs: list[int]) -> None:\n        self.xs = xs\n\n\
