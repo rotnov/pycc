@@ -4,6 +4,7 @@
 //! frontend, so the slot types are the ones D-258 really assigns (an `Any`
 //! or object-carrying container field is the opaque object).
 
+use super::super::getset::PropertySetter;
 use super::*;
 
 /// The constructors -- and so the descriptors -- of `source` built as an
@@ -231,21 +232,220 @@ fn each_slot_setter_converts_its_type_to_the_compiled_slot_word() {
     }
 }
 
-/// A property descriptor keeps a `NULL` setter (its compiled setter is
-/// #1458) while the slot beside it gets one.
+/// #1458: a getter-only property's row names a setter that raises
+/// CPython's `has no setter` for a store and `has no deleter` for a `del`,
+/// without looking at the instance, which CPython never consults for either.
 #[test]
-fn a_property_row_keeps_a_null_setter() {
-    let (_, inc) = ext_build("1443_property_row", PROPERTIES);
+fn a_getter_only_property_refuses_with_cpython_s_wording() {
+    let (_, inc) = ext_build("1458_property_row", PROPERTIES);
     assert!(
         inc.contains(
             "static PyGetSetDef pycc_ext_type_getset_Base[] = {\n    \
              {\"stack\", pycc_ext_get_4_Base_5_stack, pycc_ext_set_4_Base_5_stack, NULL, NULL},\n    \
-             {\"top\", pycc_ext_get_4_Base_3_top, NULL, NULL, NULL},\n    \
-             {\"shadowed\", pycc_ext_get_4_Base_8_shadowed, NULL, NULL, NULL},\n"
+             {\"top\", pycc_ext_get_4_Base_3_top, pycc_ext_set_4_Base_3_top, NULL, NULL},\n    \
+             {\"shadowed\", pycc_ext_get_4_Base_8_shadowed, pycc_ext_set_4_Base_8_shadowed, NULL, NULL},\n"
         ),
         "{inc}"
     );
-    assert!(!inc.contains("pycc_ext_set_4_Base_3_top"), "{inc}");
+    let refusal = "static int pycc_ext_set_4_Base_3_top(PyObject *self, PyObject *value, void *closure)\n{\n    \
+                   (void)self;\n    (void)closure;\n    if (value == NULL) {\n        \
+                   PyErr_SetString(PyExc_AttributeError, \"property 'top' of 'Base' object has no deleter\");\n        \
+                   return -1;\n    }\n    \
+                   PyErr_SetString(PyExc_AttributeError, \"property 'top' of 'Base' object has no setter\");\n        \
+                   return -1;\n}\n\n";
+    assert!(inc.contains(refusal), "missing:\n{refusal}\nin:\n{inc}");
+}
+
+/// #1458's shape: a property with a compiled setter of each kind the
+/// boundary decides on. `Derived` inherits `n` and `p`; `p`'s setter calls
+/// an overridden method, so `Derived` gets a receiver-exact copy of it
+/// (D-254), while `n`'s inherited setter needs none.
+const SETTERS: &str = "from typing import List, Tuple\n\
+    class Leaf:\n\
+    \x20   def __init__(self, k: int) -> None:\n\
+    \x20       self.k = k\n\
+    class Base:\n\
+    \x20   def __init__(self, n: int) -> None:\n\
+    \x20       self._n = n\n\
+    \x20       self._xs: List[int] = []\n\
+    \x20   def scale(self) -> int:\n\
+    \x20       return 2\n\
+    \x20   @property\n\
+    \x20   def n(self) -> int:\n\
+    \x20       return self._n\n\
+    \x20   @n.setter\n\
+    \x20   def n(self, v: int) -> None:\n\
+    \x20       self._n = v\n\
+    \x20   @property\n\
+    \x20   def p(self) -> int:\n\
+    \x20       return self._n\n\
+    \x20   @p.setter\n\
+    \x20   def p(self, v: int) -> None:\n\
+    \x20       self._n = v * self.scale()\n\
+    \x20   @property\n\
+    \x20   def leaf(self) -> Leaf:\n\
+    \x20       return Leaf(self._n)\n\
+    \x20   @leaf.setter\n\
+    \x20   def leaf(self, v: Leaf) -> None:\n\
+    \x20       self._n = v.k\n\
+    \x20   @property\n\
+    \x20   def count(self) -> int:\n\
+    \x20       return len(self._xs)\n\
+    \x20   @count.setter\n\
+    \x20   def count(self, v: List[int]) -> None:\n\
+    \x20       self._xs = v\n\
+    \x20   @property\n\
+    \x20   def pair(self) -> int:\n\
+    \x20       return self._n\n\
+    \x20   @pair.setter\n\
+    \x20   def pair(self, v: Tuple[int, int]) -> None:\n\
+    \x20       self._n = v[0]\n\
+    \x20   @property\n\
+    \x20   def ret(self) -> int:\n\
+    \x20       return self._n\n\
+    \x20   @ret.setter\n\
+    \x20   def ret(self, v: int) -> int:\n\
+    \x20       self._n = v\n\
+    \x20       return v\n\
+    class Derived(Base):\n\
+    \x20   def scale(self) -> int:\n\
+    \x20       return 10\n";
+
+fn setter_of(ctors: &[ExtCtor], class: &str, prop: &str) -> PropertySetter {
+    getsets_of(ctors, class)
+        .iter()
+        .find_map(|getset| match getset {
+            ExtGetset::Property { name, setter, .. } if name == prop => Some(setter.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("`{class}.{prop}` is a property descriptor"))
+}
+
+fn compiled_setter(name: &str, class: &str, prop: &str, ty: Ty) -> PropertySetter {
+    PropertySetter::Compiled(ExtExport {
+        name: name.to_string(),
+        class: Some(class.to_string()),
+        method: Some(prop.to_string()),
+        returns_buffer_slice: false,
+        receiver: ExtReceiver::SelfInstance,
+        params: vec![ty],
+        param_writable: vec![false],
+        defaults: Vec::new(),
+        return_ty: Ty::None,
+        keyword_names: None,
+    })
+}
+
+/// A property with a compiled setter whose value type the boundary carries
+/// routes a store to the receiver-exact setter; one whose value type is not
+/// carried (`list[int]`, `tuple`) stays read-only, as an uncarried getter
+/// gets no descriptor.
+#[test]
+fn a_property_setter_routes_to_the_receiver_exact_compiled_setter() {
+    let (ctors, _) = ext_build("1458_setters", SETTERS);
+    let leaf = Ty::Instance(Box::new("Leaf".to_string()));
+    for (class, prop, setter, ty) in [
+        ("Base", "n", "Base.n.setter", Ty::Int),
+        ("Base", "leaf", "Base.leaf.setter", leaf),
+        ("Derived", "n", "Base.n.setter", Ty::Int),
+        ("Base", "p", "Base.p.setter", Ty::Int),
+        ("Derived", "p", "Derived.p.setter", Ty::Int),
+    ] {
+        assert_eq!(
+            setter_of(&ctors, class, prop),
+            compiled_setter(setter, class, prop, ty),
+            "{class}.{prop}"
+        );
+    }
+    // A carried non-`None` return is packed by the wrapper and dropped.
+    let PropertySetter::Compiled(ret) = setter_of(&ctors, "Base", "ret") else {
+        panic!("`ret` has a compiled setter");
+    };
+    assert_eq!(
+        (ret.name.as_str(), &ret.return_ty),
+        ("Base.ret.setter", &Ty::Int)
+    );
+    for prop in ["count", "pair"] {
+        assert_eq!(
+            setter_of(&ctors, "Base", prop),
+            PropertySetter::ReadOnly,
+            "{prop}"
+        );
+    }
+}
+
+/// The compiled setter's C: `del` is CPython's `has no deleter`, a carrier
+/// whose `__init__` never ran is refused, and a store hands the value to the
+/// setter's wrapper as its one argument and drops the wrapper's result. The
+/// wrapper of an inherited setter is rendered once for both classes, and an
+/// uncarried setter leaves a `NULL` row.
+#[test]
+fn a_compiled_property_setter_calls_the_setter_wrapper() {
+    let (_, inc) = ext_build("1458_setters_c", SETTERS);
+    for class in ["Base", "Derived"] {
+        let len = class.len();
+        let setter = format!(
+            "static int pycc_ext_set_{len}_{class}_1_n(PyObject *self, PyObject *value, void *closure)\n{{\n    \
+             PyObject *result;\n    (void)closure;\n    if (value == NULL) {{\n        \
+             PyErr_SetString(PyExc_AttributeError, \"property 'n' of '{class}' object has no deleter\");\n        \
+             return -1;\n    }}\n    if (((PyccExtInstance *)self)->inst == NULL) {{\n        \
+             PyErr_SetString(PyExc_AttributeError, \
+             \"cannot set 'n' on a '{class}' object whose __init__ never ran\");\n        \
+             return -1;\n    }}\n    result = pycc_ext_wrap_0m4_Base1_n6_setter(self, &value, 1);\n    \
+             if (result == NULL) {{\n        return -1;\n    }}\n    Py_DECREF(result);\n    \
+             return 0;\n}}\n\n"
+        );
+        assert!(inc.contains(&setter), "missing:\n{setter}\nin:\n{inc}");
+        for row in [
+            format!(
+                "{{\"n\", pycc_ext_get_{len}_{class}_1_n, pycc_ext_set_{len}_{class}_1_n, NULL, NULL}},\n"
+            ),
+            format!("{{\"count\", pycc_ext_get_{len}_{class}_5_count, NULL, NULL, NULL}},\n"),
+        ] {
+            assert!(inc.contains(&row), "missing {row} in:\n{inc}");
+        }
+    }
+    let wrapper = "static PyObject *pycc_ext_wrap_0m4_Base1_n6_setter(PyObject *self, \
+                   PyObject *const *args, Py_ssize_t nargs)\n";
+    assert_eq!(inc.matches(wrapper).count(), 1, "{inc}");
+    assert!(
+        inc.contains("result = pycc_ext_wrap_0m7_Derived1_p6_setter(self, &value, 1);"),
+        "{inc}"
+    );
+    assert!(!inc.contains("pycc_ext_set_4_Base_5_count("), "{inc}");
+}
+
+/// #1459 wins over #1458: both properties of a class whose MRO defines a
+/// compiled `__setattr__` stay read-only, the getter-only one included,
+/// because CPython would run that method first.
+#[test]
+fn a_class_that_intercepts_stores_keeps_read_only_properties() {
+    let (ctors, inc) = ext_build(
+        "1458_intercepts",
+        "class G:\n\
+         \x20   def __init__(self, n: int) -> None:\n\
+         \x20       self._n = n\n\
+         \x20   @property\n\
+         \x20   def n(self) -> int:\n\
+         \x20       return self._n\n\
+         \x20   @n.setter\n\
+         \x20   def n(self, v: int) -> None:\n\
+         \x20       self._n = v\n\
+         \x20   @property\n\
+         \x20   def ro(self) -> int:\n\
+         \x20       return 1\n\
+         \x20   def __setattr__(self, name: str, value: int) -> None:\n\
+         \x20       pass\n",
+    );
+    for prop in ["n", "ro"] {
+        assert_eq!(setter_of(&ctors, "G", prop), PropertySetter::ReadOnly);
+        let row = format!(
+            "{{\"{prop}\", pycc_ext_get_1_G_{len}_{prop}, NULL, NULL, NULL}},\n",
+            len = prop.len()
+        );
+        assert!(inc.contains(&row), "missing {row} in:\n{inc}");
+    }
+    assert!(!inc.contains("pycc_ext_set_1_G_"), "{inc}");
 }
 
 /// #1459: a class whose MRO defines a compiled `__setattr__` or
@@ -361,6 +561,7 @@ fn a_property_is_described_where_it_wins_the_namespace_walk() {
                 return_ty: Ty::Object,
                 keyword_names: None,
             },
+            setter: PropertySetter::Refuse,
         }
     );
 }

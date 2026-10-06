@@ -732,22 +732,41 @@ and a second `del` raise `AttributeError: '<Class>' object has no attribute
 '<name>'`, as in CPython. A carrier whose `__init__` never ran has no compiled
 instance to store into: a store raises `AttributeError: cannot set '<name>' on
 a '<Class>' object whose __init__ never ran`, and a `del` raises the
-unassigned-slot message. Three kinds of attribute stay unwritable and keep
-CPython's own `AttributeError`. A property descriptor has no setter (a
-compiled property setter is [#1458](https://github.com/rotnov/pycc/issues/1458)).
-A name with no descriptor -- a slot of a type the getter does not carry, or a
-new name -- has nowhere to go (`... has no attribute 'xs' and no __dict__ for
-setting new attributes`). And every slot of a class whose MRO defines a
-compiled `__setattr__` or `__delattr__` keeps a read-only descriptor, because
-the extension does not run that method on a host store and a raw slot store
-would bypass it silently
+unassigned-slot message. A property descriptor
+([#1458](https://github.com/rotnov/pycc/issues/1458)) with a compiled
+`@<name>.setter` routes a store through the setter's `METH_FASTCALL` wrapper,
+so the value is converted by the setter parameter's row exactly as an
+argument of that type is (refused with that row's error, named
+`<Class>.<name>() argument 1`, where CPython would run the setter), the
+setter body runs on the compiled instance (an exception it raises reaches
+the host), and a non-`None` return is discarded. An inherited setter whose
+body depends on the receiver runs the subclass's receiver-exact copy
+(D-254), as the getter does. A getter-only property raises CPython's
+`AttributeError: property '<name>' of '<Class>' object has no setter`, and a
+`del` of any compiled property raises `... has no deleter`, since pycc
+compiles no `@<name>.deleter`; both answer before the instance is
+consulted, as CPython's do, while a store into a setter-bearing property of
+a carrier whose `__init__` never ran raises the slot's `cannot set` message.
+A setter whose value type (or return type) the boundary does not carry --
+a `list[int]` parameter, say -- leaves the property read-only, the same
+silent partiality as a getter it cannot carry. Two kinds of attribute stay
+unwritable and keep CPython's own `AttributeError`. A name with no
+descriptor -- a slot of a type the getter does not carry, or a new name --
+has nowhere to go (`... has no attribute 'xs' and no __dict__ for setting
+new attributes`). And every descriptor -- slot and property alike, a
+getter-only property included -- of a class whose MRO defines a compiled
+`__setattr__` or `__delattr__` is read-only (`attribute '<name>' of
+'<mod>.<Class>' objects is not writable`), because the extension does not
+run that method on a host store and a raw slot store or a direct setter
+call would bypass it silently
 ([#1459](https://github.com/rotnov/pycc/issues/1459)). Since
 [#1457](https://github.com/rotnov/pycc/issues/1457), compiled code storing
 into or deleting a field through an object-typed name (`other.x = v` and
 `del other.x` on an `Any`) goes through `PyObject_SetAttr` and
 `PyObject_DelAttr`, and so reaches these same descriptors (see "An attribute
 store or deletion produces nothing" below).
-`tests/issue_1443_field_setter.rs` pins each line against CPython.
+`tests/issue_1443_field_setter.rs` and, for properties,
+`tests/issue_1458_property_setter.rs` pin each line against CPython.
 
 *Copying an instance through `copy.copy`*
 ([#1455](https://github.com/rotnov/pycc/issues/1455)). Every carrier type --

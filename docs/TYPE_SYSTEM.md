@@ -1534,7 +1534,10 @@ attribute store"). A store on a builtin value keeps `T0043`, now worded
 "cannot assign an attribute on `<ty>`". Stored into a compiled instance's
 typed slot, the value is converted by that slot's parameter row (Part 1 of
 #1443), so a `str` into an `int` slot raises `TypeError` where CPython would
-store it. The ownership contract is in `docs/RUNTIME.md`.
+store it. Stored into a compiled property, it runs the property's compiled
+setter, converted by the setter parameter's row
+([#1458](https://github.com/rotnov/pycc/issues/1458)). The ownership contract
+is in `docs/RUNTIME.md`.
 
 End-to-end tests are in `tests/issue_1244_del_name.rs`, and the byte-exact
 oracle fixture is `tests/fixtures/del_name.py`. The object slice deletion is
