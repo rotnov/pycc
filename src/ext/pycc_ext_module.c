@@ -2353,6 +2353,48 @@ int pycc_ext_obj_delslice(PyObject *o, PyObject *start, PyObject *stop, PyObject
 }
 
 /*
+ * #1457 (Part 2 of #1443): `o.name = value` with a CPython object `o`
+ * (`EXT_OBJ_SETATTR_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `o` is borrowed; `value` is a packer's new reference, consumed on every
+ * path. A NULL `value` is a failed packer (an out-of-range bigint's
+ * `OverflowError`, say) whose exception is already set, and it must not
+ * reach `PyObject_SetAttrString`: a NULL value there *deletes* the
+ * attribute. A NULL `o` is guarded as `pycc_ext_obj_getattr` guards it.
+ * Returns `0`, or `-1` with the exception set -- whatever the object's own
+ * `__setattr__`, a read-only property or a `__slots__` layout raises.
+ */
+int pycc_ext_obj_setattr(PyObject *o, const char *name, PyObject *value)
+{
+    int status;
+
+    if (value == NULL) {
+        return -1;
+    }
+    if (o == NULL) {
+        Py_DECREF(value);
+        return -1;
+    }
+    status = PyObject_SetAttrString(o, name, value);
+    Py_DECREF(value);
+    return status;
+}
+
+/*
+ * #1457: `del o.name` with a CPython object `o`
+ * (`EXT_OBJ_DELATTR_SYMBOL` in `crates/pycc_codegen/src/ext.rs`), `o`
+ * borrowed. Returns `0`, or `-1` with the exception set: a missing
+ * attribute raises `AttributeError`, exactly as CPython's own `del` does.
+ */
+int pycc_ext_obj_delattr(PyObject *o, const char *name)
+{
+    if (o == NULL) {
+        return -1;
+    }
+    return PyObject_DelAttrString(o, name);
+}
+
+/*
  * Part 9 of #1371: `raise o` with a CPython object `o`
  * (`EXT_OBJ_RAISE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *

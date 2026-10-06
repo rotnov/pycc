@@ -2680,6 +2680,17 @@ pub(crate) fn collect_block_constraints(
                     )?;
                 }
             }
+            // #1457: an attribute `del` reads its base, for the same reason.
+            HirStmt::DeleteAttr { base, .. } => {
+                collect_expr_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.deferred,
+                    env,
+                    base,
+                )?;
+            }
             HirStmt::ExprStmt(expr) => {
                 // PEP 572 (#774), deep-review follow-up (round 4): bind
                 // before unifying -- see `bind_named_expr_targets`'s own
@@ -3600,6 +3611,7 @@ pub(crate) fn contains_return(body: &[HirStmt]) -> bool {
         | HirStmt::DictCompAssign { .. }
         | HirStmt::Delete { .. }
         | HirStmt::DeleteSlice { .. }
+        | HirStmt::DeleteAttr { .. }
         | HirStmt::ForeignImport { .. }
         | HirStmt::Raise { .. } => false,
         HirStmt::Try {
@@ -3650,8 +3662,12 @@ pub(crate) fn introduces_bindings(body: &[HirStmt]) -> bool {
             introduces_bindings(body)
         }
         HirStmt::Match { cases, .. } => cases.iter().any(|case| introduces_bindings(&case.body)),
-        // A slice `del` (Part 2c of #1371) changes no binding.
-        HirStmt::Return(_) | HirStmt::ExprStmt(_) | HirStmt::DeleteSlice { .. } => false,
+        // A slice or attribute `del` (Part 2c of #1371, #1457) changes no
+        // binding.
+        HirStmt::Return(_)
+        | HirStmt::ExprStmt(_)
+        | HirStmt::DeleteSlice { .. }
+        | HirStmt::DeleteAttr { .. } => false,
         HirStmt::Try {
             body,
             handlers,

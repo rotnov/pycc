@@ -1586,6 +1586,29 @@ pub enum MirStmt {
         stop: Option<MirExpr>,
         step: Option<MirExpr>,
     },
+    /// `base.attr = value` where `base` is a CPython object (Part 2 of
+    /// #1443, #1457, from a `HirStmt::AttrSet` whose base types as
+    /// `Ty::Object`): CPython's `PyObject_SetAttr`, String-keyed like
+    /// [`MirExpr::ObjAttrGet`] because a foreign object has no slot table.
+    /// Codegen evaluates `value` before `base`, CPython's own order for an
+    /// attribute assignment, and packs it into a new reference the shim
+    /// helper consumes. Its failure (a read-only or `__slots__`-refused
+    /// attribute, a raising `__setattr__`) is routed by codegen's
+    /// foreign-failure edge inside the statement, as
+    /// [`MirStmt::ObjDelSlice`]'s is.
+    ObjAttrSet {
+        base: MirExpr,
+        attr: String,
+        value: MirExpr,
+    },
+    /// `del base.attr` where `base` is a CPython object (#1457, from
+    /// `HirStmt::DeleteAttr`): CPython's `PyObject_DelAttr`. A failure (a
+    /// missing attribute, a raising `__delattr__`) takes the
+    /// foreign-failure edge, as [`MirStmt::ObjAttrSet`]'s does.
+    ObjDelAttr {
+        base: MirExpr,
+        attr: String,
+    },
     /// PEP 634-636 (#381, PR-21): A sequence of statements executed in
     /// order — used by `match` lowering to pair the subject-temporary
     /// assignment with the nested `if` chain.
@@ -2014,6 +2037,8 @@ fn set_frame_function(body: &mut [MirStmt], frame_name: &str) {
             | MirStmt::ReturnBufferSlice { .. }
             | MirStmt::AttrSet { .. }
             | MirStmt::ObjDelSlice { .. }
+            | MirStmt::ObjAttrSet { .. }
+            | MirStmt::ObjDelAttr { .. }
             | MirStmt::ObjRaise { .. }
             | MirStmt::ForeignImport { .. }
             | MirStmt::Reraise => {}

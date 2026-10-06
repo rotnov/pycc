@@ -292,12 +292,14 @@ fn every_del_refusal_is_named() {
             "xs = [1, 2]\ndel xs[0:1]\n",
             "error[C0001]: a `del` of a slice (`del xs[a:b]`) is not supported yet",
         ),
-        // HIR: target kinds, scopes and the module-level rules.
+        // Types: an attribute target of a non-`object` base (HIR lowers
+        // every attribute target since #1457; the type stage refuses it).
         (
             "class C:\n    def __init__(self) -> None:\n        self.a = 1\n\n\nc = C()\ndel c.a\n",
-            "error[C0001]: a `del` of an attribute expression (`obj.attr`) is not supported yet; \
-             only a bare name can be deleted",
+            "error[C0001]: a `del` of an attribute (`del obj.attr`) is supported only on a \
+             CPython object, not on `C`",
         ),
+        // HIR: target kinds, scopes and the module-level rules.
         (
             "d = {1: 2}\ndel d[1]\n",
             "error[C0001]: a `del` of a subscript (`del d[k]`, `del xs[i]`) is not supported yet \

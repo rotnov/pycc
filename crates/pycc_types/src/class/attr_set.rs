@@ -14,9 +14,11 @@ use super::{expect_class, lookup_class_attr_through_mro, resolve_attr_get};
 /// scope (`check_stmt`, `local_names = &[]`) and function-body scope
 /// (`check_stmt_in_function`) -- mirroring how `check_dict_set` is already
 /// split the same way for `HirStmt::DictSet`. Reuses [`resolve_attr_get`]
-/// for the attribute-type lookup, so a base that isn't a class instance or
-/// an attribute name the class never declares produces the identical
-/// `T0043`/`T0044` diagnostic an attribute *read* would.
+/// for the attribute-type lookup, so an attribute name the class never
+/// declares produces the identical `T0044` diagnostic an attribute *read*
+/// would. A CPython-object base is checked by
+/// `foreign::attr_store::check_object_attr_set` (#1457), and any other base
+/// that is neither an instance nor a protocol is a `T0043` naming the store.
 ///
 /// #377: if `attr` is a `@property`, the check is redirected to the
 /// property's setter: a read-only property (no setter) is rejected with
@@ -36,6 +38,19 @@ pub(crate) fn check_attr_set(
     value: &HirExpr,
 ) -> Result<(), Diagnostic> {
     let base_ty = infer_expr_in(env, local_names, base)?;
+    // #1457 (Part 2 of #1443): a CPython object accepts any attribute name
+    // and decides at run time; only the value's type is checked here.
+    if base_ty == Ty::Object {
+        return crate::foreign::attr_store::check_object_attr_set(env, local_names, value);
+    }
+    // #1457: a store on a value that is neither an instance nor a protocol
+    // names the store, not the read `resolve_attr_get` would report.
+    if !matches!(base_ty, Ty::Instance(_) | Ty::Protocol(_)) {
+        return Err(super::t0043_not_an_instance(
+            "assign an attribute",
+            &base_ty,
+        ));
+    }
     // #1219: an enum member's `value` and `name` are read-only in CPython
     // (`AttributeError: <enum 'Enum'> cannot set attribute 'value'`), but
     // they are ordinary slots in pycc's model of an enum class, so without

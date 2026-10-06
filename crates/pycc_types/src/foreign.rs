@@ -307,7 +307,7 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
         "I0404",
         format!(
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
-             value and implements attribute access, scalar-, `None`-, \
+             value and implements attribute access, store and deletion, scalar-, `None`-, \
              object- or class-instance-argument method calls and direct calls with \
              positional or keyword arguments \
              (including a call of a subscript result), `len`, truth \
@@ -354,7 +354,9 @@ pub(crate) fn is_packable_operand(ty: &Ty) -> bool {
 /// direct call of an `object`-typed name (`product(args)`, #1313, `what` =
 /// `"call"`) and a call of an `object`-typed subscript result
 /// (`table[k](args)`, Part 2a of #1371, also `"call"`), each with positional
-/// or, since Part 8 of #1371, keyword arguments; `args` are the argument
+/// or, since Part 8 of #1371, keyword arguments -- and the value of an
+/// attribute store through an object-typed name (`o.x = v`, #1457, `what` =
+/// `"attribute store"`), checked as a single argument; `args` are the argument
 /// expressions whose types are `arg_tys`, the keyword values for a keyword
 /// call. `None` is admitted since Part 8 too, as an argument only: codegen
 /// passes CPython's own `Py_None` for it. Subscript keys and comparison
@@ -576,6 +578,7 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
     }
 }
 
+pub(crate) mod attr_store;
 pub(crate) mod compare;
 pub(crate) mod for_loop;
 pub(crate) mod keyword_call;

@@ -700,6 +700,16 @@ pub(super) fn lower_stmt(
         HirStmt::AttrSet { base, attr, value } => {
             let base = lower_expr(base, scopes, classes, current_class);
             let value = lower_expr(value, scopes, classes, current_class);
+            // #1457 (Part 2 of #1443): a CPython object has no
+            // `HirClassDef`, so the store stays String-keyed. It must come
+            // before `class_def_of`, which panics on a `Ty::Object` base.
+            if base.ty() == Ty::Object {
+                return MirStmt::ObjAttrSet {
+                    base,
+                    attr: attr.clone(),
+                    value,
+                };
+            }
             let class_def = class_def_of(&base, classes);
             // #432: walk the MRO for property lookup first (matching
             // `AttrGet`'s own MRO walk), then for regular attribute slots
@@ -996,6 +1006,12 @@ pub(super) fn lower_stmt(
                 step: lower_bound(step),
             }
         }
+        // #1457: `pycc_types` admits an attribute `del` only on a CPython
+        // object base, as it does a slice `del`.
+        HirStmt::DeleteAttr { base, attr, .. } => MirStmt::ObjDelAttr {
+            base: lower_expr(base, scopes, classes, current_class),
+            attr: attr.clone(),
+        },
         HirStmt::ForeignImport { bindings, .. } => MirStmt::ForeignImport {
             bindings: bindings.clone(),
         },

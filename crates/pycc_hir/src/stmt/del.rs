@@ -4,8 +4,9 @@
 //! statement of the rule. This module owns the HIR half of it:
 //!
 //! - [`lower_delete`] expands `del a, (b, [c])` left to right into one
-//!   [`HirStmt::Delete`] per name and one [`HirStmt::DeleteSlice`] per slice
-//!   target (`del o[a:b]`, Part 2c of #1371), and refuses every other target
+//!   [`HirStmt::Delete`] per name, one [`HirStmt::DeleteSlice`] per slice
+//!   target (`del o[a:b]`, Part 2c of #1371) and one [`HirStmt::DeleteAttr`]
+//!   per attribute target (`del o.x`, #1457), and refuses every other target
 //!   kind;
 //! - [`deleted_names`] is the recursive walk the type checker's deletion
 //!   prescan and the import resolver use;
@@ -28,8 +29,9 @@ use std::collections::{BTreeSet, HashSet};
 /// `del [a, [b]]`) is flattened the same way; an empty one (`del ()`) deletes
 /// nothing, exactly as in CPython. A slice target (`del o[a:b:c]`) becomes one
 /// [`HirStmt::DeleteSlice`], its base and bounds lowered by `lower_expr`
-/// (Part 2c of #1371); whether its base admits the deletion is a type
-/// question `pycc_types` answers. Every other target kind is refused: the
+/// (Part 2c of #1371), and an attribute target (`del o.x`) one
+/// [`HirStmt::DeleteAttr`] (#1457); whether its base admits the deletion is a
+/// type question `pycc_types` answers. Every other target kind is refused: the
 /// parser already rejects starred, call and literal targets (`L0001`), so what
 /// reaches here is a name, a tuple/list, a subscript or an attribute.
 pub(crate) fn lower_delete(
@@ -107,6 +109,21 @@ fn lower_target(
                 span: Span::new(subscript.range.start().into(), subscript.range.end().into()),
             });
         }
+        Expr::Attribute(attribute) => {
+            let base = Box::new(lower_expr(&attribute.value)?);
+            // Same reasoning as the slice arm: no other pass sees a walrus here.
+            if crate::expr::contains_named_expr(&base) {
+                return Err(unsupported(
+                    super::WALRUS_PLACEMENT_MESSAGE,
+                    attribute.range,
+                ));
+            }
+            lowered.push(HirStmt::DeleteAttr {
+                base,
+                attr: attribute.attr.to_string(),
+                span: Span::new(attribute.range.start().into(), attribute.range.end().into()),
+            });
+        }
         other => {
             return Err(unsupported(
                 format!(
@@ -178,6 +195,7 @@ fn collect_deleted_names(body: &[HirStmt], deleted: &mut HashSet<String>) {
             | HirStmt::Return(_)
             | HirStmt::AttrSet { .. }
             | HirStmt::DeleteSlice { .. }
+            | HirStmt::DeleteAttr { .. }
             | HirStmt::ForeignImport { .. }
             | HirStmt::Raise { .. } => {}
         }

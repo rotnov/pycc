@@ -741,9 +741,12 @@ setting new attributes`). And every slot of a class whose MRO defines a
 compiled `__setattr__` or `__delattr__` keeps a read-only descriptor, because
 the extension does not run that method on a host store and a raw slot store
 would bypass it silently
-([#1459](https://github.com/rotnov/pycc/issues/1459)). Compiled code storing
-into a field through an object-typed name (`other.x = v` on an `Any`) is
-[#1457](https://github.com/rotnov/pycc/issues/1457).
+([#1459](https://github.com/rotnov/pycc/issues/1459)). Since
+[#1457](https://github.com/rotnov/pycc/issues/1457), compiled code storing
+into or deleting a field through an object-typed name (`other.x = v` and
+`del other.x` on an `Any`) goes through `PyObject_SetAttr` and
+`PyObject_DelAttr`, and so reaches these same descriptors (see "An attribute
+store or deletion produces nothing" below).
 `tests/issue_1443_field_setter.rs` pins each line against CPython.
 
 *Copying an instance through `copy.copy`*
@@ -1860,6 +1863,33 @@ deletion adds nothing to the leaked set. The hosted test runs it 200 times
 inside a function and pins `sys.getrefcount` of the list and of a large `int`
 bound unchanged afterwards (`tests/issue_1371_object_slice_del.rs`). It
 shares the packers' `OverflowError` divergence.
+
+**An attribute store or deletion produces nothing.**
+[#1457](https://github.com/rotnov/pycc/issues/1457) adds
+`pycc_ext_obj_setattr(o, name, value)` for `o.name = v` and
+`pycc_ext_obj_delattr(o, name)` for `del o.name`, where `o` is a CPython
+object and `name` a NUL-terminated constant the module emits once per
+attribute name. The value is packed exactly as a method-call argument is
+(a new reference, CPython's `None` for a `None` value) and evaluated before
+the base, as CPython evaluates it; an `int` value that is a scalar
+temporary is kept alive across the base's evaluation and released after the
+call. The setter consumes the packed value on every path and returns `0`,
+or `-1` with the exception set, which is routed to the statement's failure
+edge. A `NULL` value -- a failed pack, such as an `int` outside the inline
+range (#1040) -- returns `-1` without calling `PyObject_SetAttr`, so a
+failed pack raises `OverflowError` and leaves the attribute unchanged; it
+never becomes a deletion. The base is borrowed by both helpers, so neither
+adds to the leaked set: the hosted test stores, deletes and re-stores an
+object 200 times inside a function and pins its `sys.getrefcount`
+(measured inside compiled code, so the argument boundary's own references
+do not enter it) on a `types.SimpleNamespace` at `+1`, the one reference
+the attribute still holds, whatever the iteration count (CPython also
+answers `+1`), and a final `del` at `-1`. A store into an
+object slot of a compiled instance goes through that slot's descriptor
+(Part 1 of [#1443](https://github.com/rotnov/pycc/issues/1443)), which
+keeps the reference a replaced or deleted object held -- the slot store's
+own [#1092](https://github.com/rotnov/pycc/issues/1092) leak, not this
+helper's (`tests/issue_1457_object_attr_store.rs`).
 
 **A comprehension over an object produces a collection, its iterator and its
 items.** Part 1 of [#1255](https://github.com/rotnov/pycc/issues/1255) lowers

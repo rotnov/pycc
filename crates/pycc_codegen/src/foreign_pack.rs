@@ -1,7 +1,8 @@
 //! The *packer contract* shared by every foreign object operation that
 //! hands a pycc value to the C shim as a `PyObject *`: a method or direct
-//! call's arguments, a subscript key (`foreign_call.rs`) and a rich
-//! comparison's scalar operand (`foreign_compare.rs`).
+//! call's arguments, a subscript key (`foreign_call.rs`), a rich
+//! comparison's scalar operand (`foreign_compare.rs`) and an attribute
+//! store's value (`foreign_store.rs`, #1457).
 //!
 //! Each operand goes through exactly one `pycc_ext_obj_pack_*` helper,
 //! which *borrows* the pycc-side value and returns a *new* reference, and
@@ -42,7 +43,8 @@ pub(super) fn shim_fn<'ctx>(
 /// over what `pycc_types` admits as an argument of a call on a `Ty::Object`
 /// or as the key of a `Ty::Object` subscript: `int`/`float`/`bool`/`str`,
 /// since Part 2a of #1371 a second `object`, and since #1435 an instance of
-/// a regular user class -- a call argument only, never a key, a list
+/// a regular user class -- a call argument or (#1457) an attribute store's
+/// value only, never a key, a list
 /// element or a comparison operand. A `None` call argument (Part 8 of
 /// #1371) reaches here already replaced by [`none_pointer`]'s `object`. Any
 /// other `Scalar` is a front-end defect: the checker refuses a container

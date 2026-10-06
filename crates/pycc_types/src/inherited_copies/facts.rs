@@ -248,6 +248,7 @@ impl<'a> Walker<'a> {
                     self.expr(bound);
                 }
             }
+            HirStmt::DeleteAttr { base, .. } => self.expr(base),
             HirStmt::ForeignImport { .. } => {}
         }
     }

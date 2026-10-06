@@ -1,6 +1,7 @@
 //! Lowering of comparisons and `isinstance` with a CPython object operand
 //! (Part 1 of #1371), of membership in and slices of one (Part 2b), and of
-//! deleting a slice of one (Part 2c), exercised from real HIR with `numpy` bound as a foreign import.
+//! deleting a slice of one (Part 2c), and of storing and deleting one's
+//! attribute (#1457), exercised from real HIR with `numpy` bound as a foreign import.
 
 use super::lower_object_isinstance;
 use crate::*;
@@ -463,4 +464,85 @@ fn a_slice_delete_of_an_object_is_one_obj_del_slice() {
         panic!("expected two `ObjDelSlice`s: {deletes:?}");
     };
     assert!(matches!(base, MirExpr::ObjAttrGet { .. }), "{base:?}");
+}
+
+/// #1457: `o.x = v` on an object lowers to one `ObjAttrSet` and `del o.x`
+/// to one `ObjDelAttr`, in a module body and in a function body (which
+/// `set_frame_function` and the receiver verifier both walk).
+#[test]
+fn an_attribute_store_and_delete_on_an_object_lower_to_obj_attr_stmts() {
+    let store = || HirStmt::AttrSet {
+        base: numpy_attr("pi"),
+        attr: "n".to_string(),
+        value: HirExpr::IntLiteral(7),
+    };
+    let del = || HirStmt::DeleteAttr {
+        base: Box::new(numpy_attr("pi")),
+        attr: "m".to_string(),
+        span: Span::new(0, 0),
+    };
+    let hir = HirModule {
+        items: vec![
+            HirItem::TopLevelStmt(store()),
+            HirItem::TopLevelStmt(del()),
+            HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: pycc_hir::Ty::None,
+                body: vec![store(), del(), HirStmt::Return(None)],
+            },
+        ],
+        imports: vec![ImportBinding::Foreign {
+            local_name: "numpy".to_string(),
+            module_path: "numpy".to_string(),
+            from: None,
+            site: pycc_hir::ForeignImportSite::Item(0),
+            span: Span::new(0, 0),
+        }],
+        seeded_builtin_exception_classes: false,
+        type_aliases: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    let stmts: Vec<&MirStmt> = mir
+        .items
+        .iter()
+        .flat_map(|item| match item {
+            MirItem::TopLevelStmt(stmt) => std::slice::from_ref(stmt),
+            MirItem::Function { body, .. } => body.as_slice(),
+            _ => &[],
+        })
+        .filter(|stmt| {
+            matches!(
+                stmt,
+                MirStmt::ObjAttrSet { .. } | MirStmt::ObjDelAttr { .. }
+            )
+        })
+        .collect();
+    assert_eq!(stmts.len(), 4, "{stmts:?}");
+    for pair in stmts.chunks(2) {
+        let [
+            MirStmt::ObjAttrSet {
+                base: set_base,
+                attr: set_attr,
+                value: MirExpr::IntLiteral(7),
+            },
+            MirStmt::ObjDelAttr {
+                base: del_base,
+                attr: del_attr,
+            },
+        ] = pair
+        else {
+            panic!("expected a store then a delete: {pair:?}");
+        };
+        assert_eq!((set_attr.as_str(), del_attr.as_str()), ("n", "m"));
+        assert!(
+            matches!(set_base, MirExpr::ObjAttrGet { .. }),
+            "{set_base:?}"
+        );
+        assert!(
+            matches!(del_base, MirExpr::ObjAttrGet { .. }),
+            "{del_base:?}"
+        );
+    }
 }

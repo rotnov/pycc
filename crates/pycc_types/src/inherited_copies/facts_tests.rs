@@ -134,3 +134,14 @@ fn an_iterable_comprehension_source_is_walked() {
     walker.stmts(&[stmt]);
     assert!(walker.facts.bare_use);
 }
+
+/// #1457: the base of an attribute `del` is walked, so a receiver member
+/// read there is recorded.
+#[test]
+fn an_attribute_delete_base_is_walked() {
+    let source = "class A:\n    def __init__(self) -> None:\n        self.xs = 1\n    \
+                  def f(self) -> None:\n        del self.xs.n\n";
+    let (facts, _) = walk(source, "A.f", Some("self"));
+    assert_eq!(facts.self_refs, set(&["xs"]));
+    assert!(!facts.bare_use);
+}
