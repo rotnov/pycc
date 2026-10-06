@@ -74,7 +74,10 @@ pub(crate) fn needs_class_phase(hir: &HirModule) -> bool {
 }
 
 /// Resolves every provisional slot of `resolved`'s classes it can, then
-/// rewrites every empty-literal attribute store in the classes' own methods.
+/// rewrites the attribute stores in the classes' own methods: an empty
+/// literal is typed from its slot, and a store into an object slot has its
+/// value-position list displays rewritten into [`HirExpr::ObjectList`]
+/// (#1421).
 /// `hir` is the unrewritten input (the method bodies this phase scans are
 /// the same in both), and `local_names` is its per-item local-name table.
 pub(crate) fn resolve_class_slots(

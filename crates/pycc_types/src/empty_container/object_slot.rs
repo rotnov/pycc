@@ -70,14 +70,14 @@ pub(super) fn rewrite_object_slot(
         Some(Ty::Object) => rewrite_value_displays(value),
         Some(_) => false,
         None => {
-            let empty = matches!(value, HirExpr::ListLiteral(elements) if elements.is_empty());
-            let bound_to_object = env
-                .binding_state(target)
-                .is_some_and(|state| *state.ty() == Ty::Object);
-            if empty && bound_to_object {
+            let rewrite = matches!(value, HirExpr::ListLiteral(elements) if elements.is_empty())
+                && env
+                    .binding_state(target)
+                    .is_some_and(|state| *state.ty() == Ty::Object);
+            if rewrite {
                 *value = HirExpr::ObjectList(Vec::new());
             }
-            empty && bound_to_object
+            rewrite
         }
     }
 }
@@ -126,7 +126,7 @@ pub(super) fn has_value_display(value: &HirExpr) -> bool {
 /// display to an object slot -- the one shape [`rewrite_object_slot`]
 /// rewrites that the parent's empty-literal fast path does not already see,
 /// because the display may be non-empty or an operand.
-pub(super) fn is_annotated_object_list(stmt: &HirStmt) -> bool {
+pub(super) fn is_annotated_object_display(stmt: &HirStmt) -> bool {
     matches!(
         stmt,
         HirStmt::AnnAssign {
