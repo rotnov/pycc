@@ -180,6 +180,27 @@ fn an_object_argument_is_packed_with_the_object_packer() {
     assert!(ir.contains(EXT_OBJ_PACK_OBJECT_SYMBOL), "{ir}");
 }
 
+/// #1435: a class-instance argument is packed with
+/// `pycc_ext_obj_pack_instance`, which takes the instance pointer alone --
+/// the run-time class comes from its layout descriptor, not from the
+/// argument's static type -- and returns the carrier reference the call
+/// array consumes.
+#[test]
+fn an_instance_argument_is_packed_with_the_instance_packer() {
+    let ir = entry_ir(
+        "foreign_instance_argument",
+        direct_call(vec![MirExpr::NullInstance {
+            ty: Ty::Instance(Box::new("Q".to_string())),
+        }]),
+    );
+    assert!(
+        ir.contains(&format!(
+            "call ptr @{EXT_OBJ_PACK_INSTANCE_SYMBOL}(ptr null)"
+        )),
+        "{ir}"
+    );
+}
+
 /// The routing allowlist: exactly the shim's own new-reference producers
 /// are consumed; a name read, a scalar and every other node are borrowed.
 ///

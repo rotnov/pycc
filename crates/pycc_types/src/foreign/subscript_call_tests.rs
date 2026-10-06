@@ -79,11 +79,7 @@ fn a_non_packable_argument_is_refused() {
         "I0404",
         "passing a `list[int]` argument to a CPython object's call",
     );
-    refused(
-        "product['a'](None)\n",
-        "I0404",
-        "argument to a CPython object's call",
-    );
+    // Part 8 of #1371 admits a `None` argument (`keyword_call_tests.rs`).
 }
 
 /// The callee is checked before the arguments (CPython's evaluation order):
@@ -110,8 +106,8 @@ fn a_walrus_in_the_callee_or_an_argument_binds() {
 /// A generic function call inside the callee or an argument is
 /// monomorphized through the new node, a generic body's generic call there
 /// is still found by the recursive-instantiation check, and a generic class
-/// instantiation inside an argument is collected (and then refused as an
-/// argument, having no boundary form).
+/// instantiation inside an argument is collected (and, since #1435, admitted
+/// as an argument: it crosses as its class's carrier).
 #[test]
 fn generic_calls_inside_the_callee_and_arguments_are_rewritten() {
     admitted("def ident[T](x: T) -> T:\n    return x\n\n\nproduct[ident('a')](ident(1))\n");
@@ -121,11 +117,9 @@ fn generic_calls_inside_the_callee_and_arguments_are_rewritten() {
         "T0042",
         "generic function `g` calls generic function `ident`",
     );
-    refused(
+    admitted(
         "class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\n\n\n\
          product['a'](C[int](1))\n",
-        "I0404",
-        "argument to a CPython object's call",
     );
 }
 

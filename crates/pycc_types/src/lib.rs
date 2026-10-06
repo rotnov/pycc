@@ -19,6 +19,7 @@ mod inherited_copies;
 mod module;
 mod monomorphize;
 mod narrow;
+mod not_implemented;
 mod object_none;
 mod redeclaration;
 mod return_coverage;
@@ -593,6 +594,7 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => {}
         HirExpr::ListPop { list } => {
@@ -686,6 +688,12 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
         }
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             collect_named_expr_names_in_expr(call, names)
+        }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            collect_named_expr_names_in_expr(call, names);
+            for (_, value) in keywords {
+                collect_named_expr_names_in_expr(value, names);
+            }
         }
         HirExpr::GenericClassInstantiate { args, .. } => {
             for arg in args {
@@ -1107,7 +1115,7 @@ pub(crate) fn annotation_initializer_mismatch(
             annotation.name()
         ),
         Span::new(0, 0),
-    ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name()))
+    ).with_help(foreign::object_into_scalar_help(inferred, annotation).unwrap_or_else(|| format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name())))
 }
 
 /// The canonical PEP 591 `T0045`: a second assignment to a `Final` name.
@@ -1328,6 +1336,7 @@ fn collect_named_expr_bindings(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => Ok(()),
         HirExpr::ListPop { list } => match list.attr_expr() {
@@ -1428,6 +1437,13 @@ fn collect_named_expr_bindings(
         }
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             collect_named_expr_bindings(env, local_names, call)
+        }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            collect_named_expr_bindings(env, local_names, call)?;
+            for (_, value) in keywords {
+                collect_named_expr_bindings(env, local_names, value)?;
+            }
+            Ok(())
         }
         HirExpr::GenericClassInstantiate { args, .. } => {
             for arg in args {
@@ -2739,6 +2755,7 @@ fn check_function_in(
     // `HirStmt::Return` arm; see `crate::buffer::buffer_return_inside_finally`.
     env.returns_inside_finally = pycc_hir::body_returns_inside_finally(body);
     env.return_inferred = *return_ty == Ty::Infer;
+    env.in_classmethod = name.ends_with(".classmethod");
     env.own_type_param = generic_type_param_name(params, return_ty).ok().flatten();
     // #433: extract the class name from a mangled `<ClassName>.<method>`
     // name so `infer_expr_in`'s `HirExpr::Super` arm can resolve the next
@@ -2993,21 +3010,25 @@ fn check_stmt_in_function(
                 }
                 // #380 (PR-20): if the mismatch involves a protocol,
                 // produce a detailed T0046 conformance error.
-                let diag =
-                    if matches!(return_ty, Ty::Protocol(_)) || matches!(actual, Ty::Protocol(_)) {
-                        class::assignable_error(env, &actual, &return_ty)
-                    } else {
-                        Diagnostic::error(
-                            "T0022",
-                            format!(
-                                "expected return type `{}`, got `{}`",
-                                return_ty.name(),
-                                actual.name()
-                            ),
-                            Span::new(0, 0),
-                        )
-                        .with_help(format!("return a `{}` value", return_ty.name()))
-                    };
+                let diag = if matches!(return_ty, Ty::Protocol(_))
+                    || matches!(actual, Ty::Protocol(_))
+                {
+                    class::assignable_error(env, &actual, &return_ty)
+                } else {
+                    Diagnostic::error(
+                        "T0022",
+                        format!(
+                            "expected return type `{}`, got `{}`",
+                            return_ty.name(),
+                            actual.name()
+                        ),
+                        Span::new(0, 0),
+                    )
+                    .with_help(
+                        foreign::object_into_scalar_help(&actual, &return_ty)
+                            .unwrap_or_else(|| format!("return a `{}` value", return_ty.name())),
+                    )
+                };
                 return Err(diag);
             }
             // PEP 695 (#387): `is_assignable`'s `from == Ty::Param` clause
@@ -3887,6 +3908,13 @@ fn reject_generic_calls_in_expr(
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             reject_generic_calls_in_expr(module_env, own_name, call)
         }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            reject_generic_calls_in_expr(module_env, own_name, call)?;
+            for (_, value) in keywords {
+                reject_generic_calls_in_expr(module_env, own_name, value)?;
+            }
+            Ok(())
+        }
         // PEP 695 (#387): `C[type_arg](args)` — recurse into args only.
         // `class` is a bare name (not an expression), and `type_arg` is a
         // compile-time `Ty`, so neither needs generic-call rejection.
@@ -3923,6 +3951,7 @@ fn reject_generic_calls_in_expr(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => Ok(()),
         HirExpr::ListPop { list } => match list.attr_expr() {

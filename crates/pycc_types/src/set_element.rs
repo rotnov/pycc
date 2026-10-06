@@ -134,11 +134,22 @@ fn check_eq_method(class: &str, mangled: &str, env: &Environment) -> Result<(), 
     if other_in_mro && *returns == Ty::Bool {
         return Ok(());
     }
+    // #1418: a `return NotImplemented` widens the method's return to the
+    // CPython object whatever its annotation says, so a written `-> bool`
+    // alone no longer explains this refusal. The environment holds only the
+    // signature, so the note names both ways to an `object` return.
+    let widened = if *returns == Ty::Object {
+        "; its return is the CPython object (an `-> object` annotation, or a \
+         `return NotImplemented`, which makes it so whatever the annotation says, #1418)"
+    } else {
+        ""
+    };
     Err(not_implemented(
         class,
         format!(
             "a set compares elements through `{mangled}`, and pycc compiles it only as \
-             `def __eq__(self, other: K) -> bool` with `K` being `{class}` or one of its bases"
+             `def __eq__(self, other: K) -> bool` with `K` being `{class}` or one of its \
+             bases{widened}"
         ),
     ))
 }

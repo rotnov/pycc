@@ -59,6 +59,7 @@
 //!
 //! [D-185]: https://github.com/rotnov/pycc/blob/main/docs/decisions/D-185-permit-a-dedicated-tracking-issue-per-oversized.md
 
+mod method_return;
 mod object_lift;
 mod set_comp;
 mod signatures;
@@ -267,6 +268,12 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// only ever be *narrower* than it -- the safe direction for a seam
     /// whose answer displaces the check phase's.
     pub(crate) finals: HashSet<String>,
+    /// #1420: the module's class table (`HirModule::class_defs`), read
+    /// only by the `MethodCall` arm to resolve `recv.m(...)` on a
+    /// user-class instance to the method's return term
+    /// (`method_return::method_call_on_instance`). Shared by every
+    /// environment of one module; empty in a unit-test environment.
+    pub(crate) class_defs: &'hir [(String, pycc_hir::HirClassDef)],
 }
 
 impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
@@ -289,6 +296,7 @@ impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
             returns_inside_finally: false,
             shadowed_producers: HashSet::new(),
             finals: HashSet::new(),
+            class_defs: &[],
         }
     }
 
@@ -432,6 +440,8 @@ fn inference_conflict(
         );
     };
     let actual = if left == *declared { right } else { left };
+    let help = crate::foreign::object_into_scalar_help(&actual, declared)
+        .unwrap_or_else(|| format!("return a `{}` value", declared.name()));
     Diagnostic::error(
         code,
         format!(
@@ -441,7 +451,7 @@ fn inference_conflict(
         ),
         Span::new(0, 0),
     )
-    .with_help(format!("return a `{}` value", declared.name()))
+    .with_help(help)
 }
 
 pub(crate) fn unify_terms(
@@ -818,6 +828,9 @@ pub(crate) fn collect_expr_constraints(
         HirExpr::BoolLiteral(_) => Ok(Some(Ok(Ty::Bool))),
         HirExpr::StringLiteral(_) => Ok(Some(Ok(Ty::Str))),
         HirExpr::NoneLiteral => Ok(Some(Ok(Ty::None))),
+        // #1418: `return NotImplemented` in a comparison method of an `ext`
+        // module is CPython's singleton, a CPython object.
+        HirExpr::NotImplemented => Ok(Some(Ok(Ty::Object))),
         HirExpr::Name(name) => {
             // D-136: a `pycc_hir`-qualified stdlib name (`"math.pi"`) is
             // checked before ordinary binding lookup. Post-review finding:
@@ -1945,7 +1958,7 @@ pub(crate) fn collect_expr_constraints(
             }
             Ok(None)
         }
-        HirExpr::MethodCall { base, args, .. } => {
+        HirExpr::MethodCall { base, method, args } => {
             let base_term =
                 collect_expr_constraints(signatures, parents, concrete, deferred, env, base)?;
             for arg in args {
@@ -1954,7 +1967,18 @@ pub(crate) fn collect_expr_constraints(
             // Part 1 of #1333: `o.method(...)` on a concrete `object`
             // receiver answers `object`, on the `AttrGet` and `Subscript`
             // arms' own reasoning above; the three arms change together.
-            Ok(object_lift::method_call_on_object(base_term.as_ref()))
+            // #1420: on a concrete user-class instance it answers the
+            // resolved method's return term.
+            Ok(
+                object_lift::method_call_on_object(base_term.as_ref()).or_else(|| {
+                    method_return::method_call_on_instance(
+                        signatures,
+                        env,
+                        base_term.as_ref(),
+                        method,
+                    )
+                }),
+            )
         }
         // Issue #1188: this solver never picks a reading and never rejects.
         // An admitted container reading is collected exactly as the
@@ -2015,6 +2039,19 @@ pub(crate) fn collect_expr_constraints(
                 collect_expr_constraints(signatures, parents, concrete, deferred, env, arg)?;
             }
             Ok(object_lift::method_call_on_object(callee_term.as_ref()))
+        }
+        // Part 8 of #1371: collected as its positional half, whose term it
+        // answers (an `object` callee answers `object` through that half's
+        // own arm), plus each keyword value. This solver never refuses the
+        // keywords; the check phase does, for every non-object callee
+        // (`foreign::keyword_call`).
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            let term =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, call)?;
+            for (_, value) in keywords {
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, value)?;
+            }
+            Ok(term)
         }
         // #1411: `type(self)(args)` constructs the class `self` is typed
         // as, so its term is `self`'s own; an unbound `self` (a
@@ -2164,6 +2201,7 @@ fn bind_named_expr_targets(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => Ok(()),
         HirExpr::ListPop { list } => {
@@ -2272,6 +2310,13 @@ fn bind_named_expr_targets(
         }
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, call)
+        }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, call)?;
+            for (_, value) in keywords {
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, value)?;
+            }
+            Ok(())
         }
         // #1411: `type(self)(args)` walks its arguments the same way.
         HirExpr::GenericClassInstantiate { args, .. } | HirExpr::ReceiverClassCall { args } => {

@@ -55,7 +55,8 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         | HirExpr::StringLiteral(_)
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
-        | HirExpr::NoneLiteral => expr,
+        | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented => expr,
         // `callee` (a bare `String`, never an `HirExpr::Name`) is
         // deliberately left untouched even if it equals `from`: this HIR
         // subset has no first-class functions, so `callee` always names a
@@ -200,6 +201,18 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         },
         HirExpr::ReceiverClassCall { args } => HirExpr::ReceiverClassCall {
             args: args.into_iter().map(recurse).collect(),
+        },
+        HirExpr::KeywordCall {
+            call,
+            keywords,
+            span,
+        } => HirExpr::KeywordCall {
+            call: Box::new(recurse(*call)),
+            keywords: keywords
+                .into_iter()
+                .map(|(name, value)| (name, recurse(value)))
+                .collect(),
+            span,
         },
         // #433: `Super` carries no names to rename — it is a compile-time
         // marker, not a value with sub-expressions.

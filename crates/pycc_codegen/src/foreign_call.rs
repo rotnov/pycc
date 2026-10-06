@@ -1,6 +1,8 @@
 //! Emission for `MirExpr::ObjMethodCall` (Part 2 of #1026, PR 2b of #1081),
 //! `MirExpr::ObjCall` (#1313, through the same argument marshalling; a
 //! computed callee since Part 2a of #1371, see [`callee_is_produced`]),
+//! their keyword-argument form `MirExpr::ObjKeywordCall` ([`emit_call_kw`],
+//! Part 8 of #1371; `foreign_call_emit.rs` drives it from the MIR),
 //! `MirExpr::ObjSubscript` (Part 3 of #1026, PR 3b of #1082),
 //! `MirExpr::ObjList` (Part 2d of #1371, see [`emit_list`]) and
 //! `MirStmt::ForObject` (PR 3c of #1082). A slice of an object, loaded or
@@ -55,6 +57,7 @@ use crate::foreign_attr::{expect_module_exec_entry, expect_object_pointer};
 use crate::foreign_fail::{ForeignFailEdge, emit_failure, route_null};
 use crate::foreign_pack::{emit_pack, shim_fn};
 use inkwell::builder::Builder;
+use inkwell::values::BasicMetadataValueEnum;
 
 /// Allocates `slots` argument pointers in the *entry block* of `entry_fn`,
 /// leaving the builder positioned exactly where it was.
@@ -428,6 +431,7 @@ pub(super) fn emit_call<'ctx>(
         EXT_OBJ_CALL_SYMBOL,
         bound,
         args,
+        &[],
     )
 }
 
@@ -460,6 +464,7 @@ pub(super) fn emit_call_borrowed<'ctx>(
         EXT_OBJ_CALL_BORROWED_SYMBOL,
         callee_ptr,
         args,
+        &[],
     )
 }
 
@@ -468,7 +473,8 @@ pub(super) fn emit_call_borrowed<'ctx>(
 ///
 /// An allowlist of the shim's own new-reference producers: a subscript load
 /// (`pycc_ext_obj_getitem`), an attribute load (`pycc_ext_obj_getattr`) and
-/// a method or direct call's result (`pycc_ext_obj_call`). Each such result
+/// a method or direct call's result (`pycc_ext_obj_call`, or
+/// `pycc_ext_obj_call_kw` with keyword arguments). Each such result
 /// is otherwise leaked under the leak-only rule (#1092), so handing it to
 /// the consuming `pycc_ext_obj_call` is what releases it. Every other
 /// callee is a *borrow* and goes to `pycc_ext_obj_call_borrowed`: a `Name`
@@ -485,6 +491,7 @@ pub(super) fn callee_is_produced(callee: &MirExpr) -> bool {
             | MirExpr::ObjAttrGet { .. }
             | MirExpr::ObjMethodCall { .. }
             | MirExpr::ObjCall { .. }
+            | MirExpr::ObjKeywordCall(_)
     )
 }
 
@@ -510,10 +517,49 @@ pub(super) fn emit_object_call<'ctx>(
     }
 }
 
-/// The shared body of [`emit_call`] and [`emit_call_borrowed`]: the two
-/// shim helpers take the same `(callable, args, nargs)` parameters and
-/// differ only in who owns `callable`, so the packer loop, the hoisted
-/// argument array and the failure edge are written once.
+/// Marshals `args` and calls `callable` with the last `names.len()` of them
+/// passed as keyword arguments named `names` (Part 8 of #1371), yielding the
+/// call's result as an opaque [`Scalar::Object`].
+///
+/// `args` holds the positional arguments followed by the keyword values, in
+/// the order they were evaluated, which is CPython's. `consume` says who
+/// owns `callable`: a bound method from [`emit_lookup`] or a callee
+/// [`callee_is_produced`] lists is a new reference the call consumes
+/// ([`EXT_OBJ_CALL_KW_SYMBOL`]); anything else is a borrow
+/// ([`EXT_OBJ_CALL_KW_BORROWED_SYMBOL`]), exactly the split
+/// [`emit_object_call`] makes for a positional call. The shim builds the
+/// `kwnames` tuple from `names` and vectorcalls, consuming every packed
+/// argument on every path.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_call_kw<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    consume: bool,
+    callable: inkwell::values::PointerValue<'ctx>,
+    args: &[Scalar<'ctx>],
+    names: &[String],
+) -> Scalar<'ctx> {
+    debug_assert!(
+        !names.is_empty() && names.len() <= args.len(),
+        "a keyword call passes at least one keyword value"
+    );
+    let symbol = if consume {
+        EXT_OBJ_CALL_KW_SYMBOL
+    } else {
+        EXT_OBJ_CALL_KW_BORROWED_SYMBOL
+    };
+    emit_call_with(context, builder, module, rt, symbol, callable, args, names)
+}
+
+/// The shared body of [`emit_call`], [`emit_call_borrowed`] and
+/// [`emit_call_kw`]: the positional helpers take the same
+/// `(callable, args, nargs)` parameters and differ only in who owns
+/// `callable`; the keyword helpers append `(names, nkw)`, where the last
+/// `nkw` of the `args` slots are the keyword values. The packer loop, the
+/// hoisted argument array and the failure edge are written once.
+#[allow(clippy::too_many_arguments)]
 fn emit_call_with<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -522,6 +568,7 @@ fn emit_call_with<'ctx>(
     symbol: &str,
     callable: inkwell::values::PointerValue<'ctx>,
     args: &[Scalar<'ctx>],
+    names: &[String],
 ) -> Scalar<'ctx> {
     let edge = ForeignFailEdge::for_current(builder);
     let entry_fn = edge.function();
@@ -530,21 +577,56 @@ fn emit_call_with<'ctx>(
 
     let arg_array = emit_packed_array(context, builder, module, entry_fn, args);
 
-    let call = shim_fn(
-        module,
-        symbol,
-        ptr.fn_type(&[ptr.into(), ptr.into(), i64_type.into()], false),
-    );
-    let result = builder
-        .build_call(
-            call,
-            &[
+    let nargs = i64_type.const_int((args.len() - names.len()) as u64, false);
+    let (fn_type, operands): (_, Vec<BasicMetadataValueEnum<'ctx>>) = if names.is_empty() {
+        (
+            ptr.fn_type(&[ptr.into(), ptr.into(), i64_type.into()], false),
+            vec![callable.into(), arg_array.into(), nargs.into()],
+        )
+    } else {
+        let name_array = alloca_in_entry_block(context, builder, entry_fn, names.len());
+        for (index, name) in names.iter().enumerate() {
+            let text = builder
+                .build_global_string_ptr(name, &format!("pycc_foreign_kwname_{name}"))
+                .expect("build_global_string_ptr should not fail")
+                .as_pointer_value();
+            let slot = unsafe {
+                builder
+                    .build_in_bounds_gep(
+                        ptr,
+                        name_array,
+                        &[i64_type.const_int(index as u64, false)],
+                        "foreign_call_kwname_slot",
+                    )
+                    .expect("build_in_bounds_gep should not fail")
+            };
+            builder
+                .build_store(slot, text)
+                .expect("build_store should not fail");
+        }
+        (
+            ptr.fn_type(
+                &[
+                    ptr.into(),
+                    ptr.into(),
+                    i64_type.into(),
+                    ptr.into(),
+                    i64_type.into(),
+                ],
+                false,
+            ),
+            vec![
                 callable.into(),
                 arg_array.into(),
-                i64_type.const_int(args.len() as u64, false).into(),
+                nargs.into(),
+                name_array.into(),
+                i64_type.const_int(names.len() as u64, false).into(),
             ],
-            "foreign_call",
         )
+    };
+    let call = shim_fn(module, symbol, fn_type);
+    let result = builder
+        .build_call(call, &operands, "foreign_call")
         .expect("build_call should not fail for a foreign call helper")
         .try_as_basic_value()
         .expect_basic("a foreign call helper returns PyObject *")
