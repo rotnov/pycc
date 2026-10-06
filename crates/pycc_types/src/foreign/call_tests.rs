@@ -65,11 +65,7 @@ fn a_non_packable_argument_is_refused() {
         "I0404",
         "passing a `list[int]` argument to a CPython object's call",
     );
-    refused(
-        &format!("{FROM_FORM}product(None)\n"),
-        "I0404",
-        "argument to a CPython object's call",
-    );
+    // Part 8 of #1371 admits a `None` argument (`keyword_call_tests.rs`).
 }
 
 /// Part 2a of #1371: a second CPython object is packable

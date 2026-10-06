@@ -1476,7 +1476,11 @@ which is true of the host-side instances of its published family (an \
 Part 2a of #1371 lets a second CPython \
 object be a method or direct call's argument or a subscript key, and \
 admits a call of a subscript result (`callbacks[k](tok)`) under the same \
-argument rule; the result is another CPython object. Part 2b of #1371 \
+argument rule; the result is another CPython object. Part 8 of #1371 \
+lets each of those three call shapes take keyword arguments \
+(`o.split(\",\", maxsplit=1)`, `sorted(xs, reverse=True)`) under the same \
+argument rule, and admits `None` as a positional or keyword argument; \
+`**` unpacking stays refused by `C0001`. Part 2b of #1371 \
 admits a membership test (`k in o`, `k not in o`) of an `int`, `float`, \
 `bool`, `str` or `object` item in the object, evaluated by CPython's own \
 `PySequence_Contains` with a `bool` result, and a slice load \

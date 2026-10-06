@@ -91,7 +91,8 @@ fn an_unmarshallable_argument_is_refused_with_i0404() {
     let dir = ScratchDir::new("foreign_call_bad_arg").expect("scratch");
     for (body, ty) in [
         ("import gc\n\ngc.set_debug([1])\n", "list[int]"),
-        ("import gc\n\ngc.set_debug(None)\n", "None"),
+        // A `None` argument is admitted since Part 8 of #1371.
+        ("import gc\n\ngc.set_debug({\"a\": 1})\n", "dict[str, int]"),
     ] {
         let output = check(&dir, body);
         assert_eq!(

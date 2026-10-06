@@ -36,7 +36,7 @@
 use super::*;
 use crate::foreign_attr::expect_object_pointer;
 use crate::foreign_fail::{ForeignFailEdge, route_negative, route_null};
-use crate::foreign_pack::{emit_pack, shim_fn};
+use crate::foreign_pack::{emit_pack, none_pointer, shim_fn};
 use inkwell::builder::Builder;
 use inkwell::values::PointerValue;
 use pycc_mir::CmpOpKind;
@@ -59,22 +59,6 @@ fn rich_compare_selector(op: CmpOpKind) -> Option<u64> {
              pycc_mir lowers it to `ObjContains`"
         ),
     }
-}
-
-/// A borrowed pointer to CPython's `None`.
-pub(crate) fn none_pointer<'ctx>(
-    context: &'ctx Context,
-    builder: &Builder<'ctx>,
-    module: &inkwell::module::Module<'ctx>,
-) -> PointerValue<'ctx> {
-    let ptr = context.ptr_type(inkwell::AddressSpace::default());
-    let none_fn = shim_fn(module, EXT_OBJ_NONE_SYMBOL, ptr.fn_type(&[], false));
-    builder
-        .build_call(none_fn, &[], "foreign_none")
-        .expect("build_call should not fail for pycc_ext_obj_none")
-        .try_as_basic_value()
-        .expect_basic("pycc_ext_obj_none returns PyObject *")
-        .into_pointer_value()
 }
 
 /// The `PyObject *` for one operand, and whether a packer produced it (and

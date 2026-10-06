@@ -396,6 +396,12 @@ impl<'a> Walker<'a> {
                 }
             }
             HirExpr::ReceiverDispatchedCall { call, .. } => self.expr(call),
+            HirExpr::KeywordCall { call, keywords, .. } => {
+                self.expr(call);
+                for (_, value) in keywords {
+                    self.expr(value);
+                }
+            }
             HirExpr::GenericClassInstantiate { args, .. } => {
                 for arg in args {
                     self.expr(arg);

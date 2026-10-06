@@ -1493,6 +1493,29 @@ pub(super) fn lower_expr(
                     .collect(),
             }
         }
+        // Part 8 of #1371: `pycc_types` admits a keyword call only on a
+        // CPython object, so its positional half lowers to `ObjCall` or
+        // `ObjMethodCall` through the arms above, and the keyword values
+        // ride beside it.
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            // Any other positional half is a front-end defect that
+            // `pycc_codegen::foreign_call_emit::emit_keyword_call` reports.
+            let call = lower_expr(call, scopes, classes, current_class);
+            let (names, values) = keywords
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.clone(),
+                        lower_expr(value, scopes, classes, current_class),
+                    )
+                })
+                .unzip();
+            MirExpr::ObjKeywordCall(Box::new(crate::ObjKeywordCall {
+                call,
+                names,
+                values,
+            }))
+        }
         // PEP 695 (#387): `GenericClassInstantiate` should never reach MIR
         // — `pycc_types::monomorphize` rewrites every
         // `GenericClassInstantiate` expression to an ordinary
@@ -1764,6 +1787,12 @@ pub(super) fn pre_bind_named_expr_targets(
             pre_bind_named_expr_targets(callee, scopes, classes, current_class);
             for arg in args {
                 pre_bind_named_expr_targets(arg, scopes, classes, current_class);
+            }
+        }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            pre_bind_named_expr_targets(call, scopes, classes, current_class);
+            for (_, value) in keywords {
+                pre_bind_named_expr_targets(value, scopes, classes, current_class);
             }
         }
     }

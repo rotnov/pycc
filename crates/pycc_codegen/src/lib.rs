@@ -52,6 +52,7 @@ mod ext;
 mod ext_thunk;
 mod foreign_attr;
 mod foreign_call;
+mod foreign_call_emit;
 mod foreign_compare;
 mod foreign_fail;
 mod foreign_import;
@@ -101,7 +102,8 @@ pub use ext::{
 };
 use ext::{
     EXT_NAME_ERROR_SYMBOL, EXT_OBJ_BUILD_LIST_SYMBOL, EXT_OBJ_CALL_BORROWED_SYMBOL,
-    EXT_OBJ_CALL_SYMBOL, EXT_OBJ_COLLECT_SYMBOL, EXT_OBJ_CONTAINS_SYMBOL, EXT_OBJ_DELSLICE_SYMBOL,
+    EXT_OBJ_CALL_KW_BORROWED_SYMBOL, EXT_OBJ_CALL_KW_SYMBOL, EXT_OBJ_CALL_SYMBOL,
+    EXT_OBJ_COLLECT_SYMBOL, EXT_OBJ_CONTAINS_SYMBOL, EXT_OBJ_DELSLICE_SYMBOL,
     EXT_OBJ_ERROR_BRIDGE_SYMBOL, EXT_OBJ_FORMAT_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL,
     EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_GETSLICE_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
     EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL, EXT_OBJ_ISINSTANCE_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL,
@@ -3740,10 +3742,15 @@ fn emit_expr_unchecked<'ctx>(
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             let bound =
                 foreign_call::emit_lookup(context, builder, module, rt, base_scalar, method);
-            let arg_scalars: Vec<Scalar<'ctx>> = args
-                .iter()
-                .map(|arg| emit_expr(context, builder, module, rt, user_functions, locals, arg))
-                .collect();
+            let arg_scalars = foreign_call_emit::emit_object_args(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                args,
+            );
             foreign_call::emit_call(context, builder, module, rt, bound, &arg_scalars)
         }
         // #1313: `callee(args)` on an `object`-typed name (a foreign
@@ -3756,10 +3763,15 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::ObjCall { callee, args } => {
             let callee_scalar =
                 emit_expr(context, builder, module, rt, user_functions, locals, callee);
-            let arg_scalars: Vec<Scalar<'ctx>> = args
-                .iter()
-                .map(|arg| emit_expr(context, builder, module, rt, user_functions, locals, arg))
-                .collect();
+            let arg_scalars = foreign_call_emit::emit_object_args(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                args,
+            );
             foreign_call::emit_object_call(
                 context,
                 builder,
@@ -3770,6 +3782,17 @@ fn emit_expr_unchecked<'ctx>(
                 &arg_scalars,
             )
         }
+        // Part 8 of #1371: either call above with keyword arguments.
+        // `foreign_call_emit` carries the order and the ownership split.
+        MirExpr::ObjKeywordCall(call) => foreign_call_emit::emit_keyword_call(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            call,
+        ),
         // Part 3 of #1026 (PR 3a of #1082): `len(o)`. `foreign_len` carries
         // the contract -- why the D-141 encode happens inside the shim
         // rather than here, why that leaves exactly one failure edge, and

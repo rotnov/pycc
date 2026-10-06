@@ -385,6 +385,12 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
                 collect_named_expr_targets_in_expr(arg, killed);
             }
         }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            collect_named_expr_targets_in_expr(call, killed);
+            for (_, value) in keywords {
+                collect_named_expr_targets_in_expr(value, killed);
+            }
+        }
     }
 }
 

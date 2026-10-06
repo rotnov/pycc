@@ -1490,6 +1490,25 @@ callee was produced, the call is never reached and the produced callee is not
 released -- the [#1092](https://github.com/rotnov/pycc/issues/1092) leak-only
 rule, once per failure.
 
+**A keyword call reuses that ownership and adds one tuple.** Part 8 of
+[#1371](https://github.com/rotnov/pycc/issues/1371) admits keyword arguments on
+all three object-call shapes (`MirExpr::ObjKeywordCall`). Codegen packs the
+positional arguments and then the keyword values into one slot array, and
+passes the keyword names as global C strings to `pycc_ext_obj_call_kw` (a
+method call's bound method, or a produced callee) or
+`pycc_ext_obj_call_kw_borrowed` (a borrowed callee, which takes one extra
+reference and delegates). The helper builds a `kwnames` tuple of interned
+strings, calls `PyObject_Vectorcall(callable, args, nargs, kwnames)` and then
+releases the tuple, the callable and every packed slot on every path, exactly
+as `pycc_ext_obj_call` does for its own slots; a packing failure in any slot
+(positional or keyword) is checked first and fails the call without calling
+it. `PyObject_Vectorcall` with `kwnames` is a deviation in mechanism from
+`PyObject_Call` with a keyword `dict`, not in behaviour (D-258's 2026-10-05
+Part 8 amendment). The result is a new reference leaked under the #1092 rule.
+A `None` argument (positional or keyword) is CPython's own `Py_None`, borrowed
+from `pycc_ext_obj_none` and packed by `pycc_ext_obj_pack_object`, which takes
+the reference the call then consumes.
+
 **A slice load is one more producer; a membership test is not.** Part 2b of
 [#1371](https://github.com/rotnov/pycc/issues/1371) adds
 `pycc_ext_obj_getslice(o, start, stop, step, present)`, which builds CPython's
