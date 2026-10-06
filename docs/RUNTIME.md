@@ -682,7 +682,9 @@ deliberate. A field whose type no row packs from one machine word (a
 getter) gets **no descriptor**, never a `C0003`: the table widens what a host
 can observe of an object it already holds, and refusing a build over one
 unobservable field
-would turn that into a regression. And no descriptor has a setter, so a host
+would turn that into a regression. (An optional instance slot, `C | None`, never
+reaches the table: its annotation is still refused at compile time with
+`T0049`.) And no descriptor has a setter, so a host
 store such as `obj.n = 3` raises CPython's `AttributeError: attribute 'n' of
 'mod.Class' objects is not writable` where CPython would store it
 ([#1443](https://github.com/rotnov/pycc/issues/1443) tracks host-side

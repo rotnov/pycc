@@ -33,7 +33,9 @@
 //! simply gets no descriptor; it is never a `C0003`. The descriptors widen what a host can
 //! observe of an object it already holds, and refusing a whole build because
 //! one field cannot be observed would turn an additive capability into a
-//! regression for every program that has such a field today.
+//! regression for every program that has such a field today. An optional
+//! instance slot (`C | None`) never reaches this table: its annotation is
+//! still refused at compile time with `T0049`.
 //!
 //! **Constructible classes only, for now.** The descriptors are part of
 //! [`super::ExtCtor`], so only a constructible class's type object carries
