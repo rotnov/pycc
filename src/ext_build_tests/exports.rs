@@ -1712,8 +1712,8 @@ fn a_constructible_class_whose_whole_resolved_set_is_shadowed_away_publishes_no_
     // The collapse case the per-name matrix above never reaches: every one
     // of `Derived`'s resolved names is shadowed by a non-exporting binding,
     // so its row carries no method at all. Before #1450 such a class got no
-    // type object; it is constructible, so it is now published with an
-    // empty method table, as CPython's own module still answers
+    // type object; it is constructible, so it is now published with no
+    // exported method, as CPython's own module still answers
     // `mod.Derived(...)` -- with `value` read from the instance, not called.
     let mut hir = inheriting_module();
     hir.class_defs[1]
@@ -1741,7 +1741,7 @@ fn a_derived_method_shadowing_a_base_property_is_published_unchanged() {
     // no export under the name, so nothing exists for a first-exportable-hit
     // walk to fall through to and this shape answered the same before #1146.
     // `Base` exports nothing but is constructible, so since #1450 it is
-    // published with an empty method table.
+    // published with no exported method.
     let mut hir = inheriting_module();
     hir.class_defs[0]
         .1

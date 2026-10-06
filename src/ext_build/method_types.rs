@@ -9,6 +9,7 @@
 
 use super::export_name::ExtReceiver;
 use super::getset::getset_c;
+use super::instance_copy::{CarrierCopy, carrier_copy};
 use super::{
     ExtCtor, ExtPublishedClass, arg_slot_locals, buffer_releases, c_param_list, defaults,
     source_level_name, unpack_args,
@@ -143,6 +144,21 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
                 symbol = pycc_codegen::mangle_ext_name(&export.name)
             ));
         }
+        // Every published type is a carrier type (#1435), so every one gets
+        // the shared `__copy__` (#1455); the shim's run-time table decides
+        // whether this class copies or refuses. No export can already be
+        // named `__copy__`: the export-name rule refuses private names.
+        debug_assert!(
+            published
+                .methods
+                .iter()
+                .all(|export| export.method.as_deref() != Some("__copy__")),
+            "an export named `__copy__` would collide with the shared row"
+        );
+        out.push_str(
+            "    {\"__copy__\", (PyCFunction)(void (*)(void))pycc_ext_instance_copy, \
+             METH_NOARGS, NULL},\n",
+        );
         out.push_str("    {NULL, NULL, 0, NULL},\n};\n\n");
         if let Some(ctor) = ctor {
             out.push_str(&tp_init_c(ctor));
@@ -303,6 +319,9 @@ pub(crate) struct ExtCarrierClass {
     pub(crate) class: String,
     /// `HirClassDef::mro`.
     pub(crate) mro: Vec<String>,
+    /// How the shared `__copy__` copies an instance of the class (#1455):
+    /// one row of [`super::instance_copy::carrier_class_copy_kinds_c`].
+    pub(crate) copy: CarrierCopy,
 }
 
 /// Every class of `module` whose instance `pycc_types` lets cross as a call
@@ -324,6 +343,7 @@ pub(crate) fn collect_carrier_classes(module: &HirModule) -> Vec<ExtCarrierClass
         .map(|(class, def)| ExtCarrierClass {
             class: class.clone(),
             mro: def.mro.clone(),
+            copy: carrier_copy(module, def),
         })
         .collect()
 }

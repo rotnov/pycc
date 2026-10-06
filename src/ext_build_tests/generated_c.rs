@@ -1714,7 +1714,9 @@ fn an_exported_method_gets_a_method_table_a_slot_table_and_a_non_instantiable_sp
              {\"scale\", (PyCFunction)(void (*)(void))pycc_ext_wrap_0m4_Grid5_scale6_static, \
              METH_FASTCALL | METH_STATIC, NULL},\n    \
              {\"make\", (PyCFunction)(void (*)(void))pycc_ext_wrap_0m4_Grid4_make11_classmethod, \
-             METH_FASTCALL | METH_CLASS, NULL},\n    {NULL, NULL, 0, NULL},\n};\n"
+             METH_FASTCALL | METH_CLASS, NULL},\n    \
+             {\"__copy__\", (PyCFunction)(void (*)(void))pycc_ext_instance_copy, \
+             METH_NOARGS, NULL},\n    {NULL, NULL, 0, NULL},\n};\n"
         ),
         "{inc}"
     );
