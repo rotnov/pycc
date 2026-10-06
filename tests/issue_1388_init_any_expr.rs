@@ -265,8 +265,9 @@ fn assert_matches_cpython(tag: &str, body: &str, script: &str) -> String {
 
 /// The host catches the compiled module's `AttributeError` as CPython's own
 /// class, with CPython's message: raised by an exported function, and by the
-/// compiled `__init__` a host-side construction runs (`get` is there only
-/// because a class with no method publishes no type object).
+/// compiled `__init__` a host-side construction runs (`get` dates from
+/// when a class with no method published no type object; since #1450 a
+/// constructible one is published without it).
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn the_host_catches_a_read_before_assignment_as_attribute_error() {

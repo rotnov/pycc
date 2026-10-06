@@ -97,7 +97,11 @@ const SCRIPT: &str = "import pycc_1066_mod as m\n\
      assert not hasattr(m, 'G'), 'a group-derived class must not be synthesized'\n\
      # A non-exception base is dropped from the synthesized class, so\n\
      # `isinstance(e, Mixin)` does not hold host-side (docs/RUNTIME.md).\n\
-     assert not hasattr(m, 'Mixin'), 'a non-exception class is not an exception class'\n\
+     # `Mixin` itself is published as a plain class since #1450 (its\n\
+     # implicit `object.__init__` makes it constructible), never as an\n\
+     # exception class.\n\
+     assert not issubclass(m.Mixin, BaseException), 'a non-exception class is not an exception class'\n\
+     assert m.Mixin not in m.Both.__mro__, m.Both.__mro__\n\
      assert m.Both.__mro__[:2] == (m.Both, m.MyError), m.Both.__mro__\n\
      # A conforming call still returns normally, so registration left no\n\
      # pending state behind.\n\

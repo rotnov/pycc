@@ -543,11 +543,22 @@ methods** to that export set, and makes publication **MRO-resolved**
 separate predicates decide what the host sees, and they are deliberately not
 the same predicate.
 
-*Which classes are published.* A class gets a type object exactly when its
-MRO-resolved export set is non-empty -- when it or one of its bases exports at
-least one member -- and its own name is public and carries no exception type
-tag. A class that declares no exportable member of its own is published on
-the strength of what it inherits.
+*Which classes are published.* A class whose own name is public and that
+carries no exception type tag gets a type object when its MRO-resolved export
+set is non-empty -- when it or one of its bases exports at least one member --
+*or* when it is constructible (below). A class that declares no exportable
+member of its own is published on the strength of what it inherits, and since
+[#1450](https://github.com/rotnov/pycc/issues/1450) a constructible class is
+published even when it resolves no method at all: an `__init__`-only class
+(lark's `ParseConf`) or `class Empty: pass`, whose implicit `object.__init__`
+makes it constructible, gets a type object with an empty method table, so
+the host can name it, construct it, read its fields and pass the instance to
+a compiled function (`tests/issue_1450_init_only_class.rs`). A public class
+that resolves nothing and is not constructible -- its `__init__` takes a
+`tuple`, say -- still gets no type object, and so does a monomorphized
+generic specialization (`0gen_<Class>__...`, the class `Cell[int](6)`
+instantiates) that resolves nothing: its `__init__` has no `fnptr_` global
+for a generated `tp_init` to call.
 
 *Which methods each type object carries.* Every exported member of the class
 and of its bases, resolved along the class's MRO most-derived-first. The walk
@@ -601,8 +612,9 @@ same conservatism, and it costs at most a getter+setter property whose class
 also assigns the name in `__init__`. A read-only property is not that case:
 `self.<name> = ...` against one is a `T0044` before the class compiles at
 all. A class whose every
-resolved name is shadowed away this way carries no type object at all rather
-than an empty one. An unshadowed name is inherited across all three method
+resolved name is shadowed away this way resolves an empty method set, so it is
+published -- with an empty method table -- exactly when it is constructible,
+like any other class that resolves nothing. An unshadowed name is inherited across all three method
 kinds alike: `mod.Derived(21).value()` reaches a `Base.value` declared only on
 the base, and `mod.Derived.tag()` reaches a base's `@staticmethod`. An
 inherited method's compiled body addresses its own class's attribute slots,
@@ -611,15 +623,16 @@ at HIR lowering with `C0001`, every multiple-inheritance shape whose ancestor
 layout is not a name-wise prefix of the derived one -- see that function's own
 documentation for why that is the condition.
 
-*Which classes are constructible.* A published class is **constructible**
+*Which classes are constructible.* A class is **constructible**
 exactly when it is not abstract, not a `Protocol` and not an enum; it is not a
 user or builtin exception class; its MRO-resolved `__init__` returns `None`;
 and every parameter of that `__init__` after `self` is carriable by the table
-below and is not a `tuple`. A constructible class's type object drops
+below and is not a `tuple`. A published class that is constructible gets a
+type object that drops
 `Py_TPFLAGS_DISALLOW_INSTANTIATION`, gains a `tp_init`, and the host writes
 `mod.Class(...).method(...)`; a class that is not constructible keeps the
 non-instantiable shape above, so `mod.Class()` raises `TypeError`. A class
-published only for what it inherits is constructible on these same terms, so
+that declares no member of its own is constructible on these same terms, so
 `mod.Derived(21)` works while `mod.Base(...)` may refuse.
 
 An instance method is exported when its **declaring** class is not abstract,
@@ -1578,14 +1591,17 @@ above. Four rules fix what that carrier is.
   published type is now a carrier type, sized `sizeof(PyccExtInstance)` with
   the shared deallocator, and a non-constructible one keeps
   `Py_TPFLAGS_DISALLOW_INSTANTIATION` -- so the host can call the class's
-  exported methods on what it received. Any other class (private, publishing
-  nothing, or a generic class) gets a method-less type named
+  exported methods on what it received. Any other class (private, neither
+  resolving a method nor constructible, or a monomorphized generic
+  specialization) gets a method-less type named
   `<module>.<Class>` (`__main__.<Class>` in an embedded executable), created
   on first use with `Py_TPFLAGS_DISALLOW_INSTANTIATION` and cached by class
   name for the module's lifetime. The cache key is the bare class name, which
   is unique per artifact because the project namespace is flat (a second
-  top-level `Q` is a `C0001`); a generic class's instantiations share one
-  layout name and are never published, so they share one method-less type.
+  top-level `Q` is a `C0001`); a generic class's specializations
+  (`0gen_<Class>__...`) share their generic class's layout name and are
+  never published on the constructor ground (their `__init__` has no
+  `fnptr_` global for a `tp_init` to call), so they share one carrier type.
 - *Identity is CPython's while a carrier lives.* The instance keeps a weak
   back-pointer to its live carrier (`pycc_rt_ext_instance_carrier` /
   `_set_carrier`), set by `tp_init` for a host-constructed object and by the

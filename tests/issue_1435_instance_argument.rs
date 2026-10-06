@@ -65,7 +65,10 @@ fn assert_one_error(tag: &str, body: &str, code: &str, needle: &str) {
 /// The module both sides import. `Q` is published and constructible, `R`
 /// inherits `Q`'s methods (so an inherited body hands out a derived
 /// `self`), `P` takes another pycc class in its constructor (lark's
-/// `ParserState` shape) and `Hidden` publishes nothing at all; `_D` is a
+/// `ParserState` shape) and `Hidden` publishes nothing at all -- it has no
+/// method, and its `tuple` constructor parameter is one no generated
+/// constructor carries, so #1450's constructible-class publication does not
+/// reach it and it keeps exercising the on-demand carrier type; `_D` is a
 /// private, so unpublished, subclass of the published `Q`. Compiled
 /// `isinstance` on a carrier that comes back from the host answers from its
 /// run-time class (`back_hidden`, `back_private`), and `kw`/`kwself` pass an
@@ -96,13 +99,14 @@ const MODULE: &str = "class Conf:\n    def __init__(self, n: int) -> None:\n    
     class R(Q):\n    def size(self) -> int:\n        return self.n * 10\n\
     \n\
     \n\
-    class Hidden:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\
+    class Hidden:\n    def __init__(self, n: int, ab: tuple[int, int]) -> None:\n        \
+    self.n = n\n\
     \n\
     \n\
     def make_p(cb: object) -> object:\n    return P(Conf(4)).go(cb)\n\
     \n\
     \n\
-    def hidden(cb: object) -> object:\n    return cb(Hidden(5))\n\
+    def hidden(cb: object) -> object:\n    return cb(Hidden(5, (0, 0)))\n\
     \n\
     \n\
     def sub(cb: object) -> object:\n    return R(2).go(cb)\n\
@@ -125,10 +129,10 @@ const MODULE: &str = "class Conf:\n    def __init__(self, n: int) -> None:\n    
     class _D(Q):\n    pass\n\
     \n\
     \n\
-    def kw(cb: object) -> object:\n    return cb(1, state=Hidden(6))\n\
+    def kw(cb: object) -> object:\n    return cb(1, state=Hidden(6, (0, 0)))\n\
     \n\
     \n\
-    def back_hidden(cb: object) -> bool:\n    r = cb(Hidden(5))\n    return isinstance(r, Hidden)\n\
+    def back_hidden(cb: object) -> bool:\n    r = cb(Hidden(5, (0, 0)))\n    return isinstance(r, Hidden)\n\
     \n\
     \n\
     def back_private(cb: object) -> bool:\n    r = cb(_D(3))\n    \
@@ -236,11 +240,12 @@ fn an_instance_argument_crosses_like_cpython() {
 const DEVIATION_MODULE: &str = "class Q:\n    def __init__(self, n: int) -> None:\n        \
     self.n = n\n\n    def go(self, cb: object) -> object:\n        return cb(self)\n\n\n\
     class R(Q):\n    def size(self) -> int:\n        return self.n * 10\n\n\n\
-    class Same:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\n    \
+    class Same:\n    def __init__(self, n: int, ab: tuple[int, int]) -> None:\n        \
+    self.n = n\n\n    \
     def __eq__(self, other: object) -> bool:\n        return True\n\n    \
     def __repr__(self) -> str:\n        return \"Same!\"\n\n\n\
     def sub(cb: object) -> object:\n    return R(2).go(cb)\n\n\n\
-    def same(cb: object) -> object:\n    return cb(Same(1), Same(2))\n\n\n\
+    def same(cb: object) -> object:\n    return cb(Same(1, (0, 0)), Same(2, (0, 0)))\n\n\n\
     class Esc:\n    def __init__(self, cb: object) -> None:\n        self.n = 1\n        \
     cb(self)\n\n    def size(self) -> int:\n        return self.n\n";
 
@@ -260,7 +265,9 @@ const DEVIATION_DRIVER: &str = "import pycc_inst_dev_mod as mod\n\
 /// flat); attribute read through `R`'s carrier: CPython `True`, and since
 /// #1442 pycc's too (a constructible class's type carries a read-only
 /// descriptor per field); attribute read through `Same`'s on-demand
-/// carrier, which carries no descriptor table: CPython `True` (#1448);
+/// carrier, which carries no descriptor table: CPython `True` (#1448) --
+/// `Same`'s `tuple` constructor parameter keeps it unpublished, since #1450
+/// publishes every constructible class and would give it descriptors;
 /// `__eq__` and `__repr__` overrides: CPython `True` and `Same!` (dunders
 /// are not wired to type slots); a `self` escaping during `__init__`:
 /// CPython `True True` (the escape is packed before `tp_init` links the

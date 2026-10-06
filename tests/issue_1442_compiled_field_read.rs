@@ -72,7 +72,8 @@ fn assert_ok(run: &Output) {
 /// `Fields` has one slot of every carried type plus a bigint, `Base` and
 /// `Derived` share an inherited property, and `Partial`'s `__init__` never
 /// calls `Base`'s, so `Base`'s slots stay unassigned (#1148). Every class
-/// has a method because a class with none publishes no type object.
+/// has a method, which publishes it whether or not it is constructible
+/// (a method-less class is published only when constructible, #1450).
 const MODULE: &str = r#"from typing import Any, List
 
 
