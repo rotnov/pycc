@@ -62,13 +62,13 @@ impl EntryHooks {
     }
 
     /// Scans the entry module: a top-level `def` of a hook name defines it,
-    /// and every other binding of a hook name -- a `def` inside a
-    /// module-level block, an import alias, a store or `del` target, a
-    /// `class` statement, an `except ... as` name, a `match` capture -- at
-    /// the top level, anywhere inside a top-level
+    /// a hook `def` nested in a module-level block is refused, and so is
+    /// every other binding of a hook name -- an import alias, a store or
+    /// `del` target, a `class` statement, an `except ... as` name, a `match`
+    /// capture -- at the top level, anywhere inside a top-level
     /// compound statement or in a `def`/`class` header, but not inside a
     /// function or class body, whose bindings are not module
-    /// attributes, is one located `C0001`: CPython would call (or lose) a
+    /// attributes; each refusal is one located `C0001`: CPython would call (or lose) a
     /// hook the boundary cannot publish. The scan is deliberately
     /// over-inclusive: it does not evaluate a guard, so a binding CPython
     /// never executes -- under `if TYPE_CHECKING:`, say -- is refused too,
