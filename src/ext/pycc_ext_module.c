@@ -94,6 +94,13 @@ extern const unsigned char *pycc_rt_ext_instance_class(void *instance, size_t *l
 extern void *pycc_rt_ext_instance_carrier(void *instance);
 extern void pycc_rt_ext_instance_set_carrier(void *instance, void *carrier);
 
+/* `copy.copy` of a carrier (#1455). The clone of an instance with the slot
+ * references a per-class kind string calls for (`s`/`i` taken by `pycc_rt`,
+ * `o` by `pycc_ext_instance_copy` itself), and the unchecked slot read that
+ * finds the `o` words; it answers 0 for an unassigned slot. */
+extern void *pycc_rt_ext_instance_copy(void *instance, const char *kinds, size_t kinds_len);
+extern long long pycc_rt_instance_get_slot(void *instance, long long slot);
+
 /* `pycc_rt::ext_bridge`'s classification codes. */
 #define PYCC_EXT_INT_SMALLINT 0
 #define PYCC_EXT_INT_FALSE 1
@@ -3075,8 +3082,9 @@ static void pycc_ext_instance_dealloc(PyObject *self)
  * #1435: the carrier type of each class, keyed by the class name its
  * instances' layout descriptors carry. A published class's own type object
  * is entered by the generated `pycc_ext_register_method_types`
- * (`pycc_ext_carrier_register`); any other class gets a method-less carrier
- * type the first time one of its instances crosses
+ * (`pycc_ext_carrier_register`); any other class gets a carrier type whose
+ * only method is the shared `__copy__` (#1455) the first time one of its
+ * instances crosses
  * (`pycc_ext_carrier_type`, defined after the companion because it needs
  * the module name). The dict holds a strong reference to every type for the
  * rest of the process, which the shim's refusal of subinterpreters licenses
@@ -3095,8 +3103,8 @@ static int pycc_ext_carrier_types_ready(void)
 /* Enters a published class's type object as its instances' carrier type.
  * Called from the generated registration only, before any compiled code
  * runs, so a later crossing finds the type that carries the class's
- * methods rather than creating a method-less one. Returns 0, or -1 with a
- * CPython exception set. */
+ * methods rather than creating one with only `__copy__`. Returns 0, or -1
+ * with a CPython exception set. */
 static int pycc_ext_carrier_register(const char *class_name, PyObject *type)
 {
     if (pycc_ext_carrier_types_ready() < 0) {
@@ -3163,17 +3171,125 @@ static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const 
 static int pycc_ext_unpack_instance(PyObject *obj, const char *fn_name, Py_ssize_t index,
                                     const char *class_name, void **out);
 static PyObject *pycc_ext_pack_instance(void *result);
+/*
+ * #1455: the `__copy__` every carrier type carries, declared here because
+ * the generated per-class method tables in the companion name it and defined
+ * after it because it calls the generated `pycc_ext_carrier_class_copy_kinds`.
+ */
+static PyObject *pycc_ext_instance_copy(PyObject *self, PyObject *unused);
 
 #include "pycc_ext_exports.inc"
 
 /*
+ * #1455: `copy.copy(x)` of a carrier. CPython's `copy.copy` calls a type's
+ * `__copy__` before any reduce protocol, so this is the whole copy: a new
+ * carrier of `type(x)` wrapping a clone of `x`'s compiled instance. The
+ * generated table, keyed by the instance's run-time class, decides whether
+ * the class copies at all -- a class whose namespace takes part in the copy
+ * protocol, or a PEP 695 template whose specializations share one layout
+ * name, is refused with a `TypeError` naming why -- and hands the clone one
+ * kind byte per slot.
+ *
+ * A never-initialized carrier (`mod.C.__new__(mod.C)`, `inst` NULL) has no
+ * instance to read a class from; only a published type can produce one, and
+ * its name is its class name, so the table is consulted by that name and an
+ * accepted copy is another never-initialized carrier.
+ *
+ * The original is not touched: its reference count is unchanged, as in
+ * CPython. The clone is never freed (D-107, D-154), so the references it
+ * holds, including the `o` slot references taken here, outlive the copy.
+ */
+static PyObject *pycc_ext_instance_copy(PyObject *self, PyObject *unused)
+{
+    PyTypeObject *tp = Py_TYPE(self);
+    void *inst = ((PyccExtInstance *)self)->inst;
+    const unsigned char *cls;
+    size_t len = 0;
+    const char *kinds = NULL;
+    size_t nkinds = 0;
+    const char *refused = NULL;
+    PyObject *name = NULL;
+    void *clone = NULL;
+    allocfunc tp_alloc;
+    PyObject *carrier;
+    int found;
+    size_t i;
+
+    (void)unused;
+    if (inst == NULL) {
+        Py_ssize_t name_len = 0;
+        name = PyType_GetName(tp);
+        if (name == NULL) {
+            return NULL;
+        }
+        cls = (const unsigned char *)PyUnicode_AsUTF8AndSize(name, &name_len);
+        if (cls == NULL) {
+            Py_DECREF(name);
+            return NULL;
+        }
+        len = (size_t)name_len;
+    }
+    else {
+        cls = pycc_rt_ext_instance_class(inst, &len);
+    }
+    found = pycc_ext_carrier_class_copy_kinds(cls, len, &kinds, &nkinds, &refused);
+    Py_XDECREF(name);
+    if (found < 0) {
+        PyErr_SetString(PyExc_SystemError, "pycc: no copy table entry for a carrier's class");
+        return NULL;
+    }
+    if (found == 0) {
+        PyObject *qualified = PyType_GetFullyQualifiedName(tp);
+        if (qualified != NULL) {
+            PyErr_Format(PyExc_TypeError, "cannot copy '%U' object: %s", qualified, refused);
+            Py_DECREF(qualified);
+        }
+        return NULL;
+    }
+    if (inst != NULL) {
+        clone = pycc_rt_ext_instance_copy(inst, kinds, nkinds);
+        if (clone == NULL) {
+            PyErr_SetString(PyExc_SystemError,
+                            "pycc: copy kind table does not match the instance layout");
+            return NULL;
+        }
+        for (i = 0; i < nkinds; i++) {
+            if (kinds[i] == 'o') {
+                Py_XINCREF((PyObject *)(intptr_t)pycc_rt_instance_get_slot(clone, (long long)i));
+            }
+        }
+    }
+    tp_alloc = (allocfunc)PyType_GetSlot(tp, Py_tp_alloc);
+    carrier = tp_alloc(tp, 0);
+    if (carrier == NULL) {
+        return NULL;
+    }
+    ((PyccExtInstance *)carrier)->inst = clone;
+    if (clone != NULL) {
+        pycc_rt_ext_instance_set_carrier(clone, carrier);
+    }
+    return carrier;
+}
+
+/*
+ * #1455: the method table of a carrier type created on demand -- the shared
+ * `__copy__` alone. A class with no published type still copies like a
+ * Python object; the generated table refuses the ones that must not.
+ */
+static PyMethodDef pycc_ext_carrier_methods[] = {
+    {"__copy__", (PyCFunction)(void (*)(void))pycc_ext_instance_copy, METH_NOARGS, NULL},
+    {NULL, NULL, 0, NULL},
+};
+
+/*
  * #1435: the slots of a carrier type created on demand -- the shared
- * deallocator and nothing else. It publishes no method, and the spec's
- * `Py_TPFLAGS_DISALLOW_INSTANTIATION` keeps the host from calling it, since
- * no `tp_init` exists to build the instance it would carry.
+ * deallocator and, since #1455, the shared `__copy__`; no other method. The
+ * spec's `Py_TPFLAGS_DISALLOW_INSTANTIATION` keeps the host from calling it,
+ * since no `tp_init` exists to build the instance it would carry.
  */
 static PyType_Slot pycc_ext_carrier_slots[] = {
     {Py_tp_dealloc, pycc_ext_instance_dealloc},
+    {Py_tp_methods, pycc_ext_carrier_methods},
     {0, NULL},
 };
 

@@ -80,7 +80,7 @@ pub(crate) struct ExtPublishedClass {
 /// `__init__`-only class -- lark's `ParseConf` (#1450), or a fields-only
 /// dataclass, whose generated `__init__` is its only member -- and
 /// a class with only the implicit `object.__init__` (`class Empty: pass`)
-/// are published with an empty method table: the host can name
+/// are published with no exported method: the host can name
 /// them, construct them, and pass the instance to a compiled function. A
 /// publishable class that resolves nothing and is not constructible --
 /// an `__init__` with an uncarriable parameter, an enum, a Protocol -- still
@@ -234,7 +234,7 @@ pub(crate) fn collect_class_publications(
 ///
 /// Slices are walked in table order and never through a hash map: the
 /// generated `.inc` must be byte-identical across runs.
-fn class_member_names(class_def: &HirClassDef) -> impl Iterator<Item = &str> {
+pub(super) fn class_member_names(class_def: &HirClassDef) -> impl Iterator<Item = &str> {
     class_def
         .methods
         .iter()

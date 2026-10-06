@@ -551,9 +551,10 @@ member of its own is published on the strength of what it inherits, and since
 [#1450](https://github.com/rotnov/pycc/issues/1450) a constructible class is
 published even when it resolves no method at all: an `__init__`-only class
 (lark's `ParseConf`) or `class Empty: pass`, whose implicit `object.__init__`
-makes it constructible, gets a type object with an empty method table, so
-the host can name it, construct it, read its fields and pass the instance to
-a compiled function (`tests/issue_1450_init_only_class.rs`). A public class
+makes it constructible, gets a type object whose method table holds only the
+shared `__copy__` (#1455, below), so the host can name it, construct it,
+read its fields and pass the instance to a compiled function
+(`tests/issue_1450_init_only_class.rs`). A public class
 that resolves nothing and is not constructible -- its `__init__` takes a
 `tuple`, say -- still gets no type object, and so does a monomorphized
 generic specialization (`0gen_<Class>__...`, the class `Cell[int](6)`
@@ -613,7 +614,7 @@ also assigns the name in `__init__`. A read-only property is not that case:
 `self.<name> = ...` against one is a `T0044` before the class compiles at
 all. A class whose every
 resolved name is shadowed away this way resolves an empty method set, so it is
-published -- with an empty method table -- exactly when it is constructible,
+published -- with only the shared `__copy__` -- exactly when it is constructible,
 like any other class that resolves nothing. An unshadowed name is inherited across all three method
 kinds alike: `mod.Derived(21).value()` reaches a `Base.value` declared only on
 the base, and `mod.Derived.tag()` reaches a base's `@staticmethod`. An
@@ -705,6 +706,58 @@ stores). The table is a constructible class's only: a non-constructible
 published type and an on-demand carrier type (#1435) wrap an instance as well,
 but carry no descriptor yet, so a field read through one raises
 `AttributeError` ([#1448](https://github.com/rotnov/pycc/issues/1448)).
+
+*Copying an instance through `copy.copy`*
+([#1455](https://github.com/rotnov/pycc/issues/1455)). Every carrier type --
+a published type and an on-demand one alike -- carries one shared C method,
+`__copy__` (`pycc_ext_instance_copy` in `src/ext/pycc_ext_module.c`), and
+CPython's `copy.copy` calls a type's `__copy__` before any reduce protocol, so
+`copy.copy(x)` of a compiled instance (lark's `copy(parser_state.parse_conf)`)
+returns a new carrier of `type(x)` wrapping a clone of `x`'s compiled
+instance. Slot words carry no kind at run time, so the build generates one
+table, `pycc_ext_carrier_class_copy_kinds` (`src/ext_build/instance_copy.rs`),
+keyed by the instance's run-time class -- the layout name, so a subclass copies
+with its own layout and comes back as the subclass -- that hands the shim one
+kind byte per slot in flat layout order: `s` for a `str` slot and `i` for an
+`int` slot, whose reference the clone takes (`pycc_rt_ext_instance_copy`,
+`crates/pycc_rt/src/instance/copy.rs`), so a later store to either object's
+slot cannot free the other's value; `o` for an object slot, whose CPython
+reference the shim takes, as CPython's copied `__dict__` holds one; and `w` for
+a `float`, `bool`, container or instance slot, copied as a plain word -- a
+`list` slot is therefore shared between the two objects, CPython's own
+shallow-copy aliasing, and `copy.copy(h).b is h.b` for an instance slot. An
+unassigned slot stays unassigned, so the copy's read raises the same
+`AttributeError`, and a never-initialized carrier (`mod.C.__new__(mod.C)`)
+copies to another never-initialized carrier of the same type, the table being
+consulted by the type's name since there is no instance to read a class from.
+The original is never touched, so its reference count is unchanged, as in
+CPython. The table refuses three cases with
+`TypeError: cannot copy '<mod>.<Class>' object: <reason>`, never copying
+slot-wise where CPython would run user code: a class any of whose MRO classes
+binds `__copy__`, `__reduce__`, `__reduce_ex__`, `__getstate__`, `__setstate__`,
+`__getnewargs__` or `__getnewargs_ex__` (`its compiled __copy__ is not
+published`, naming the dunder found -- publishing a compiled dunder is a
+boundary decision this does not make; `__deepcopy__` alone does not refuse,
+since a shallow copy never consults it); a PEP 695 `class G[T]` (`its generic
+specializations share one instance layout`: every specialization writes the
+template's name into its layout, so a run-time lookup cannot tell `G[int]` from
+`G[str]`; an erased `Generic[T]` class such as lark's `ParseConf` has its own
+layout and copies); and a slot whose type has no kind, which type-checked
+source never produces (`a slot has an uncopyable kind`). `copy.deepcopy` and
+`pickle` stay refused with CPython's own `TypeError: cannot pickle
+'<mod>.<Class>' object`: no `__deepcopy__` or `__reduce__` is installed,
+because a deep copy would need a recursive host copy of every object slot and a
+runtime clone of compiled containers, and a reduce would let `pickle` emit a
+payload naming a constructor the host cannot call with slot state. Three
+differences from CPython follow and are pinned by
+`tests/issue_1455_copy_instance.rs`, which runs every other line against
+CPython: `hasattr(x, '__copy__')` is true on every carrier, where a Python class
+has no such attribute; a copy's object-slot reference outlives the copy, since
+the clone is never freed (D-107, D-154) -- each `copy.copy` allocates a
+never-freed instance, the same leak linear in the host's call count the
+constructor has; and the refusals above. An embedded executable compiles the
+same shim and the same generated table, so a carrier there inherits the same
+`__copy__`; that path is not separately tested.
 
 The table below is the canonical statement of what the `ext` boundary carries
 today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,
@@ -1603,7 +1656,7 @@ above. Four rules fix what that carrier is.
   `Py_TPFLAGS_DISALLOW_INSTANTIATION` -- so the host can call the class's
   exported methods on what it received. Any other class (private, neither
   resolving a method nor constructible, or a monomorphized generic
-  specialization) gets a method-less type named
+  specialization) gets a type carrying only the shared `__copy__` (#1455), named
   `<module>.<Class>` (`__main__.<Class>` in an embedded executable), created
   on first use with `Py_TPFLAGS_DISALLOW_INSTANTIATION` and cached by class
   name for the module's lifetime. The cache key is the bare class name, which
@@ -1636,8 +1689,9 @@ above. Four rules fix what that carrier is.
   published class reads its fields through that type's read-only descriptors
   (#1442, "Reading a field through the published type" above), as CPython
   does. Any other carrier -- a non-constructible published type's, or an
-  on-demand carrier type's -- exposes exactly its type's exported methods: no
-  attribute is readable, so `hasattr(x, 'n')` is `False` where CPython says
+  on-demand carrier type's -- exposes exactly its type's exported methods and
+  the shared `__copy__` (#1455, "Copying an instance through `copy.copy`"
+  above): no attribute is readable, so `hasattr(x, 'n')` is `False` where CPython says
   `True` ([#1448](https://github.com/rotnov/pycc/issues/1448)). Published types are
   flat, so the host's own `isinstance(derived, mod.Base)` is `False`; a
   compiled `isinstance(x, Base)` on a carrier that comes back answers from

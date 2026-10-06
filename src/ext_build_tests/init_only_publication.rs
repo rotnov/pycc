@@ -31,7 +31,7 @@ fn publications_and_ctors(hir: &HirModule) -> (Vec<ExtPublishedClass>, Vec<ExtCt
 }
 
 #[test]
-fn an_init_only_class_is_published_with_an_empty_method_table_and_a_constructor() {
+fn an_init_only_class_is_published_with_only_the_copy_row_and_a_constructor() {
     let hir = init_only_module("ParseConf");
     let (publications, ctors) = publications_and_ctors(&hir);
     assert_eq!(
@@ -50,12 +50,15 @@ fn an_init_only_class_is_published_with_an_empty_method_table_and_a_constructor(
         vec![("ParseConf", "ParseConf.__init__", vec![Ty::Int, Ty::Int])]
     );
 
-    // The rendered type: a sentinel-only method table, a real `tp_init`,
+    // The rendered type: a method table holding only the shared `__copy__`
+    // (#1455), a real `tp_init`,
     // the slot descriptors, no `DISALLOW_INSTANTIATION`, and a module
     // attribute under the class's own name.
     let c = method_types_c(&publications, &ctors);
     for needle in [
-        "static PyMethodDef pycc_ext_type_methods_ParseConf[] = {\n    {NULL, NULL, 0, NULL},\n};",
+        "static PyMethodDef pycc_ext_type_methods_ParseConf[] = {\n    \
+         {\"__copy__\", (PyCFunction)(void (*)(void))pycc_ext_instance_copy, METH_NOARGS, NULL},\n    \
+         {NULL, NULL, 0, NULL},\n};",
         "{Py_tp_init, pycc_ext_tp_init_ParseConf}",
         "{Py_tp_getset, pycc_ext_type_getset_ParseConf}",
         "PyModule_AddObjectRef(module, \"ParseConf\", type)",

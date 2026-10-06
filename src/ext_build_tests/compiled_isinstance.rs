@@ -67,6 +67,7 @@ fn the_carrier_isinstance_answers_from_each_classs_mro() {
     let carrier = |class: &str, mro: &[&str]| ExtCarrierClass {
         class: class.to_string(),
         mro: mro.iter().map(|name| name.to_string()).collect(),
+        copy: CarrierCopy::Kinds(String::new()),
     };
     let c = carrier_class_isinstance_c(&[
         carrier("Q", &["Q", "object"]),
@@ -131,6 +132,7 @@ fn the_shim_answers_a_carrier_before_the_published_family() {
     let carriers = [ExtCarrierClass {
         class: "Q".to_string(),
         mro: vec!["Q".to_string()],
+        copy: CarrierCopy::Kinds(String::new()),
     }];
     let inc = generate_exports_inc("m", &[], &[], &[], &[], &carriers);
     assert!(
