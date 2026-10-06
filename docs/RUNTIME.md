@@ -646,6 +646,35 @@ instance a constructor allocates is never freed: D-107's arena model, narrowed
 by D-154, gives `pycc_rt` no ownership model, so the leak a `native` program
 bounds at process exit becomes linear in the host's call count.
 
+*Reading a field through the published type*
+([#1442](https://github.com/rotnov/pycc/issues/1442)). A constructible class's
+type object also carries a read-only `Py_tp_getset` table: one descriptor per
+instance-attribute slot and one per `@property` whose declared type is `int`,
+`float`, `bool`, `str` or, in an `--ext` module, the object (D-258). A slot is
+read with the same checked accessor a compiled `self.x` read uses, so an
+unassigned slot -- a base's slot a derived `__init__` never assigns (#1148), or
+any slot of a carrier `mod.Class.__new__(mod.Class)` never initialized --
+raises CPython's `AttributeError: '<Class>' object has no attribute '<name>'`,
+and `hasattr`/`getattr(obj, name, default)` answer as for any missing
+attribute. A property runs its compiled getter through the same wrapper an
+instance method gets, the receiver-exact copy for a subclass (D-254). A
+property is described only where it wins the namespace walk above, and each
+value is packed by the return-type row of the table below, so an `int` outside
+the inline range raises `OverflowError`. This is what lets compiled code read a
+field off an `Any` operand: `other.state_stack` in lark's
+`ParserState.__eq__(self, other)` lowers to `PyObject_GetAttr` (D-258), which
+finds the descriptor when `other` is a compiled instance, so the host's
+`obj.field` and the compiled `other.field` answer alike. Two limits are
+deliberate. A field whose type no row packs from one machine word (a
+`list[int]` slot, an instance-typed one, a `tuple`-returning getter) gets **no
+descriptor**, never a `C0003`: the table widens what a host can observe of an
+object it already holds, and refusing a build over one unobservable field
+would turn that into a regression. And no descriptor has a setter, so a host
+store such as `obj.n = 3` raises CPython's `AttributeError: attribute 'n' of
+'mod.Class' objects is not writable` where CPython would store it
+([#1443](https://github.com/rotnov/pycc/issues/1443) tracks host-side
+stores).
+
 The table below is the canonical statement of what the `ext` boundary carries
 today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,
 `docs/DIAGNOSTICS.md` and the `C0003` explanation cross-reference it rather than

@@ -166,6 +166,7 @@ mod buffer_slice_parity;
 mod compiled_isinstance;
 mod exports;
 mod generated_c;
+mod getset;
 mod method_defaults;
 mod object_text;
 mod refusal_completeness;
