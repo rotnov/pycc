@@ -653,7 +653,14 @@ bounds at process exit becomes linear in the host's call count.
 ([#1442](https://github.com/rotnov/pycc/issues/1442)). A constructible class's
 type object also carries a read-only `Py_tp_getset` table: one descriptor per
 instance-attribute slot and one per `@property` whose declared type is `int`,
-`float`, `bool`, `str` or, in an `--ext` module, the object (D-258). A slot is
+`float`, `bool`, `str`, in an `--ext` module the object (D-258), or -- since
+[#1453](https://github.com/rotnov/pycc/issues/1453) -- a regular class
+compiled in the same module, the classes the admissibility table's
+same-module row admits (lark's `ParserState.parse_conf: ParseConf`). Such a
+field is packed by that row's egress, `pycc_ext_pack_instance`, so the stored
+instance's live carrier comes back and `s.parse_conf is s.parse_conf`, the
+host's own object when the host constructed it; an instance compiled code
+made gets a fresh carrier of its run-time class on its first read. A slot is
 read with the same checked accessor a compiled `self.x` read uses, so an
 unassigned slot -- a base's slot a derived `__init__` never assigns (#1148), or
 any slot of a carrier `mod.Class.__new__(mod.Class)` never initialized --
@@ -671,9 +678,10 @@ field off an `Any` operand: `other.state_stack` in lark's
 finds the descriptor when `other` is a compiled instance, so the host's
 `obj.field` and the compiled `other.field` answer alike. Two limits are
 deliberate. A field whose type no row packs from one machine word (a
-`list[int]` slot, an instance-typed one, a `tuple`-returning getter) gets **no
-descriptor**, never a `C0003`: the table widens what a host can observe of an
-object it already holds, and refusing a build over one unobservable field
+`list[int]` slot, an enum- or exception-class-typed one, a `tuple`-returning
+getter) gets **no descriptor**, never a `C0003`: the table widens what a host
+can observe of an object it already holds, and refusing a build over one
+unobservable field
 would turn that into a regression. And no descriptor has a setter, so a host
 store such as `obj.n = 3` raises CPython's `AttributeError: attribute 'n' of
 'mod.Class' objects is not writable` where CPython would store it
