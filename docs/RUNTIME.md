@@ -665,7 +665,7 @@ bounds at process exit becomes linear in the host's call count.
 
 *Reading a field through the published type*
 ([#1442](https://github.com/rotnov/pycc/issues/1442)). A constructible class's
-type object also carries a read-only `Py_tp_getset` table: one descriptor per
+type object also carries a `Py_tp_getset` table: one descriptor per
 instance-attribute slot and one per `@property` whose declared type is `int`,
 `float`, `bool`, `str`, in an `--ext` module the object (D-258), or -- since
 [#1453](https://github.com/rotnov/pycc/issues/1453) -- a regular class
@@ -698,14 +698,50 @@ can observe of an object it already holds, and refusing a build over one
 unobservable field
 would turn that into a regression. (An optional instance slot, `C | None`, never
 reaches the table: its annotation is still refused at compile time with
-`T0049`.) And no descriptor has a setter, so a host
-store such as `obj.n = 3` raises CPython's `AttributeError: attribute 'n' of
-'mod.Class' objects is not writable` where CPython would store it
-([#1443](https://github.com/rotnov/pycc/issues/1443) tracks host-side
-stores). The table is a constructible class's only: a non-constructible
+`T0049`.) The table is a constructible class's only: a non-constructible
 published type and an on-demand carrier type (#1435) wrap an instance as well,
 but carry no descriptor yet, so a field read through one raises
 `AttributeError` ([#1448](https://github.com/rotnov/pycc/issues/1448)).
+
+*Storing a field through the published type* (Part 1 of
+[#1443](https://github.com/rotnov/pycc/issues/1443), D-244's #1443
+amendment). A slot descriptor has a setter, so a host `obj.x = v` stores into
+the compiled instance and `del obj.x` un-assigns the slot
+(`src/ext_build/getset/setter.rs`). The store converts `v` by the
+**parameter** row of the table below for the slot's declared type, with the
+very `pycc_ext_unpack_*` helper a parameter of that type uses, so the slot
+admits what an argument of its type admits and refuses the rest with that
+row's error, named for the slot (`TypeError: Class.x() argument 1: 'str'
+object cannot be interpreted as an integer`, an `OverflowError` outside the
+inline `int` range, an instance slot refusing a non-carrier, a carrier of an
+unrelated class, or a never-initialized one exactly as #1449's parameter
+ingress does) where CPython would store any value. The converted word is the
+one a compiled `self.x = v` writes, and
+`pycc_rt_ext_instance_store_slot` releases the replaced word by the slot's
+`__copy__` kind byte (#1455): a `str` is decref'd and an out-of-range `int`
+released, exactly as the compiled store does, while an object word is not --
+the object a store replaces, or a `del` removes, keeps the reference the slot
+held, the compiled object store's own leak (#1092). A compiled method that
+reads the slot afterwards sees the host's value, including a `bool` stored
+into an `int` slot (`True + 100` is `101`). `del` goes through
+`pycc_rt_ext_instance_delete_slot`, so a later read -- host or compiled --
+and a second `del` raise `AttributeError: '<Class>' object has no attribute
+'<name>'`, as in CPython. A carrier whose `__init__` never ran has no compiled
+instance to store into: a store raises `AttributeError: cannot set '<name>' on
+a '<Class>' object whose __init__ never ran`, and a `del` raises the
+unassigned-slot message. Three kinds of attribute stay unwritable and keep
+CPython's own `AttributeError`. A property descriptor has no setter (a
+compiled property setter is [#1458](https://github.com/rotnov/pycc/issues/1458)).
+A name with no descriptor -- a slot of a type the getter does not carry, or a
+new name -- has nowhere to go (`... has no attribute 'xs' and no __dict__ for
+setting new attributes`). And every slot of a class whose MRO defines a
+compiled `__setattr__` or `__delattr__` keeps a read-only descriptor, because
+the extension does not run that method on a host store and a raw slot store
+would bypass it silently
+([#1459](https://github.com/rotnov/pycc/issues/1459)). Compiled code storing
+into a field through an object-typed name (`other.x = v` on an `Any`) is
+[#1457](https://github.com/rotnov/pycc/issues/1457).
+`tests/issue_1443_field_setter.rs` pins each line against CPython.
 
 *Copying an instance through `copy.copy`*
 ([#1455](https://github.com/rotnov/pycc/issues/1455)). Every carrier type --
@@ -1686,9 +1722,10 @@ above. Four rules fix what that carrier is.
   `SystemError`.
 - *Deviations from CPython, pinned by
   `tests/issue_1435_instance_argument.rs`.* A carrier of a constructible
-  published class reads its fields through that type's read-only descriptors
-  (#1442, "Reading a field through the published type" above), as CPython
-  does. Any other carrier -- a non-constructible published type's, or an
+  published class reads its fields through that type's descriptors (#1442,
+  "Reading a field through the published type" above) and stores into its
+  slots through their setters (Part 1 of #1443, "Storing a field through the
+  published type" above), as CPython does. Any other carrier -- a non-constructible published type's, or an
   on-demand carrier type's -- exposes exactly its type's exported methods and
   the shared `__copy__` (#1455, "Copying an instance through `copy.copy`"
   above): no attribute is readable, so `hasattr(x, 'n')` is `False` where CPython says

@@ -1,6 +1,6 @@
-//! The read-only `Py_tp_getset` descriptors a constructible published class
-//! carries (#1442): which slots and properties get one, and the generated
-//! C each renders to. Lowered from real source through the `--ext`
+//! The `Py_tp_getset` descriptors a constructible published class carries
+//! (#1442), and their slot setters (Part 1 of #1443): which slots and
+//! properties get one, and the generated C each renders to. Lowered from real source through the `--ext`
 //! frontend, so the slot types are the ones D-258 really assigns (an `Any`
 //! or object-carrying container field is the opaque object).
 
@@ -39,6 +39,7 @@ fn slot(name: &str, index: usize, ty: Ty) -> ExtGetset {
         name: name.to_string(),
         index,
         ty,
+        writable: true,
     }
 }
 
@@ -75,7 +76,7 @@ fn every_carriable_slot_gets_a_descriptor_at_its_slot_index() {
 
 /// Each slot type is packed by the packer its word needs, the two packers
 /// that discharge a reference are handed one taken first, and the table is
-/// installed as `Py_tp_getset` with no setter.
+/// installed as `Py_tp_getset` with each slot's setter.
 #[test]
 fn each_slot_getter_packs_its_word_and_the_table_is_installed() {
     let (_, inc) = ext_build("1442_scalars_c", SCALARS);
@@ -124,11 +125,11 @@ fn each_slot_getter_packs_its_word_and_the_table_is_installed() {
     assert!(
         inc.contains(
             "static PyGetSetDef pycc_ext_type_getset_P[] = {\n    \
-             {\"n\", pycc_ext_get_1_P_1_n, NULL, NULL, NULL},\n    \
-             {\"r\", pycc_ext_get_1_P_1_r, NULL, NULL, NULL},\n    \
-             {\"b\", pycc_ext_get_1_P_1_b, NULL, NULL, NULL},\n    \
-             {\"s\", pycc_ext_get_1_P_1_s, NULL, NULL, NULL},\n    \
-             {\"o\", pycc_ext_get_1_P_1_o, NULL, NULL, NULL},\n    \
+             {\"n\", pycc_ext_get_1_P_1_n, pycc_ext_set_1_P_1_n, NULL, NULL},\n    \
+             {\"r\", pycc_ext_get_1_P_1_r, pycc_ext_set_1_P_1_r, NULL, NULL},\n    \
+             {\"b\", pycc_ext_get_1_P_1_b, pycc_ext_set_1_P_1_b, NULL, NULL},\n    \
+             {\"s\", pycc_ext_get_1_P_1_s, pycc_ext_set_1_P_1_s, NULL, NULL},\n    \
+             {\"o\", pycc_ext_get_1_P_1_o, pycc_ext_set_1_P_1_o, NULL, NULL},\n    \
              {NULL, NULL, NULL, NULL, NULL},\n};\n"
         ),
         "{inc}"
@@ -141,6 +142,155 @@ fn each_slot_getter_packs_its_word_and_the_table_is_installed() {
         "{inc}"
     );
     assert!(!inc.contains("pycc_ext_get_1_P_2_xs"), "{inc}");
+    assert!(!inc.contains("pycc_ext_set_1_P_2_xs"), "{inc}");
+}
+
+/// Part 1 of #1443: the whole setter of an `int` slot -- the never-initialized
+/// guard split by operation, the `del` through the runtime with the pending
+/// `AttributeError` raised, and the store through the parameter row's unpack
+/// helper with the slot's kind byte.
+#[test]
+fn an_int_slot_setter_unpacks_by_the_parameter_row_and_stores_by_kind() {
+    let (_, inc) = ext_build("1443_setter_int", SCALARS);
+    let setter = "static int pycc_ext_set_1_P_1_n(PyObject *self, PyObject *value, void *closure)\n{\n    \
+                  void *inst = ((PyccExtInstance *)self)->inst;\n    long long v;\n    long long word;\n    \
+                  (void)closure;\n    if (inst == NULL) {\n        if (value == NULL) {\n            \
+                  PyErr_SetString(PyExc_AttributeError, \"'P' object has no attribute 'n'\");\n        \
+                  } else {\n            \
+                  PyErr_SetString(PyExc_AttributeError, \
+                  \"cannot set 'n' on a 'P' object whose __init__ never ran\");\n        }\n        \
+                  return -1;\n    }\n    if (value == NULL) {\n        \
+                  if (pycc_rt_ext_instance_delete_slot(inst, 0, 'i') != 0) {\n            \
+                  pycc_ext_raise_pending();\n            return -1;\n        }\n        \
+                  return 0;\n    }\n    \
+                  if (pycc_ext_unpack_int(value, \"P.n\", 0, &v) != 0) {\n        return -1;\n    }\n    \
+                  word = v;\n    pycc_rt_ext_instance_store_slot(inst, 0, 'i', word);\n    \
+                  return 0;\n}\n\n";
+    assert!(inc.contains(setter), "missing:\n{setter}\nin:\n{inc}");
+}
+
+/// Each other slot type's setter: its unpack helper, the conversion of the
+/// unpacked local to the slot word `scalar_to_slot_word` writes, and its
+/// kind byte -- `s` and `o` for the two reference-holding words, `w` for a
+/// plain one.
+#[test]
+fn each_slot_setter_converts_its_type_to_the_compiled_slot_word() {
+    let (_, inc) = ext_build("1443_setter_types", SCALARS);
+    for (name, index, local, unpack, to_word, kind) in [
+        (
+            "r",
+            1,
+            "double v;",
+            "pycc_ext_unpack_float(value, \"P.r\", 0, &v)",
+            "memcpy(&word, &v, sizeof word);",
+            'w',
+        ),
+        (
+            "b",
+            3,
+            "char v;",
+            "pycc_ext_unpack_bool(value, \"P.b\", 0, &v)",
+            "word = (unsigned char)v;",
+            'w',
+        ),
+        (
+            "s",
+            4,
+            "void *v;",
+            "pycc_ext_unpack_str(value, \"P.s\", 0, &v)",
+            "word = (long long)(intptr_t)v;",
+            's',
+        ),
+        (
+            "o",
+            5,
+            "void *v;",
+            "pycc_ext_unpack_object(value, \"P.o\", 0, &v)",
+            "word = (long long)(intptr_t)v;",
+            'o',
+        ),
+    ] {
+        let symbol = format!("static int pycc_ext_set_1_P_1_{name}(");
+        let start = inc
+            .find(&symbol)
+            .unwrap_or_else(|| panic!("{symbol} in:\n{inc}"));
+        let body = &inc[start..start + inc[start..].find("\n}\n").expect("the setter ends")];
+        for expected in [
+            format!("    {local}\n"),
+            format!("pycc_rt_ext_instance_delete_slot(inst, {index}, '{kind}')"),
+            format!("    if ({unpack} != 0) {{\n"),
+            format!(
+                "    {to_word}\n    pycc_rt_ext_instance_store_slot(inst, {index}, '{kind}', word);\n"
+            ),
+        ] {
+            assert!(
+                body.contains(&expected),
+                "missing:\n{expected}\nin:\n{body}"
+            );
+        }
+    }
+}
+
+/// A property descriptor keeps a `NULL` setter (its compiled setter is
+/// #1458) while the slot beside it gets one.
+#[test]
+fn a_property_row_keeps_a_null_setter() {
+    let (_, inc) = ext_build("1443_property_row", PROPERTIES);
+    assert!(
+        inc.contains(
+            "static PyGetSetDef pycc_ext_type_getset_Base[] = {\n    \
+             {\"stack\", pycc_ext_get_4_Base_5_stack, pycc_ext_set_4_Base_5_stack, NULL, NULL},\n    \
+             {\"top\", pycc_ext_get_4_Base_3_top, NULL, NULL, NULL},\n    \
+             {\"shadowed\", pycc_ext_get_4_Base_8_shadowed, NULL, NULL, NULL},\n"
+        ),
+        "{inc}"
+    );
+    assert!(!inc.contains("pycc_ext_set_4_Base_3_top"), "{inc}");
+}
+
+/// #1459: a class whose MRO defines a compiled `__setattr__` or
+/// `__delattr__` -- its own or a base's -- keeps read-only slot descriptors,
+/// because the extension does not route a store through the method and a raw
+/// slot store would bypass it. A class beside them with neither is writable.
+#[test]
+fn a_class_that_intercepts_stores_keeps_read_only_slots() {
+    let source = "class S:\n\
+         \x20   def __init__(self, n: int) -> None:\n\
+         \x20       self.n = n\n\
+         \x20   def __setattr__(self, name: str, value: int) -> None:\n\
+         \x20       pass\n\
+         class D:\n\
+         \x20   def __init__(self, n: int) -> None:\n\
+         \x20       self.n = n\n\
+         \x20   def __delattr__(self, name: str) -> None:\n\
+         \x20       pass\n\
+         class E(D):\n\
+         \x20   def get(self) -> int:\n\
+         \x20       return self.n\n\
+         class F:\n\
+         \x20   def __init__(self, n: int) -> None:\n\
+         \x20       self.n = n\n";
+    let (ctors, inc) = ext_build("1443_intercepts", source);
+    for class in ["S", "D", "E"] {
+        assert_eq!(
+            getsets_of(&ctors, class),
+            &[ExtGetset::Slot {
+                name: "n".to_string(),
+                index: 0,
+                ty: Ty::Int,
+                writable: false,
+            }],
+            "{class}"
+        );
+        let row = format!("{{\"n\", pycc_ext_get_1_{class}_1_n, NULL, NULL, NULL}},\n");
+        assert!(inc.contains(&row), "missing {row} in:\n{inc}");
+        assert!(
+            !inc.contains(&format!("pycc_ext_set_1_{class}_1_n")),
+            "{inc}"
+        );
+    }
+    assert_eq!(getsets_of(&ctors, "F"), &[slot("n", 0, Ty::Int)]);
+    assert!(inc.contains("pycc_ext_set_1_F_1_n"), "{inc}");
 }
 
 /// A class with no carriable slot and no property installs no table, so
@@ -342,6 +492,15 @@ fn an_instance_slot_getter_packs_through_the_instance_egress() {
                   return NULL;\n    }\n    \
                   return pycc_ext_pack_instance((void *)(intptr_t)word);\n}\n\n";
     assert!(inc.contains(getter), "missing:\n{getter}\nin:\n{inc}");
+    // Part 1 of #1443: the instance slot's setter admits a carrier of the
+    // declared class (or a subclass) through #1449's ingress, a plain word.
+    for expected in [
+        "    if (pycc_ext_unpack_instance(value, \"St.parse_conf\", 0, \"Conf\", &v) != 0) {\n",
+        "    word = (long long)(intptr_t)v;\n    \
+         pycc_rt_ext_instance_store_slot(inst, 0, 'w', word);\n",
+    ] {
+        assert!(inc.contains(expected), "missing:\n{expected}\nin:\n{inc}");
+    }
     assert!(
         inc.contains("return pycc_ext_pack_instance(result);"),
         "{inc}"

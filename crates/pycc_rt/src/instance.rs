@@ -90,6 +90,8 @@ pub use carrier::{
 };
 mod copy;
 pub use copy::pycc_rt_ext_instance_copy;
+mod store;
+pub use store::{pycc_rt_ext_instance_delete_slot, pycc_rt_ext_instance_store_slot};
 
 /// Allocates a fresh instance with `slot_count` unassigned slots. A negative
 /// `slot_count` is an internal-error panic (impossible from real

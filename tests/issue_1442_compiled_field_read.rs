@@ -3,16 +3,18 @@
 //! `other.state_stack` and `other.position` from an unannotated `other`,
 //! which D-258 makes the opaque CPython object; compiled code reads such an
 //! attribute with `PyObject_GetAttr`, so the published type must answer it.
-//! Each constructible published class carries one read-only `Py_tp_getset`
+//! Each constructible published class carries one `Py_tp_getset`
 //! descriptor per carriable slot and per carriable `@property`
-//! (`src/ext_build/getset.rs`).
+//! (`src/ext_build/getset.rs`); a slot's descriptor is writable since
+//! Part 1 of #1443.
 //!
 //! The hosted tests drive the extension from a host script and run the very
 //! same script against the source imported as plain Python, so CPython is
 //! the oracle for every line of [`DRIVER`]. [`EXT_ONLY_DRIVER`] pins the
 //! documented differences from CPython: a slot holding an int outside the
 //! inline range raises `OverflowError` (the D-244 `int` boundary, #1040), a
-//! host-side store is refused (the descriptors have no setter), and two
+//! host-side store of a value the slot's parameter row refuses raises
+//! `TypeError` (Part 1 of #1443), and two
 //! reads keep one reference per call: the compiled `other.state_stack`
 //! attribute read and the `self.items[-1]` subscript inside the `top`
 //! getter. Both are object-operation temporaries #1092 tracks, not the
@@ -242,9 +244,9 @@ for _ in range(2):
     except OverflowError:
         print('OverflowError')
 try:
-    f.n = 3
-except AttributeError as e:
-    print('AttributeError', e)
+    f.n = 'x'
+except TypeError as e:
+    print('TypeError', e)
 print(f.n)
 a = m.ParserState('c', [1], [])
 b = m.ParserState('c', [1], [])
@@ -263,7 +265,7 @@ print(sys.getrefcount(top) - before)
 
 const EXT_ONLY_OUT: &str = "OverflowError\n\
     OverflowError\n\
-    AttributeError attribute 'n' of 'pycc_field_read_mod.Fields' objects is not writable\n\
+    TypeError Fields.n() argument 1: 'str' object cannot be interpreted as an integer\n\
     7\n\
     100\n\
     100\n";

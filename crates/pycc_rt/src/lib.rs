@@ -75,8 +75,9 @@ pub use exception::{
 pub use hash::{pycc_rt_hash_int, pycc_rt_hash_pointer, pycc_rt_hash_slot_int, pycc_rt_hash_tuple};
 pub use instance::{
     PyInstanceObj, pycc_rt_ext_instance_carrier, pycc_rt_ext_instance_class,
-    pycc_rt_ext_instance_copy, pycc_rt_ext_instance_set_carrier, pycc_rt_instance_get_slot,
-    pycc_rt_instance_get_slot_checked, pycc_rt_instance_new, pycc_rt_instance_set_slot,
+    pycc_rt_ext_instance_copy, pycc_rt_ext_instance_delete_slot, pycc_rt_ext_instance_set_carrier,
+    pycc_rt_ext_instance_store_slot, pycc_rt_instance_get_slot, pycc_rt_instance_get_slot_checked,
+    pycc_rt_instance_new, pycc_rt_instance_set_slot,
 };
 pub use int_bitwise::{
     pycc_rt_int_and, pycc_rt_int_lshift, pycc_rt_int_or, pycc_rt_int_rshift, pycc_rt_int_xor,
