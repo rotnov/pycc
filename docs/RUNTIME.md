@@ -1458,13 +1458,15 @@ the leaked set either. An out-of-range selector or a `NULL` operand raises
 Against a class compiled in the same module (Part 7 of #1371),
 `pycc_ext_obj_isinstance_compiled(o, name)` borrows `o` and the class's
 constant NUL-terminated name, and has the same `1`/`0`/`-1` contract. A
-carrier of a pycc instance (any object whose type uses the shared carrier
-deallocator, below) is answered first, without CPython: since
+carrier of a pycc instance (an object whose type uses the shared carrier
+deallocator, below, and that holds an instance) is answered first, without
+CPython: since
 [#1435](https://github.com/rotnov/pycc/issues/1435) the generated
 `pycc_ext_carrier_class_isinstance` matches the carried instance's run-time
 class name (`pycc_rt_ext_instance_class`) against a table of every regular
 class's MRO, so a carrier of an unpublished class, or of an unpublished
-subclass, answers as CPython would. Any other object goes to the generated
+subclass, answers as CPython would. Any other object -- including a
+published type's object that `__new__` made and no `tp_init` filled -- goes to the generated
 `pycc_ext_compiled_class_isinstance`, which tests `o`
 against the type object of each published class whose MRO contains `name`.
 Those type objects are kept for that purpose in per-class file statics

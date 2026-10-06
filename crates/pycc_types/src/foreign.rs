@@ -227,7 +227,8 @@
 //! [`Ty::Object`] in a module body -- and, since #1316 and Part 1 of #1333,
 //! in a function body too -- under the
 //! same argument rule as a method call ([`check_object_call_args`]: a
-//! scalar, `None` or object argument, positional or, since Part 8 of #1371,
+//! scalar, `None`, object or (since #1435) class-instance argument,
+//! positional or, since Part 8 of #1371,
 //! keyword -- `keyword_call`); the
 //! constraint solver's own `Call` arm answers the same term. Part 2 kept
 //! the call refused because admitting `f(2.0)` also admits `numpy(1)`,
