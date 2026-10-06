@@ -51,7 +51,7 @@ mod read_protocol_names;
 
 // The `C0001` that makes `--ext`'s abstract-method exclusion total
 // (#1145) -- a derivation nothing pinned before, and its discriminating
-// counterpart. Its own module for the reason the four above give.
+// counterpart. Its own module for the reason the five above give.
 mod abstract_without_abc_base;
 
 // D-228's bare-container advice positions (#918), moved out when #1266 added

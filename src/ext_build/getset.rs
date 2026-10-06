@@ -22,6 +22,9 @@
 //! `__delattr__` never reaches this table: the frontend refuses either name
 //! in a class body (`C0001`, #1459), because a raw slot store -- or a
 //! direct call of a property setter -- would silently bypass the method.
+//! The read side is the same: a class binding `__getattribute__` or
+//! `__getattr__` never reaches the getters here either (`C0001`, #1465),
+//! because a getter answering the read directly would bypass the method.
 //!
 //! **Property stores (#1458).** A property with a compiled setter routes a
 //! store through the setter's `METH_FASTCALL` wrapper, the way the getter
