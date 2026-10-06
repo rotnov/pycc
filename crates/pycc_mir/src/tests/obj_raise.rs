@@ -132,6 +132,44 @@ fn a_native_constructor_call_still_lowers_to_raise() {
     );
 }
 
+/// A native exception reached by name, not by a call, keeps the existing
+/// `Raise` of an `Existing` value; only an `object`-typed name becomes an
+/// `ObjRaise`.
+#[test]
+fn a_native_exception_name_still_lowers_to_raise_of_the_existing_value() {
+    let hir = module(
+        vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![(
+                "e".to_string(),
+                Ty::Instance(Box::new("ValueError".to_string())),
+            )],
+            return_ty: Ty::None,
+            body: vec![raise(HirExpr::Name("e".to_string()))],
+        }],
+        &[],
+    );
+    let mir = build(&hir);
+    let body = mir
+        .items
+        .iter()
+        .find_map(|item| match item {
+            MirItem::Function { name, body, .. } if name == "f" => Some(body),
+            _ => None,
+        })
+        .expect("`f` must lower");
+    assert!(
+        body.iter().any(|stmt| matches!(
+            stmt,
+            MirStmt::Raise {
+                exception: MirExceptionValue::Existing(MirExpr::Name { name, .. }),
+                ..
+            } if name == "e"
+        )),
+        "{body:?}"
+    );
+}
+
 /// In a function body the object raise carries no frame name (CPython
 /// owns the traceback), and the frame-naming pass leaves it alone.
 #[test]
