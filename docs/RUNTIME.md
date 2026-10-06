@@ -546,7 +546,8 @@ function or class, an imported name -- reaches the hook, where CPython
 would return the dict value; and a host read of the module's own attributes
 from inside the body, after the `def` but before the body returns, does
 not see the hook yet. `tests/issue_1467_module_getattr.rs` pins every
-shape against CPython, the first residual included.
+published shape against CPython, including a `tuple`-carrying hook, and pins
+the first residual; the second is recorded but not pinned by a test.
 
 [#1143](https://github.com/rotnov/pycc/issues/1143) extends that export set
 past module-level functions: a public `@staticmethod` and a public

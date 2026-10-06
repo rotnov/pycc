@@ -190,7 +190,10 @@ pub(crate) fn carrier_class_names(module: &HirModule) -> BTreeSet<String> {
 /// [`classify_export_name`]'s lexical verdict rather than inside it, which
 /// keeps that verdict mirror-comparable with
 /// `pycc_codegen::is_ext_exportable_name` (work item 8's parity test) and
-/// makes the mirror a harmless superset.
+/// makes the mirror a harmless superset. The entry module's PEP 562 hooks
+/// (#1467) are layered on the same way, by [`collect_exports_with_hooks`]
+/// from its `hooks` set rather than from `classify_export_name`, so the parity test compares the mirror with
+/// that verdict `|| is_module_hook(name)`.
 ///
 /// The boundary carries `int`, `float`, `bool`, `str` and a `tuple` of
 /// those scalars in either direction, and `None` as a return type only
@@ -221,7 +224,8 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
     collect_exports_with_hooks(module, &BTreeSet::new())
 }
 
-/// The export set [`collect_exports`] documents, plus the PEP 562 module
+/// The export set the hook-free `collect_exports` above documents, plus
+/// the PEP 562 module
 /// hooks the entry module defines (#1467, [`super::module_hooks`]): a
 /// compiled function named in `hooks` is a module-level export although
 /// [`classify_export_name`] refuses every dunder.

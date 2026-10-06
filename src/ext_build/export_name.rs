@@ -75,6 +75,12 @@ pub(crate) enum ExportName {
 /// `extern`, so a disagreement emits the wrong C declaration for a
 /// `tuple`-carrying method rather than failing the build.
 ///
+/// The two PEP 562 module hooks (#1467) are deliberately **not** admitted
+/// here: the mirror admits `__getattr__` and `__dir__` lexically, the
+/// driver admits them through [`super::is_module_hook`] only when the entry
+/// module defines them, and the parity test compares the mirror with this
+/// verdict `|| is_module_hook(name)`.
+///
 /// **Nothing outside `name` may enter this verdict.** The mirror receives a
 /// bare `&str` and cannot see `HirModule::class_defs`, so a verdict that
 /// consulted the class table would have no mirror-comparable form and the

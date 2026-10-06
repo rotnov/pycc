@@ -197,6 +197,34 @@ fn a_helper_modules_hook_is_not_applied_to_the_entry_module() {
     assert_eq!(stdout_of(&compiled), "missing 2\n");
 }
 
+/// A hook whose return carries a `tuple` crosses through a codegen thunk
+/// rather than the `fnptr_` slot, so the codegen mirror and the driver must
+/// agree that `__getattr__` is exported; a disagreement emits the wrong C
+/// declaration and faults on the first call instead of failing the build.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_tuple_returning_hook_crosses_through_its_thunk() {
+    let dir = ScratchDir::new("ext_module_getattr_tuple").expect("scratch");
+    let ext = dir.join("ext");
+    let oracle = dir.join("oracle");
+    std::fs::create_dir_all(&ext).expect("ext dir");
+    std::fs::create_dir_all(&oracle).expect("oracle dir");
+    let source = write(
+        &oracle,
+        "pycc_ga_tuple.py",
+        "def __getattr__(name: str) -> tuple[int, int]:\n    if name == \"abc\":\n        return (3, 7)\n    return (2, 7)\n",
+    );
+    let build = build_ext(&source, &ext.join("pycc_ga_tuple"));
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    let script = "import pycc_ga_tuple as m\nprint(m.abc, getattr(m, \"zz\"))\n";
+    let compiled = run(script, &ext, &dir);
+    assert_ok(&compiled);
+    let cpython = run(script, &oracle, &dir);
+    assert_ok(&cpython);
+    assert_eq!(stdout_of(&compiled), stdout_of(&cpython));
+    assert_eq!(stdout_of(&compiled), "(3, 7) (2, 7)\n");
+}
+
 /// An import that binds a hook name in the entry module puts a hook in
 /// CPython's module dict that the extension cannot publish, so it is
 /// refused at its own line instead of being ignored. No CPython is needed:

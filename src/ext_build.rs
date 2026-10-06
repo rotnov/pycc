@@ -9,7 +9,7 @@
 //!   floor), [`ExtToolchain`];
 //! * the per-platform shared-object link argv, [`ExtLinkPlatform`] and
 //!   [`ext_link_args`];
-//! * the export set and its `C0003` capability gaps, [`collect_exports`];
+//! * the export set and its `C0003` capability gaps, [`collect_exports_with_hooks`];
 //! * the generated C companion to the fixed shim, [`generate_exports_inc`]
 //!   and [`SHIM_C`].
 //!
