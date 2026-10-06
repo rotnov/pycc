@@ -341,6 +341,17 @@ pub const EXT_OBJ_DELSLICE_SYMBOL: &str = "pycc_ext_obj_delslice";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_NONE_SYMBOL: &str = "pycc_ext_obj_none";
 
+/// The fixed C shim's `NotImplemented` accessor (#1418): a *borrowed*
+/// pointer to CPython's `NotImplemented` singleton, the value of an
+/// admitted `return NotImplemented` in a comparison method
+/// (`MirExpr::NotImplemented`). A compiled return hands the borrowed
+/// singleton back as is (it is immortal on CPython 3.13+); when the result
+/// crosses the export boundary, the C shim's `pycc_ext_pack_object` takes
+/// the strong reference the host caller owns.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_NOT_IMPLEMENTED_SYMBOL: &str = "pycc_ext_obj_not_implemented";
+
 /// The fixed C shim's `isinstance` helper (Part 1 of #1371): it takes a
 /// borrowed object, a borrowed class (or `NULL`, which selects a builtin
 /// class by the third argument, `pycc_mir::ObjBuiltinClass::shim_code`) and

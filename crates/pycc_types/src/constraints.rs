@@ -820,6 +820,9 @@ pub(crate) fn collect_expr_constraints(
         HirExpr::BoolLiteral(_) => Ok(Some(Ok(Ty::Bool))),
         HirExpr::StringLiteral(_) => Ok(Some(Ok(Ty::Str))),
         HirExpr::NoneLiteral => Ok(Some(Ok(Ty::None))),
+        // #1418: `return NotImplemented` in a comparison method of an `ext`
+        // module is CPython's singleton, a CPython object.
+        HirExpr::NotImplemented => Ok(Some(Ok(Ty::Object))),
         HirExpr::Name(name) => {
             // D-136: a `pycc_hir`-qualified stdlib name (`"math.pi"`) is
             // checked before ordinary binding lookup. Post-review finding:
@@ -2179,6 +2182,7 @@ fn bind_named_expr_targets(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => Ok(()),
         HirExpr::ListPop { list } => {

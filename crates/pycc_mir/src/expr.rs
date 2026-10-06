@@ -104,6 +104,7 @@ pub(super) fn lower_expr(
         HirExpr::BoolLiteral(b) => MirExpr::BoolLiteral(*b),
         HirExpr::StringLiteral(s) => MirExpr::StringLiteral(s.clone()),
         HirExpr::NoneLiteral => MirExpr::NoneLiteral,
+        HirExpr::NotImplemented => MirExpr::NotImplemented,
         // #1021: a `[]`/`{}` whose element type `pycc_types`'
         // empty-container pre-pass resolved. The carried `Ty` crosses
         // straight into MIR, because MIR has nothing to derive it from --
@@ -1681,6 +1682,7 @@ pub(super) fn pre_bind_named_expr_targets(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => {}
         HirExpr::ListPop { list } => {

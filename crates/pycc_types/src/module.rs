@@ -404,7 +404,10 @@ pub(super) fn check_with_environment_all(
     let mut collected = KeyedDiagnostics::new();
     for (index, (item, local_names)) in hir.items.iter().zip(function_local_names).enumerate() {
         if let HirItem::Function {
-            params, return_ty, ..
+            params,
+            return_ty,
+            body,
+            ..
         } = item
         {
             // D-133/D-134: a generic function's body is checked through
@@ -421,6 +424,10 @@ pub(super) fn check_with_environment_all(
                 check_function_in(&env, item, local_names)
             };
             if let Err(diagnostic) = checked {
+                // #1418: the check phase's half of the widened comparison
+                // method's `T0022` help (the solver's is in
+                // `constraints::signatures`).
+                let diagnostic = crate::not_implemented::widened_return_help(body, diagnostic);
                 collected.push((DiagnosticKey::Function(index), diagnostic));
             }
         }

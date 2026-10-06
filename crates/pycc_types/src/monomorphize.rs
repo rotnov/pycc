@@ -944,6 +944,7 @@ pub(crate) fn rewrite_generic_calls_in_expr(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => infer_expr_in(env, local_names, expr),
     }
@@ -1463,6 +1464,7 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => {}
     }
