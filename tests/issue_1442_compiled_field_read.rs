@@ -64,8 +64,11 @@ fn assert_ok(run: &Output) {
 
 /// The module under test. `ParserState` is the lark shape: `__slots__`, an
 /// `Any` configuration, a `List[Any]` and a bare `list` stack, a `position`
-/// property and an `eq` that reads both off an `Any` operand (an ordinary
-/// method returning `False` where lark's `__eq__` returns `NotImplemented`).
+/// property and an unannotated `__eq__` that reads both off its object-typed
+/// operand. It returns `False` where lark's returns `NotImplemented` (#1418)
+/// and wraps its second return in `bool(...)` (D-258's #1419 amendment); the
+/// host reaches it through `eq`, because a host `==` on a compiled instance
+/// still compares identity (#1427).
 /// `Fields` has one slot of every carried type plus a bigint, `Base` and
 /// `Derived` share an inherited property, and `Partial`'s `__init__` never
 /// calls `Base`'s, so `Base`'s slots stay unassigned (#1148). Every class
@@ -88,10 +91,13 @@ class ParserState:
     def position(self) -> Any:
         return self.state_stack[-1]
 
-    def eq(self, other: Any) -> bool:
+    def __eq__(self, other) -> bool:
         if not isinstance(other, ParserState):
             return False
         return bool(len(self.state_stack) == len(other.state_stack) and self.position == other.position)
+
+    def eq(self, other: Any) -> bool:
+        return self.__eq__(other)
 
 
 class Fields:

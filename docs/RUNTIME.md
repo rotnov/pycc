@@ -660,7 +660,9 @@ any slot of a carrier `mod.Class.__new__(mod.Class)` never initialized --
 raises CPython's `AttributeError: '<Class>' object has no attribute '<name>'`,
 and `hasattr`/`getattr(obj, name, default)` answer as for any missing
 attribute. A property runs its compiled getter through the same wrapper an
-instance method gets, the receiver-exact copy for a subclass (D-254). A
+instance method gets, the receiver-exact copy for a subclass (D-254); on a
+never-initialized carrier it raises the same `AttributeError` naming the
+property itself, where CPython's getter body would name the slot it reads. A
 property is described only where it wins the namespace walk above, and each
 value is packed by the return-type row of the table below, so an `int` outside
 the inline range raises `OverflowError`. This is what lets compiled code read a

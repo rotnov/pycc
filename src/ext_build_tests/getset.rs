@@ -194,14 +194,23 @@ fn a_property_is_described_where_it_wins_the_namespace_walk() {
     };
     assert_eq!(names("Base"), ["stack", "top", "shadowed"]);
     assert_eq!(names("Derived"), ["stack", "top"]);
-    let ExtGetset::Property { getter, .. } = &getsets_of(&ctors, "Derived")[1] else {
-        panic!("`top` is a property descriptor");
-    };
-    assert_eq!(getter.name, "Base.top");
-    assert_eq!(getter.class.as_deref(), Some("Derived"));
-    assert_eq!(getter.receiver, ExtReceiver::SelfInstance);
-    assert!(getter.params.is_empty());
-    assert_eq!(getter.return_ty, Ty::Object);
+    assert_eq!(
+        getsets_of(&ctors, "Derived")[1],
+        ExtGetset::Property {
+            name: "top".to_string(),
+            getter: ExtExport {
+                name: "Base.top".to_string(),
+                class: Some("Derived".to_string()),
+                method: Some("top".to_string()),
+                returns_buffer_slice: false,
+                receiver: ExtReceiver::SelfInstance,
+                params: Vec::new(),
+                param_writable: Vec::new(),
+                defaults: Vec::new(),
+                return_ty: Ty::Object,
+            },
+        }
+    );
 }
 
 /// Two classes reading one inherited getter share one wrapper -- a second
