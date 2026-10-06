@@ -85,6 +85,15 @@ extern void *pycc_rt_instance_new(long long slot_count, const char *layout, size
 extern long long pycc_rt_instance_get_slot_checked(void *instance, long long slot);
 extern void pycc_rt_str_incref(void *s);
 
+/* The instance egress (#1435). The class an instance was constructed as
+ * (field 0 of its layout descriptor; empty for an instance without one), and
+ * the weak back-pointer to the `PyccExtInstance` carrier currently standing
+ * for it. `pycc_rt` stores that pointer opaquely and never dereferences it;
+ * only this file reads or writes it. See `pycc_ext_obj_pack_instance`. */
+extern const unsigned char *pycc_rt_ext_instance_class(void *instance, size_t *len);
+extern void *pycc_rt_ext_instance_carrier(void *instance);
+extern void pycc_rt_ext_instance_set_carrier(void *instance, void *carrier);
+
 /* `pycc_rt::ext_bridge`'s classification codes. */
 #define PYCC_EXT_INT_SMALLINT 0
 #define PYCC_EXT_INT_FALSE 1
@@ -116,8 +125,10 @@ static PyObject *pycc_ext_user_exception_class(unsigned char tag);
  * Returns 1 when `o` is an instance of the host type object of any
  * *published* class whose MRO contains `name`, -1 with the exception set
  * when `PyObject_IsInstance` raises, and 0 otherwise. A name no published
- * class descends from has no carrier on the CPython side at all, and is
- * answered by `pycc_ext_unpublished_class_isinstance` below.
+ * class descends from has no type object to test against, and is answered
+ * by `pycc_ext_unpublished_class_isinstance` below. A carrier of a compiled
+ * instance (#1435) never reaches it: `pycc_ext_obj_isinstance_compiled`
+ * answers that from the instance's run-time class first.
  */
 static int pycc_ext_compiled_class_isinstance(PyObject *o, const char *name);
 
@@ -2078,6 +2089,19 @@ PyObject *pycc_ext_obj_none(void)
 }
 
 /*
+ * #1418: a *borrowed* pointer to CPython's `NotImplemented` singleton, the
+ * value of an admitted `return NotImplemented` in a comparison method
+ * (`EXT_OBJ_NOT_IMPLEMENTED_SYMBOL`). It is immortal on CPython 3.13+, so a
+ * compiled return may hand the borrow back as is; when the result crosses
+ * the export boundary, `pycc_ext_pack_object` takes the strong reference
+ * (`Py_NewRef`) the host caller owns.
+ */
+PyObject *pycc_ext_obj_not_implemented(void)
+{
+    return Py_NotImplemented;
+}
+
+/*
  * Part 1 of #1371: `isinstance(o, cls)` with an object `o`
  * (`EXT_OBJ_ISINSTANCE_SYMBOL`). Both operands are borrowed. A `NULL`
  * `cls` selects a builtin class by `builtin`: 0 `int`, 1 `str`, 2 `float`,
@@ -2128,7 +2152,9 @@ int pycc_ext_obj_isinstance(PyObject *o, PyObject *cls, int builtin)
 /*
  * The answer for a compiled class no published type descends from (a
  * private class, one exporting no method, every class of an embedded
- * build): no CPython object is an instance of it, but CPython's own
+ * build), asked of an object that carries no compiled instance (a carrier,
+ * #1435, is answered before this is reached): no such object is an
+ * instance of the class, but CPython's own
  * `isinstance` does not answer False before it has looked up the object's
  * `__class__` (`object_isinstance` in `Objects/abstract.c`), so an error
  * raised there propagates as -1 here too. A missing `__class__` is 0, and
@@ -2144,23 +2170,6 @@ static int pycc_ext_unpublished_class_isinstance(PyObject *o)
     }
     Py_XDECREF(cls);
     return 0;
-}
-
-/*
- * Part 7 of #1371: `isinstance(o, C)` with an object `o` and a class `C`
- * compiled in this module (`EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL`). `o` is
- * borrowed; `name` is the class's NUL-terminated name, a constant string
- * compiled code owns. Same 1/0/-1 contract as `pycc_ext_obj_isinstance`;
- * the generated `pycc_ext_compiled_class_isinstance` declared above carries
- * the rule.
- */
-int pycc_ext_obj_isinstance_compiled(PyObject *o, const char *name)
-{
-    if (o == NULL || name == NULL) {
-        PyErr_SetString(PyExc_SystemError, "pycc_ext_obj_isinstance_compiled: NULL operand");
-        return -1;
-    }
-    return pycc_ext_compiled_class_isinstance(o, name);
 }
 
 /*
@@ -2325,6 +2334,64 @@ int pycc_ext_obj_delslice(PyObject *o, PyObject *start, PyObject *stop, PyObject
     status = PyObject_DelItem(o, slice);
     Py_DECREF(slice);
     return status;
+}
+
+/*
+ * Part 9 of #1371: `raise o` with a CPython object `o`
+ * (`EXT_OBJ_RAISE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * Decides what is raised in the order CPython's own `raise` does:
+ *
+ *  - an exception class is called with no arguments, and its result must
+ *    be an exception instance: a raising constructor's own exception is the
+ *    one raised, and any other result raises `TypeError` with CPython's
+ *    own message;
+ *  - an exception instance is raised as it is;
+ *  - anything else raises `TypeError: exceptions must derive from
+ *    BaseException`.
+ *
+ * The instance is set with `PyErr_SetObject`, as CPython's `raise` does,
+ * not `PyErr_SetRaisedException`: it keeps the instance's identity and also
+ * sets its implicit `__context__` from the exception CPython is handling,
+ * such as the host's own `except` block around the call. A pycc `except`
+ * handler is not a CPython handler, so an object raised inside one gets no
+ * `__context__` from the pycc exception it handles.
+ *
+ * It then hands the CPython exception to `pycc_ext_obj_error_bridge`, which
+ * makes it a pending pycc exception and keeps the original in the bridge
+ * table. The caller branches to its innermost exception target, so an
+ * enclosing `try` runs in a function body and in the module body alike,
+ * and an exception that escapes reaches the host as the original object.
+ *
+ * `o` is borrowed. Total: on return a pycc exception is always pending and
+ * CPython's error indicator is clear. A NULL `o` is the same defence in
+ * depth `pycc_ext_obj_get_iter` documents, and bridges a `SystemError`.
+ */
+void pycc_ext_obj_raise(PyObject *o)
+{
+    PyObject *instance;
+
+    if (o == NULL) {
+        PyErr_SetString(PyExc_SystemError, "pycc: raise of a missing CPython object");
+    } else if (PyExceptionClass_Check(o)) {
+        instance = PyObject_CallNoArgs(o);
+        if (instance == NULL) {
+            /* The constructor's own exception is the one raised. */
+        } else if (!PyExceptionInstance_Check(instance)) {
+            PyErr_Format(PyExc_TypeError,
+                         "calling %R should have returned an instance of BaseException, not %R",
+                         o, (PyObject *)Py_TYPE(instance));
+            Py_DECREF(instance);
+        } else {
+            PyErr_SetObject((PyObject *)Py_TYPE(instance), instance);
+            Py_DECREF(instance);
+        }
+    } else if (PyExceptionInstance_Check(o)) {
+        PyErr_SetObject((PyObject *)Py_TYPE(o), o);
+    } else {
+        PyErr_SetString(PyExc_TypeError, "exceptions must derive from BaseException");
+    }
+    (void)pycc_ext_obj_error_bridge();
 }
 
 /*
@@ -2991,9 +3058,67 @@ typedef struct {
 static void pycc_ext_instance_dealloc(PyObject *self)
 {
     PyTypeObject *tp = Py_TYPE(self);
+    void *inst = ((PyccExtInstance *)self)->inst;
+    /* #1435: an instance that outlives its carrier must not keep naming it.
+     * Cleared only when the back-pointer is this carrier: a carrier that a
+     * later `tp_init` superseded (see `pycc_ext_carrier_bind`) no longer
+     * owns the link. */
+    if (inst != NULL && pycc_rt_ext_instance_carrier(inst) == (void *)self) {
+        pycc_rt_ext_instance_set_carrier(inst, NULL);
+    }
     freefunc tp_free = (freefunc)PyType_GetSlot(tp, Py_tp_free);
     tp_free(self);
     Py_DECREF(tp);
+}
+
+/*
+ * #1435: the carrier type of each class, keyed by the class name its
+ * instances' layout descriptors carry. A published class's own type object
+ * is entered by the generated `pycc_ext_register_method_types`
+ * (`pycc_ext_carrier_register`); any other class gets a method-less carrier
+ * type the first time one of its instances crosses
+ * (`pycc_ext_carrier_type`, defined after the companion because it needs
+ * the module name). The dict holds a strong reference to every type for the
+ * rest of the process, which the shim's refusal of subinterpreters licenses
+ * exactly as it licenses every other file-scope static here.
+ */
+static PyObject *pycc_ext_carrier_types = NULL;
+
+static int pycc_ext_carrier_types_ready(void)
+{
+    if (pycc_ext_carrier_types == NULL) {
+        pycc_ext_carrier_types = PyDict_New();
+    }
+    return pycc_ext_carrier_types == NULL ? -1 : 0;
+}
+
+/* Enters a published class's type object as its instances' carrier type.
+ * Called from the generated registration only, before any compiled code
+ * runs, so a later crossing finds the type that carries the class's
+ * methods rather than creating a method-less one. Returns 0, or -1 with a
+ * CPython exception set. */
+static int pycc_ext_carrier_register(const char *class_name, PyObject *type)
+{
+    if (pycc_ext_carrier_types_ready() < 0) {
+        return -1;
+    }
+    return PyDict_SetItemString(pycc_ext_carrier_types, class_name, type);
+}
+
+/* Stores the instance a successful `tp_init` built and records `self` as
+ * its carrier (#1435), so `self` handed out by a method of a
+ * host-constructed object is that very object. A re-run `__init__`
+ * (`obj.__init__(...)`) replaces the instance; the one it replaces stops
+ * naming `self`, because nothing would clear that link once `self` dies and
+ * the old instance may still be reachable from compiled code. */
+static void pycc_ext_carrier_bind(PyObject *self, void *inst)
+{
+    void *previous = ((PyccExtInstance *)self)->inst;
+    if (previous != NULL && pycc_rt_ext_instance_carrier(previous) == (void *)self) {
+        pycc_rt_ext_instance_set_carrier(previous, NULL);
+    }
+    ((PyccExtInstance *)self)->inst = inst;
+    pycc_rt_ext_instance_set_carrier(inst, self);
 }
 
 /* Generated companion: module name macros, per-export wrappers, method table. */
@@ -3029,6 +3154,175 @@ static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const 
                                                          long long stop);
 
 #include "pycc_ext_exports.inc"
+
+/*
+ * #1435: the slots of a carrier type created on demand -- the shared
+ * deallocator and nothing else. It publishes no method, and the spec's
+ * `Py_TPFLAGS_DISALLOW_INSTANTIATION` keeps the host from calling it, since
+ * no `tp_init` exists to build the instance it would carry.
+ */
+static PyType_Slot pycc_ext_carrier_slots[] = {
+    {Py_tp_dealloc, pycc_ext_instance_dealloc},
+    {0, NULL},
+};
+
+/*
+ * The carrier type for the class named `name`/`len` (a borrowed reference
+ * the cache owns), creating `<module>.<name>` on the first crossing of a
+ * class no published type stands for. Returns NULL with a CPython
+ * exception set on failure.
+ *
+ * An empty name is an instance without a layout descriptor. Only an enum
+ * member is allocated that way, and `pycc_types` refuses one as a call
+ * argument, so this is a `SystemError` rather than a carrier of no class.
+ *
+ * The type's full name is copied into storage that is never released:
+ * `tp_name` may point at the spec's name, and the type itself is never
+ * released either.
+ */
+static PyObject *pycc_ext_carrier_type(const unsigned char *name, size_t len)
+{
+    PyObject *key;
+    PyObject *type;
+    size_t prefix = strlen(PYCC_EXT_MODULE_NAME_STR);
+    char *full;
+    PyType_Spec spec;
+    int found;
+
+    if (len == 0) {
+        PyErr_SetString(PyExc_SystemError,
+                        "an instance without a class descriptor cannot cross into CPython");
+        return NULL;
+    }
+    if (pycc_ext_carrier_types_ready() < 0) {
+        return NULL;
+    }
+    key = PyUnicode_FromStringAndSize((const char *)name, (Py_ssize_t)len);
+    if (key == NULL) {
+        return NULL;
+    }
+    found = PyDict_GetItemRef(pycc_ext_carrier_types, key, &type);
+    if (found != 0) {
+        Py_DECREF(key);
+        if (found < 0) {
+            return NULL;
+        }
+        Py_DECREF(type);
+        return type;
+    }
+    full = (char *)PyMem_Malloc(prefix + 1 + len + 1);
+    if (full == NULL) {
+        Py_DECREF(key);
+        return PyErr_NoMemory();
+    }
+    memcpy(full, PYCC_EXT_MODULE_NAME_STR, prefix);
+    full[prefix] = '.';
+    memcpy(full + prefix + 1, name, len);
+    full[prefix + 1 + len] = '\0';
+    spec.name = full;
+    spec.basicsize = (int)sizeof(PyccExtInstance);
+    spec.itemsize = 0;
+    spec.flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION | Py_TPFLAGS_IMMUTABLETYPE;
+    spec.slots = pycc_ext_carrier_slots;
+    type = PyType_FromSpec(&spec);
+    if (type == NULL || PyDict_SetItem(pycc_ext_carrier_types, key, type) < 0) {
+        Py_XDECREF(type);
+        Py_DECREF(key);
+        return NULL;
+    }
+    Py_DECREF(key);
+    Py_DECREF(type);
+    return type;
+}
+
+/*
+ * #1435: the packer for a pycc class instance passed as an argument to a
+ * call on a CPython object (`EXT_OBJ_PACK_INSTANCE_SYMBOL`). The packer
+ * contract of its scalar neighbours above: it borrows the instance and
+ * returns a new reference, which the consuming call helper releases.
+ *
+ * Identity follows CPython. The instance's live carrier, if it has one, is
+ * returned again -- the object the host constructed, or the one an earlier
+ * crossing made and the host still holds -- so two crossings of one
+ * instance are `is`-equal. Otherwise a fresh carrier of the instance's
+ * *run-time* class (its layout descriptor, not the argument's static type)
+ * is allocated and linked; its `tp_dealloc` unlinks it. The instance is
+ * never freed (D-107, D-154), so the carrier cannot outlive it.
+ *
+ * A NULL operand is a `@classmethod`'s `cls`, which `MirExpr::NullInstance`
+ * lowers to a null pointer and `pycc_types` refuses as an argument; it is
+ * answered with a `SystemError`, which the consuming helpers tolerate.
+ */
+PyObject *pycc_ext_obj_pack_instance(void *inst)
+{
+    PyObject *carrier;
+    PyObject *type;
+    const unsigned char *name;
+    size_t len = 0;
+    allocfunc tp_alloc;
+
+    if (inst == NULL) {
+        PyErr_SetString(PyExc_SystemError,
+                        "an instance argument to a CPython object's call was NULL");
+        return NULL;
+    }
+    carrier = (PyObject *)pycc_rt_ext_instance_carrier(inst);
+    if (carrier != NULL) {
+        Py_INCREF(carrier);
+        return carrier;
+    }
+    name = pycc_rt_ext_instance_class(inst, &len);
+    type = pycc_ext_carrier_type(name, len);
+    if (type == NULL) {
+        return NULL;
+    }
+    tp_alloc = (allocfunc)PyType_GetSlot((PyTypeObject *)type, Py_tp_alloc);
+    carrier = tp_alloc((PyTypeObject *)type, 0);
+    if (carrier == NULL) {
+        return NULL;
+    }
+    ((PyccExtInstance *)carrier)->inst = inst;
+    pycc_rt_ext_instance_set_carrier(inst, carrier);
+    return carrier;
+}
+
+/*
+ * Part 7 of #1371: `isinstance(o, C)` with an object `o` and a class `C`
+ * compiled in this module (`EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL`). `o` is
+ * borrowed; `name` is the class's NUL-terminated name, a constant string
+ * compiled code owns. Same 1/0/-1 contract as `pycc_ext_obj_isinstance`.
+ *
+ * #1435: a carrier of a compiled instance -- an object whose type
+ * deallocates through `pycc_ext_instance_dealloc`, which only the carrier
+ * types use and which nothing can subclass -- is answered from the
+ * instance's run-time class by the generated
+ * `pycc_ext_carrier_class_isinstance`, so a carrier of a class that
+ * publishes no method, or of an unpublished subclass of a published one,
+ * answers as CPython does for the same source. Every other object,
+ * including a published type's object no `tp_init` filled, goes to the
+ * generated `pycc_ext_compiled_class_isinstance` declared above, which
+ * carries the published-family rule. Defined after the companion include,
+ * which defines the generated function it calls first.
+ */
+int pycc_ext_obj_isinstance_compiled(PyObject *o, const char *name)
+{
+    void *inst;
+    const unsigned char *cls;
+    size_t len = 0;
+
+    if (o == NULL || name == NULL) {
+        PyErr_SetString(PyExc_SystemError, "pycc_ext_obj_isinstance_compiled: NULL operand");
+        return -1;
+    }
+    if (PyType_GetSlot(Py_TYPE(o), Py_tp_dealloc) == (void *)pycc_ext_instance_dealloc) {
+        inst = ((PyccExtInstance *)o)->inst;
+        if (inst != NULL) {
+            cls = pycc_rt_ext_instance_class(inst, &len);
+            return pycc_ext_carrier_class_isinstance(cls, len, name);
+        }
+    }
+    return pycc_ext_compiled_class_isinstance(o, name);
+}
 
 /*
  * Part 2b of #1142 (#1164): the artifact-owned buffer exporter.

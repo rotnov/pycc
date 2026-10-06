@@ -65,10 +65,10 @@ fn assert_ok(run: &Output) {
 /// The module under test. `ParserState` is the lark shape: `__slots__`, an
 /// `Any` configuration, a `List[Any]` and a bare `list` stack, a `position`
 /// property and an unannotated `__eq__` that reads both off its object-typed
-/// operand. It returns `False` where lark's returns `NotImplemented` (#1418)
-/// and wraps its second return in `bool(...)` (D-258's #1419 amendment); the
-/// host reaches it through `eq`, because a host `==` on a compiled instance
-/// still compares identity (#1427).
+/// operand -- lark's own `__eq__` verbatim, whose `return NotImplemented`
+/// widens its return to the object (D-258's #1418 amendment). The host
+/// reaches it through `eq`, because a host `==` on a compiled instance still
+/// compares identity (#1427).
 /// `Fields` has one slot of every carried type plus a bigint, `Base` and
 /// `Derived` share an inherited property, and `Partial`'s `__init__` never
 /// calls `Base`'s, so `Base`'s slots stay unassigned (#1148). Every class
@@ -93,10 +93,10 @@ class ParserState:
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, ParserState):
-            return False
-        return bool(len(self.state_stack) == len(other.state_stack) and self.position == other.position)
+            return NotImplemented
+        return len(self.state_stack) == len(other.state_stack) and self.position == other.position
 
-    def eq(self, other: Any) -> bool:
+    def eq(self, other: Any) -> Any:
         return self.__eq__(other)
 
 
@@ -212,7 +212,7 @@ except AttributeError:
 print(hasattr(blank_base, 'top'), getattr(blank_base, 'items', 'dflt'))
 "#;
 
-const DRIVER_OUT: &str = "True False False False False True\n\
+const DRIVER_OUT: &str = "True False False NotImplemented NotImplemented True\n\
     [1, 2, 3] 3 conf [] True\n\
     7 2.5 True h\u{e9}llo [1] -3 -0.0 False '' None\n\
     7 2.5 True h\u{e9}llo [1] -3 -0.0 False '' None\n\

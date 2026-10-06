@@ -313,6 +313,7 @@ impl<'a> Walker<'a> {
             | HirExpr::BoolLiteral(_)
             | HirExpr::StringLiteral(_)
             | HirExpr::NoneLiteral
+            | HirExpr::NotImplemented
             | HirExpr::EmptyList(_)
             | HirExpr::EmptyDict(_)
             | HirExpr::Super => {}

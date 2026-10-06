@@ -59,6 +59,8 @@
 //!
 //! [D-185]: https://github.com/rotnov/pycc/blob/main/docs/decisions/D-185-permit-a-dedicated-tracking-issue-per-oversized.md
 
+mod constructor_call;
+mod method_return;
 mod object_lift;
 mod set_comp;
 mod signatures;
@@ -235,8 +237,9 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     ///
     /// The check phase needs no equivalent -- `env.lookup_class` and
     /// `env.lookup_generic` already run ahead of its interception -- but
-    /// `ConstraintEnvironment` carries no class table at all, and
-    /// `signatures` covers only `def`s. Seeded once per module in
+    /// this buffer-producer seam does not consult `ConstraintEnvironment`'s class table
+    /// (`class_defs`, keyed by the canonical class name), and `signatures`
+    /// covers only `def`s. Seeded once per module in
     /// `constraints::signatures` from the HIR's own class table, per
     /// *spelling*: a module defining `class ndarray` must still be able to
     /// call `NDArray(n)`. Since Part 1 of #1319 it also holds `frozenset`
@@ -267,6 +270,13 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// only ever be *narrower* than it -- the safe direction for a seam
     /// whose answer displaces the check phase's.
     pub(crate) finals: HashSet<String>,
+    /// #1420: the module's class table (`HirModule::class_defs`), read
+    /// by the `MethodCall` arm to resolve `recv.m(...)` on a user-class
+    /// instance to the method's return term
+    /// (`method_return::method_call_on_instance`) and, since #1342, by the
+    /// `Call` arm's constructor term (`constructor_call`). Shared by every
+    /// environment of one module; empty in a unit-test environment.
+    pub(crate) class_defs: &'hir [(String, pycc_hir::HirClassDef)],
 }
 
 impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
@@ -289,6 +299,7 @@ impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
             returns_inside_finally: false,
             shadowed_producers: HashSet::new(),
             finals: HashSet::new(),
+            class_defs: &[],
         }
     }
 
@@ -611,8 +622,8 @@ fn term_for_type(ty: Ty, parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>
 /// `reject_non_int_producer_length`'s own doc comment.
 ///
 /// The solver's own statement (h): a `def` of the spelling is in
-/// `signatures`, a `class` of it is in `shadowed_producers` (the solver has
-/// no class table), a module-level value binding of it is in `bindings`, and
+/// `signatures`, a `class` of it is in `shadowed_producers` (the class
+/// table is not consulted here), a module-level value binding of it is in `bindings`, and
 /// a *function-local* binding of it is in `local_names`. Any of the four
 /// means the program's own meaning wins.
 ///
@@ -820,6 +831,9 @@ pub(crate) fn collect_expr_constraints(
         HirExpr::BoolLiteral(_) => Ok(Some(Ok(Ty::Bool))),
         HirExpr::StringLiteral(_) => Ok(Some(Ok(Ty::Str))),
         HirExpr::NoneLiteral => Ok(Some(Ok(Ty::None))),
+        // #1418: `return NotImplemented` in a comparison method of an `ext`
+        // module is CPython's singleton, a CPython object.
+        HirExpr::NotImplemented => Ok(Some(Ok(Ty::Object))),
         HirExpr::Name(name) => {
             // D-136: a `pycc_hir`-qualified stdlib name (`"math.pi"`) is
             // checked before ordinary binding lookup. Post-review finding:
@@ -1356,8 +1370,8 @@ pub(crate) fn collect_expr_constraints(
             // is not a bare name) is reported here, from the same shared
             // helper `check_cast` uses, so the two passes cannot drift.
             //
-            // The solver has no class table (`ConstraintEnvironment` carries
-            // only value bindings), so it produces a *term* only for the
+            // The class table is not consulted here (`class_defs` serves
+            // the method-call and constructor-call terms only), so it produces a *term* only for the
             // four builtin scalar target names it can recognize on its own;
             // an unverified class name yields `Ok(None)` and leaves the
             // decision to `check_cast`. Producing an unverified
@@ -1485,8 +1499,8 @@ pub(crate) fn collect_expr_constraints(
                 // reason the message still enumerates only the three original
                 // types.
                 //
-                // It does *not* carry that arm's user-defined-class guard, and
-                // cannot: this solver's environment has no class table. Nor
+                // It does *not* carry that arm's user-defined-class guard: the
+                // class table is not consulted here. Nor
                 // does it need one -- a `Ty::Object` term can only come from a
                 // foreign name, and `I0404` refuses a foreign name used in a
                 // function body at all, which is the only place this solver
@@ -1548,7 +1562,7 @@ pub(crate) fn collect_expr_constraints(
                 //
                 // The user-defined-*class* guard `infer_expr_in`'s arms carry
                 // is absent here for the reason the `float` arm above states:
-                // this solver's environment has no class table, and `I0404`
+                // the class table is not consulted here, and `I0404`
                 // keeps a foreign object out of every function body it runs
                 // on. `infer_expr_in` is the authority for a class-shadowed
                 // name and refuses the program there.
@@ -1571,8 +1585,9 @@ pub(crate) fn collect_expr_constraints(
                 // classification as the final validation pass, rather than
                 // deferring with `Ok(None)` -- the builtin genuinely exists
                 // in Python 3.14, so it is a capability gap, not an
-                // unresolved callee. A genuinely unknown name still returns
-                // `Ok(None)` and defers to final validation's `T0021`.
+                // unresolved callee. A name that is neither a signature, a known
+                // builtin, nor a user class still returns `Ok(None)` and
+                // defers to final validation's `T0021`.
                 //
                 // Part 1 of #1319: the solver half of `crate::expr`'s
                 // `frozenset(...)` arm. `signatures` has already missed, so a
@@ -1580,10 +1595,9 @@ pub(crate) fn collect_expr_constraints(
                 // carries a module `class frozenset`, which skips this arm and
                 // falls through to `is_known_callable_builtin`'s `C0001`
                 // below -- the pre-existing behavior every builtin-named
-                // class shares (`class range:` reports the same). Deferring
-                // with `Ok(None)` would only trade that for the unannotated
-                // private helper's `T0021` any user class returned from one
-                // gets; an annotated helper never reaches this solver.
+                // class shares (`class range:` reports the same), since the
+                // class-constructor term below (#1342) is consulted only
+                // after that `C0001`.
                 if callee == crate::frozenset::FROZENSET
                     && !env.shadowed_producers.contains(callee.as_str())
                 {
@@ -1607,7 +1621,10 @@ pub(crate) fn collect_expr_constraints(
                 if is_known_callable_builtin(callee) {
                     return Err(unsupported_callable_builtin(callee));
                 }
-                return Ok(None);
+                // #1342: `C(args)` on a non-generic user class answers its
+                // instance; placed last so every reading above keeps
+                // precedence (`constructor_call`'s module doc).
+                return Ok(constructor_call::constructor_call_term(env, callee));
             };
             for (index, (arg, parameter)) in arg_terms.into_iter().zip(&signature.1).enumerate() {
                 // Unify whenever either side is still an inference variable --
@@ -1947,7 +1964,7 @@ pub(crate) fn collect_expr_constraints(
             }
             Ok(None)
         }
-        HirExpr::MethodCall { base, args, .. } => {
+        HirExpr::MethodCall { base, method, args } => {
             let base_term =
                 collect_expr_constraints(signatures, parents, concrete, deferred, env, base)?;
             for arg in args {
@@ -1956,7 +1973,18 @@ pub(crate) fn collect_expr_constraints(
             // Part 1 of #1333: `o.method(...)` on a concrete `object`
             // receiver answers `object`, on the `AttrGet` and `Subscript`
             // arms' own reasoning above; the three arms change together.
-            Ok(object_lift::method_call_on_object(base_term.as_ref()))
+            // #1420: on a concrete user-class instance it answers the
+            // resolved method's return term.
+            Ok(
+                object_lift::method_call_on_object(base_term.as_ref()).or_else(|| {
+                    method_return::method_call_on_instance(
+                        signatures,
+                        env,
+                        base_term.as_ref(),
+                        method,
+                    )
+                }),
+            )
         }
         // Issue #1188: this solver never picks a reading and never rejects.
         // An admitted container reading is collected exactly as the
@@ -2179,6 +2207,7 @@ fn bind_named_expr_targets(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => Ok(()),
         HirExpr::ListPop { list } => {

@@ -520,6 +520,7 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         | MirExpr::IntBoundary(_)
         | MirExpr::StringLiteral(_)
         | MirExpr::NoneLiteral
+        | MirExpr::NotImplemented
         | MirExpr::Call { .. }
         | MirExpr::BinOp { .. }
         | MirExpr::Compare { .. }

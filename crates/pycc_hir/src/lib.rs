@@ -14,6 +14,7 @@ mod if_exp;
 mod import;
 mod int_boundary;
 mod module;
+mod not_implemented;
 mod program;
 mod stmt;
 mod typecheck;
@@ -60,6 +61,7 @@ pub(crate) use import::{
     import_local_name, lower_import_stmt, lower_legacy_type_alias_ann_assign, lower_type_alias_stmt,
 };
 pub use module::{LoweredModule, lower_all, lower_checked, lower_module};
+pub use not_implemented::{WIDENED_RETURN_HELP, body_returns_not_implemented};
 pub use program::{LinkInput, finalize, link};
 pub use stmt::del::{deleted_names, mentioned_names};
 pub use typecheck::{
@@ -399,6 +401,12 @@ pub enum HirExpr {
     /// existing `HirStmt::Return(None)` encoding for a bare `return`
     /// (no expression at all), which this variant does not replace.
     NoneLiteral,
+    /// CPython's `NotImplemented` singleton, as the value of `return
+    /// NotImplemented` in a comparison method of an `ext` module (#1418).
+    /// Typed `Ty::Object`. `crate::not_implemented` owns where it may
+    /// appear: nowhere else, and never in a `native` build, where the name
+    /// stays an undefined `HirExpr::Name`.
+    NotImplemented,
     Name(String),
     Call {
         callee: String,

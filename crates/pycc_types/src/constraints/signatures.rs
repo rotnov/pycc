@@ -161,6 +161,7 @@ pub(crate) fn annotated_function_environment(hir: &HirModule) -> Environment {
         // walk; `check_function_in` sets this per function.
         returns_inside_finally: false,
         return_inferred: false,
+        in_classmethod: false,
         narrowed: HashMap::new(),
         // Overwritten at `check_with_environment_all`'s entry, the common
         // sink of both `Environment` constructors (#962).
@@ -286,6 +287,9 @@ pub(crate) fn infer_function_signatures_with_solver_all(
         // seam, which module scope refuses outright. See the field's own
         // doc comment for why each body starts empty too.
         finals: HashSet::new(),
+        // #1420: the `MethodCall` arm resolves a method on a user-class
+        // instance through the module's own class table.
+        class_defs: &hir.class_defs,
     };
     // Part 1 of #1026: a foreign import binds a definite name whose type is
     // `Ty::Object`. It is recorded in `opaque_bindings` so that every piece
@@ -370,6 +374,7 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             returns_inside_finally: pycc_hir::body_returns_inside_finally(body),
             shadowed_producers: globals.shadowed_producers.clone(),
             finals: HashSet::new(),
+            class_defs: globals.class_defs,
         };
         for local_name in local_names.iter().copied() {
             env.bindings.remove(local_name);
@@ -448,6 +453,9 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             body,
             Some(signature.2.clone()),
         ) {
+            // #1418: a widened comparison method's native return explains
+            // where its `object` return type came from.
+            let diagnostic = crate::not_implemented::widened_return_help(body, diagnostic);
             collected.push((DiagnosticKey::Function(index), diagnostic));
             continue;
         }

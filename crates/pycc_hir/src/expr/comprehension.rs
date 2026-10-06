@@ -55,7 +55,8 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         | HirExpr::StringLiteral(_)
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
-        | HirExpr::NoneLiteral => expr,
+        | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented => expr,
         // `callee` (a bare `String`, never an `HirExpr::Name`) is
         // deliberately left untouched even if it equals `from`: this HIR
         // subset has no first-class functions, so `callee` always names a

@@ -13,6 +13,7 @@ use super::{
     ExtCtor, ExtPublishedClass, arg_slot_locals, buffer_releases, c_param_list, defaults,
     source_level_name, unpack_args,
 };
+use pycc_hir::HirModule;
 
 /// The exact C declaration of the generated method-class registration entry
 /// point, called from `pycc_ext_exec_module` for the same reason and in the
@@ -66,14 +67,17 @@ pub(crate) const UNPUBLISHED_CLASS_ISINSTANCE: &str = "pycc_ext_unpublished_clas
 ///
 /// [`collect_class_publications`]: super::collect_class_publications
 ///
-/// A class in `ctors` is **constructible**: its spec carries
-/// `basicsize = sizeof(PyccExtInstance)`, the slots `Py_tp_new`
-/// (`PyType_GenericNew` directly), the generated per-class
-/// `pycc_ext_tp_init_<Class>` below and the shim's shared
-/// `pycc_ext_instance_dealloc`, and it drops
-/// `Py_TPFLAGS_DISALLOW_INSTANTIATION`. Every other class keeps Part 1's
-/// shape byte for byte -- `basicsize` `0`, no slots but `Py_tp_methods`, and
-/// the flag that makes `mod.Class()` raise `TypeError: cannot create
+/// Every published type is a **carrier type** (#1435): its spec carries
+/// `basicsize = sizeof(PyccExtInstance)` and the shim's shared
+/// `pycc_ext_instance_dealloc`, and the registration enters it in the
+/// shim's carrier-type cache, so an instance of the class passed to a call
+/// on a CPython object crosses as an instance of this type.
+///
+/// A class in `ctors` is also **constructible**: its spec adds the slots
+/// `Py_tp_new` (`PyType_GenericNew` directly) and the generated per-class
+/// `pycc_ext_tp_init_<Class>` below, and it drops
+/// `Py_TPFLAGS_DISALLOW_INSTANTIATION`. Every other class keeps the flag
+/// that makes `mod.Class()` raise `TypeError: cannot create
 /// '<mod>.<Class>' instances`.
 ///
 /// Both shapes keep `Py_TPFLAGS_IMMUTABLETYPE` and neither adds
@@ -155,10 +159,15 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
             // refuses rather than one holding indeterminate storage.
             out.push_str(&format!(
                 "    {{Py_tp_new, PyType_GenericNew}},\n    \
-                 {{Py_tp_init, pycc_ext_tp_init_{class}}},\n    \
-                 {{Py_tp_dealloc, pycc_ext_instance_dealloc}},\n"
+                 {{Py_tp_init, pycc_ext_tp_init_{class}}},\n"
             ));
         }
+        // Every published type is a carrier type (#1435): an instance of
+        // the class that crosses into CPython as a call argument is boxed
+        // in it by `pycc_ext_obj_pack_instance`, constructible or not, so
+        // each needs room for the carrier and the deallocator that unlinks
+        // it.
+        out.push_str("    {Py_tp_dealloc, pycc_ext_instance_dealloc},\n");
         // #1442: installed only when the class has a descriptor, so a class
         // with none keeps its slot array byte for byte.
         if ctor.is_some_and(|ctor| !ctor.getsets.is_empty()) {
@@ -167,24 +176,19 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
             ));
         }
         out.push_str("    {0, NULL},\n};\n\n");
-        // A non-constructible class keeps `basicsize` `0` and the
-        // `DISALLOW_INSTANTIATION` flag Part 1 emitted; a constructible one
-        // needs room for the carrier and must not refuse its own
+        // A non-constructible class keeps the `DISALLOW_INSTANTIATION` flag
+        // Part 1 emitted; a constructible one must not refuse its own
         // constructor.
-        let (basicsize, flags) = match ctor {
-            Some(_) => (
-                "sizeof(PyccExtInstance)",
-                "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_IMMUTABLETYPE",
-            ),
-            None => (
-                "0",
+        let flags = match ctor {
+            Some(_) => "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_IMMUTABLETYPE",
+            None => {
                 "Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION | \
-                 Py_TPFLAGS_IMMUTABLETYPE",
-            ),
+                 Py_TPFLAGS_IMMUTABLETYPE"
+            }
         };
         out.push_str(&format!(
             "static PyType_Spec pycc_ext_type_spec_{class} = {{\n    \
-             PYCC_EXT_MODULE_NAME_STR \".{class}\",\n    {basicsize},\n    0,\n    \
+             PYCC_EXT_MODULE_NAME_STR \".{class}\",\n    sizeof(PyccExtInstance),\n    0,\n    \
              {flags},\n    pycc_ext_type_slots_{class},\n}};\n\n"
         ));
     }
@@ -196,15 +200,17 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
     }
     out.push_str("    PyObject *type;\n");
     for class in publications.iter().map(|published| &published.class) {
-        // `PyModule_AddObjectRef` takes its own reference, so on the failing
-        // arm the local one is released, which keeps a failed registration
-        // from leaking the type. On success the local reference moves into
-        // the class's file static (Part 7 of #1371), releasing the one a
-        // previous exec stored there.
+        // `PyModule_AddObjectRef` and the carrier-type cache (#1435) each
+        // take their own reference, so on a failing arm the local one is
+        // released, which keeps a failed registration from leaking the
+        // type. On success the local reference moves into the class's file
+        // static (Part 7 of #1371), releasing the one a previous exec
+        // stored there.
         out.push_str(&format!(
             "    type = PyType_FromSpec(&pycc_ext_type_spec_{class});\n    \
              if (type == NULL) {{\n        return -1;\n    }}\n    \
-             if (PyModule_AddObjectRef(module, \"{class}\", type) < 0) {{\n        \
+             if (pycc_ext_carrier_register(\"{class}\", type) < 0\n        \
+             || PyModule_AddObjectRef(module, \"{class}\", type) < 0) {{\n        \
              Py_DECREF(type);\n        return -1;\n    }}\n    \
              Py_XDECREF(pycc_ext_type_object_{class});\n    \
              pycc_ext_type_object_{class} = type;\n"
@@ -217,20 +223,27 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
 /// The generated `isinstance` against a class compiled in this module
 /// (Part 7 of #1371), declared as [`COMPILED_CLASS_ISINSTANCE_DECL`].
 ///
-/// **The answer is the published family.** A compiled instance reaches the
-/// CPython side only as a carrier of a *published* class's type object
-/// (`mod.Class(...)`), and those types are created with no CPython bases and
-/// without `Py_TPFLAGS_BASETYPE` ([`method_types_c`]): `mod.Derived` is not a
-/// CPython subclass of `mod.Base`, and nothing can subclass either. So for a
-/// class name `C` the CPython-visible instances of `C` are exactly the
-/// instances of the published types whose pycc MRO contains `C`, and the
-/// function tests the object against each of those in publication order,
-/// returning the first non-zero `PyObject_IsInstance` answer -- `1`, or
-/// `-1` with the exception set (a raising `__class__`, say). A name with no
-/// published descendant -- a private class, one exporting no method, every
-/// class of an embedded build, which publishes nothing -- has no instance on
-/// the CPython side, and falls through to [`UNPUBLISHED_CLASS_ISINSTANCE`],
-/// which answers `0` once it has looked up `__class__` as CPython would.
+/// **A carrier is answered before this runs.** Since #1435 an instance of
+/// any regular class -- published or not -- can reach the CPython side as a
+/// carrier (`pycc_ext_obj_pack_instance`), and the shim's
+/// `pycc_ext_obj_isinstance_compiled` answers such an object from its
+/// run-time class's MRO ([`carrier_class_isinstance_c`]) without calling
+/// this. What reaches this function is therefore an object that carries no
+/// compiled instance: a host object, or a published type's object built by
+/// `mod.Class.__new__(mod.Class)` without `tp_init`.
+///
+/// **For those the answer is the published family.** Published types are
+/// created with no CPython bases and without `Py_TPFLAGS_BASETYPE`
+/// ([`method_types_c`]): `mod.Derived` is not a CPython subclass of
+/// `mod.Base`, and nothing can subclass either. So for a class name `C` the
+/// function tests the object against the type object of each published
+/// class whose pycc MRO contains `C`, in publication order, returning the
+/// first non-zero `PyObject_IsInstance` answer -- `1`, or `-1` with the
+/// exception set (a raising `__class__`, say). A name with no published
+/// descendant -- a private class, one exporting no method, every class of
+/// an embedded build, which publishes nothing -- has no type object to test
+/// against, and falls through to [`UNPUBLISHED_CLASS_ISINSTANCE`], which
+/// answers `0` once it has looked up `__class__` as CPython would.
 ///
 /// Emitted unconditionally, with a body that is only that fall-through when
 /// nothing is published, so the shim's caller always links.
@@ -268,6 +281,83 @@ pub(crate) fn compiled_class_isinstance_c(publications: &[ExtPublishedClass]) ->
     out.push_str(&format!(
         "    return {UNPUBLISHED_CLASS_ISINSTANCE}(o);\n}}\n\n"
     ));
+    out
+}
+
+/// The exact C declaration of the generated carrier `isinstance` (#1435),
+/// which the shim's `pycc_ext_obj_isinstance_compiled` calls. That caller is
+/// defined below the point the companion is included at, so the shim needs
+/// no forward declaration; the shim test asserts the call against this one
+/// spelling.
+pub(crate) const CARRIER_CLASS_ISINSTANCE_DECL: &str = "static int \
+     pycc_ext_carrier_class_isinstance(const unsigned char *cls, size_t len, const char *name)";
+
+/// A class whose instance can cross into CPython as a carrier (#1435), with
+/// its MRO, most derived first: one row of [`carrier_class_isinstance_c`]'s
+/// table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExtCarrierClass {
+    /// The class name, as the instances' layout descriptor spells it.
+    pub(crate) class: String,
+    /// `HirClassDef::mro`.
+    pub(crate) mro: Vec<String>,
+}
+
+/// Every class of `module` whose instance `pycc_types` lets cross as a call
+/// argument (`foreign.rs`'s `is_carriable_instance`): not an enum, and not
+/// an exception class. In declaration order, so the generated text is
+/// deterministic.
+pub(crate) fn collect_carrier_classes(module: &HirModule) -> Vec<ExtCarrierClass> {
+    module
+        .class_defs
+        .iter()
+        .filter(|(_, def)| {
+            !def.is_enum
+                && def.exception_type_tag.is_none()
+                && !def
+                    .mro
+                    .iter()
+                    .any(|entry| pycc_hir::is_builtin_exception_class(entry))
+        })
+        .map(|(class, def)| ExtCarrierClass {
+            class: class.clone(),
+            mro: def.mro.clone(),
+        })
+        .collect()
+}
+
+/// The generated `isinstance` of a carrier (#1435), declared as
+/// [`CARRIER_CLASS_ISINSTANCE_DECL`]: whether the class named `cls`/`len` --
+/// a carrier's run-time class, read from its instance's layout descriptor,
+/// which is not NUL-terminated -- has `name` in its MRO.
+///
+/// A carrier's CPython type says nothing about the pycc hierarchy: a class
+/// that publishes no method gets a base-less type created on demand, and a
+/// published type has no CPython bases either. The pycc MRO is the answer
+/// CPython gives for the same source, where `type(x)` is the class itself.
+/// `object` gets no test, since `isinstance(o, object)` is never a compiled
+/// class test, and a name the table does not hold answers `0`.
+pub(crate) fn carrier_class_isinstance_c(classes: &[ExtCarrierClass]) -> String {
+    let mut out = format!("{CARRIER_CLASS_ISINSTANCE_DECL}\n{{\n");
+    if classes.is_empty() {
+        out.push_str("    (void)cls;\n    (void)len;\n    (void)name;\n");
+    }
+    for carrier in classes {
+        let class = &carrier.class;
+        let tests: Vec<String> = carrier
+            .mro
+            .iter()
+            .filter(|ancestor| *ancestor != "object")
+            .map(|ancestor| format!("strcmp(name, \"{ancestor}\") == 0"))
+            .collect();
+        out.push_str(&format!(
+            "    if (len == {len} && memcmp(cls, \"{class}\", {len}) == 0) {{\n        \
+             return {tests};\n    }}\n",
+            len = class.len(),
+            tests = tests.join(" || "),
+        ));
+    }
+    out.push_str("    return 0;\n}\n\n");
     out
 }
 
@@ -417,6 +507,8 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
         buffer_releases(&slots, "        "),
         buffer_releases(&slots, "    ")
     ));
-    out.push_str("    ((PyccExtInstance *)self)->inst = inst;\n    return 0;\n}\n\n");
+    // #1435: storing the instance also links it to `self`, so `self`
+    // handed out by one of its methods is this very object.
+    out.push_str("    pycc_ext_carrier_bind(self, inst);\n    return 0;\n}\n\n");
     out
 }

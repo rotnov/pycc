@@ -21,7 +21,8 @@ fn ext_build(tag: &str, source: &str) -> (Vec<ExtCtor>, String) {
     let exports = collect_exports(&module).expect("the module exports");
     let publications = collect_class_publications(&module, &exports);
     let ctors = collect_constructors(&module, &publications);
-    let inc = generate_exports_inc("m", &exports, &[], &publications, &ctors);
+    let carriers = collect_carrier_classes(&module);
+    let inc = generate_exports_inc("m", &exports, &[], &publications, &ctors, &carriers);
     (ctors, inc)
 }
 

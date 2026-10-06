@@ -1002,6 +1002,7 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => false,
         HirExpr::Call { args, .. } => args.iter().any(contains_named_expr),

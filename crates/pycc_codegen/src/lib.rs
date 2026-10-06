@@ -58,6 +58,7 @@ mod foreign_fail;
 mod foreign_import;
 mod foreign_len;
 mod foreign_pack;
+mod foreign_raise;
 mod foreign_slice;
 mod foreign_unpack;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
@@ -108,8 +109,9 @@ use ext::{
     EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_GETSLICE_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
     EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL, EXT_OBJ_ISINSTANCE_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL,
     EXT_OBJ_LEN_SYMBOL, EXT_OBJ_NEW_COLLECTION_SYMBOL, EXT_OBJ_NONE_SYMBOL,
-    EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL,
-    EXT_OBJ_PACK_OBJECT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL,
+    EXT_OBJ_NOT_IMPLEMENTED_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL,
+    EXT_OBJ_PACK_INSTANCE_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_OBJECT_SYMBOL,
+    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RAISE_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL,
     EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
     EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, ObjCollectionKind, entry_fn_name, is_module_entry_symbol,
 };
@@ -1872,6 +1874,25 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::NoneLiteral => {
             let placeholder_ty = context.struct_type(&[context.i8_type().into(); 2], false);
             Scalar::Optional(placeholder_ty.const_zero())
+        }
+        // CPython's `NotImplemented` singleton (#1418), a borrowed pointer
+        // from the fixed shim -- only an `ext` module's admitted
+        // `return NotImplemented` builds this node.
+        MirExpr::NotImplemented => {
+            let ptr = context.ptr_type(inkwell::AddressSpace::default());
+            let accessor = foreign_pack::shim_fn(
+                module,
+                EXT_OBJ_NOT_IMPLEMENTED_SYMBOL,
+                ptr.fn_type(&[], false),
+            );
+            Scalar::Object(
+                builder
+                    .build_call(accessor, &[], "not_implemented")
+                    .expect("build_call should not fail for pycc_ext_obj_not_implemented")
+                    .try_as_basic_value()
+                    .expect_basic("pycc_ext_obj_not_implemented returns PyObject *")
+                    .into_pointer_value(),
+            )
         }
         // `OptionalWrap` (D-197, #763, Part 1 of #747) exists purely to fix
         // `.ty()` for `collect_stmt_bindings`'s slot-type derivation (see
@@ -8637,6 +8658,19 @@ fn emit_stmt<'ctx>(
             builder
                 .build_unreachable()
                 .expect("build_unreachable should not fail after raise");
+            Ok(())
+        }
+        // Part 9 of #1371: `raise o` with a CPython object `o`.
+        MirStmt::ObjRaise { value } => {
+            foreign_raise::emit_obj_raise(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                value,
+            );
             Ok(())
         }
         // #382: `raise ExceptionType("msg") from CauseType("cause")` —

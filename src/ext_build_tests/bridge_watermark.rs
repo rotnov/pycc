@@ -29,7 +29,7 @@ fn plain_export(name: &str) -> ExtExport {
 #[test]
 fn a_wrapper_marks_before_the_call_and_releases_after_the_lookup_on_both_exits() {
     let exports = [plain_export("f")];
-    let inc = generate_exports_inc("m", &exports, &[], &[], &[]);
+    let inc = generate_exports_inc("m", &exports, &[], &[], &[], &[]);
     let mark = inc
         .find("    Py_ssize_t bridge_mark = pycc_ext_bridge_mark();\n")
         .expect("the wrapper takes a mark");

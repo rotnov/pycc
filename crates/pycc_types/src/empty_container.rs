@@ -82,7 +82,11 @@
 //! object -- `x: object = [1, "a"]`, or `s = []` where `s` is bound to an
 //! object elsewhere -- is not a native `list[T]` at all, and is rewritten
 //! into [`HirExpr::ObjectList`] ahead of the three sources above;
-//! [`object_slot`] owns which displays qualify and why.
+//! [`object_slot`] owns which displays qualify and why. Since #1421 an
+//! object annotation also reaches every value position of the assigned
+//! expression (either operand of a value-producing `and`/`or`, either
+//! branch of a conditional expression), and the class phase below rewrites
+//! a display stored into an object attribute slot the same way.
 //!
 //! **Instance attributes (#1265).** An attribute store is not a function
 //! local, so the three sources above never type one. `pycc_hir` lowers an
@@ -91,7 +95,9 @@
 //! runs ahead of the per-function phase: it resolves each provisional slot
 //! from an inherited concrete slot or from the first `self.xs.append(v)` in
 //! the class's own methods, then types every `self.<attr> = []`/`{}` in those
-//! methods from the class's slot layout. A provisional slot it cannot
+//! methods from the class's slot layout; a store into a slot whose layout
+//! type is the object has its value-position list displays rewritten into
+//! [`HirExpr::ObjectList`] instead (#1421). A provisional slot it cannot
 //! resolve is refused with `T0003` by [`attr_slot::reject_unresolved_attr_slots`].
 //! An unannotated `self.d = {}` establishing the attribute in `__init__`
 //! stays `C0001` in `pycc_hir` (a later reset in a method is typed from the
@@ -111,14 +117,18 @@
 //! Sources 2 and 3 are the ones that do not, and they share one cause rather
 //! than differing: both read the flat whole-function `Environment` built by
 //! `bind_local_types_in_body`, a pre-existing pass shared with protocol
-//! monomorphization whose own statement walk has no `match`/`try` arm. Source
+//! monomorphization whose own statement walk has no `match` arm. Source
 //! 2 reads a binding out of that environment directly; source 3 infers the
 //! producer's value *in* it ([`find_producer`] calls `infer_expr_in` with
-//! exactly that environment). So a name bound only inside a `match` case or a
-//! `try` suite is invisible to both, and `case y: xs = []; xs.append(y)` is
-//! not resolved even though `case y: xs: list[int] = []; xs.append(y)` is.
-//! That costs a missed resolution, never a wrong element type, and widening a
-//! shared pass belongs to its own change rather than to this one.
+//! exactly that environment). So a name bound only inside a `match` case is
+//! invisible to both, and `case y: xs = []; xs.append(y)` is not resolved
+//! even though `case y: xs: list[int] = []; xs.append(y)` is. That costs a
+//! missed resolution, never a wrong element type. The binder walks every
+//! `try`/`except`/`except*`/`else`/`finally` suite since #1445 (lark's
+//! `action, arg = ...` inside a `try`, whose `arg` the object slice bound of
+//! `s = value_stack[-size:]` derives from), so a name bound in one of those
+//! is visible like an `if` branch's, demoted and re-promoted by the same
+//! rules below.
 //!
 //! What a miss then *reports* is not always `T0003`. A miss leaves the
 //! concrete path failing, which routes the module into the private-helper
@@ -183,10 +193,13 @@ fn empty_literal(expr: &HirExpr) -> Option<EmptyLiteral> {
     }
 }
 
-/// Rewrites every resolvable empty container in `hir`, returning `None` when
-/// the module contains no empty container literal in a function body at all
-/// and no provisional attribute slot (#1265) -- which is the overwhelmingly
-/// common case, and which keeps this pass from adding a whole-module clone to
+/// Rewrites every resolvable empty container in `hir`, and every list
+/// display bound to an object slot (Part 2d of #1371, #1421), returning
+/// `None` when the module contains no empty container literal and no
+/// object-annotated display in a function body at all, no provisional
+/// attribute slot (#1265) and no display stored into an attribute while
+/// some class has an object slot -- which is the overwhelmingly common
+/// case, and which keeps this pass from adding a whole-module clone to
 /// `check_all_keyed`, a path that does not otherwise clone.
 pub(crate) fn resolve_empty_containers(hir: &HirModule) -> Option<HirModule> {
     let class_phase = attr_slot::needs_class_phase(hir);
@@ -563,7 +576,7 @@ fn body_has_empty_literal(body: &[HirStmt]) -> bool {
         HirStmt::Assign { value, .. } => empty_literal(value).is_some(),
         HirStmt::AnnAssign { value, .. } => {
             value.as_ref().is_some_and(|v| empty_literal(v).is_some())
-                || object_slot::is_annotated_object_list(stmt)
+                || object_slot::is_annotated_object_display(stmt)
         }
         _ => false,
     })
@@ -700,8 +713,7 @@ fn rewrite_value(
 ) {
     // Part 2d of #1371: a list display bound to an object slot builds a
     // CPython `list` (`object_slot`), ahead of the native resolution.
-    if let Some(object_list) = object_slot::object_list(value, target, annotation, env) {
-        *value = object_list;
+    if object_slot::rewrite_object_slot(value, target, annotation, env) {
         return;
     }
     let Some(literal) = empty_literal(value) else {

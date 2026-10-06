@@ -149,10 +149,13 @@ fn the_shapes_outside_part_8_are_refused() {
             "passing a `list[int]` argument to a CPython object's call",
         ),
         (
-            "obj_kw_instance_value",
-            "class P:\n    def f(self) -> None:\n        product(state=self)\n",
+            // An instance keyword value is admitted since #1435
+            // (`tests/issue_1435_instance_argument.rs`); a class method's
+            // `cls`, which holds no instance, is not.
+            "obj_kw_classmethod_cls",
+            "class P:\n    @classmethod\n    def f(cls) -> None:\n        product(state=cls)\n",
             "I0404",
-            "passing a `P` argument to a CPython object's call",
+            "passing a class method's `cls` argument to a CPython object's call",
         ),
         (
             "obj_kw_double_star",

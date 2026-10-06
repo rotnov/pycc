@@ -239,6 +239,14 @@ pub const EXT_OBJ_PACK_STR_SYMBOL: &str = "pycc_ext_obj_pack_str";
 /// reference.
 pub const EXT_OBJ_PACK_OBJECT_SYMBOL: &str = "pycc_ext_obj_pack_object";
 
+/// The shim's class-instance argument packer (#1435): a borrowed
+/// `PyInstanceObj *` in, a new reference to the `PyccExtInstance` carrier
+/// standing for it out -- the instance's live carrier when it has one, so
+/// identity survives the crossing, otherwise a fresh carrier of its
+/// run-time class. `pycc_types` admits an instance only as a call
+/// argument.
+pub const EXT_OBJ_PACK_INSTANCE_SYMBOL: &str = "pycc_ext_obj_pack_instance";
+
 /// The fixed C shim's `len` helper (Part 3 of #1026): it takes a borrowed
 /// `PyObject *` and an out-pointer, writes the D-141 encoded `int` word for
 /// `PyObject_Size(o)` through it and returns `0`, or returns `-1` with a
@@ -333,6 +341,17 @@ pub const EXT_OBJ_BUILD_LIST_SYMBOL: &str = "pycc_ext_obj_build_list";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_DELSLICE_SYMBOL: &str = "pycc_ext_obj_delslice";
 
+/// The fixed C shim's `raise o` helper (Part 9 of #1371): `void
+/// pycc_ext_obj_raise(PyObject *o)` with `o` borrowed. It decides what is
+/// raised the way CPython's own `raise` does -- an exception class is
+/// instantiated, an instance is raised as it is, and anything else raises
+/// `TypeError` -- then always bridges the CPython exception into a pending
+/// pycc exception, so the caller ends the block exactly like a native
+/// `raise`.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_RAISE_SYMBOL: &str = "pycc_ext_obj_raise";
+
 /// The fixed C shim's `None` accessor (Part 1 of #1371): a *borrowed*
 /// pointer to CPython's immortal `None`, the right-hand side of `o is None`
 /// and, since Part 8 of #1371, the value a `None` call argument is packed
@@ -340,6 +359,17 @@ pub const EXT_OBJ_DELSLICE_SYMBOL: &str = "pycc_ext_obj_delslice";
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_NONE_SYMBOL: &str = "pycc_ext_obj_none";
+
+/// The fixed C shim's `NotImplemented` accessor (#1418): a *borrowed*
+/// pointer to CPython's `NotImplemented` singleton, the value of an
+/// admitted `return NotImplemented` in a comparison method
+/// (`MirExpr::NotImplemented`). A compiled return hands the borrowed
+/// singleton back as is (it is immortal on CPython 3.13+); when the result
+/// crosses the export boundary, the C shim's `pycc_ext_pack_object` takes
+/// the strong reference the host caller owns.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_NOT_IMPLEMENTED_SYMBOL: &str = "pycc_ext_obj_not_implemented";
 
 /// The fixed C shim's `isinstance` helper (Part 1 of #1371): it takes a
 /// borrowed object, a borrowed class (or `NULL`, which selects a builtin
@@ -859,6 +889,7 @@ pub fn body_returns_buffer_slice(body: &[pycc_mir::MirStmt]) -> bool {
         | MirStmt::Return(_)
         | MirStmt::AttrSet { .. }
         | MirStmt::ObjDelSlice { .. }
+        | MirStmt::ObjRaise { .. }
         | MirStmt::Raise { .. }
         | MirStmt::RaiseFrom { .. }
         | MirStmt::ForeignImport { .. }

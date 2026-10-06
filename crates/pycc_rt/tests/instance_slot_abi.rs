@@ -1,6 +1,7 @@
 //! #1388: the instance-slot entry points generated code calls --
 //! `pycc_rt_instance_new` with its layout descriptor and the checked read
-//! `pycc_rt_instance_get_slot_checked` -- exercised through the `rlib`.
+//! `pycc_rt_instance_get_slot_checked` -- and #1435's `--ext` carrier
+//! accessors the shim calls, exercised through the `rlib`.
 //!
 //! `crates/pycc_rt/src/instance.rs`'s unit tests own the semantics; this
 //! file pins them from outside the crate, which is also where the
@@ -8,8 +9,11 @@
 //! "A runtime function an integration test links is measured from that
 //! binary").
 
+use std::ffi::c_void;
+
 use pycc_rt::{
     EXCEPTION_TYPE_ATTRIBUTE_ERROR, pycc_rt_exception_active, pycc_rt_exception_clear,
+    pycc_rt_ext_instance_carrier, pycc_rt_ext_instance_class, pycc_rt_ext_instance_set_carrier,
     pycc_rt_ext_pending_message, pycc_rt_ext_pending_type, pycc_rt_instance_get_slot,
     pycc_rt_instance_get_slot_checked, pycc_rt_instance_new, pycc_rt_instance_set_slot,
 };
@@ -64,4 +68,22 @@ fn a_null_descriptor_still_raises_with_placeholder_names() {
     let (tag, message) = take_pending();
     assert_eq!(tag, i32::from(EXCEPTION_TYPE_ATTRIBUTE_ERROR));
     assert_eq!(message, "'?' object has no attribute '?'");
+}
+
+/// #1435: the shim reads the run-time class from descriptor field 0 and
+/// records, reads back and clears the weak carrier pointer.
+#[test]
+fn the_ext_carrier_accessors_round_trip() {
+    static LAYOUT: &[u8] = b"Q\0n";
+    let q = unsafe { pycc_rt_instance_new(1, LAYOUT.as_ptr(), LAYOUT.len()) };
+    let mut len = usize::MAX;
+    let name = unsafe { pycc_rt_ext_instance_class(q, &mut len) };
+    assert_eq!(unsafe { std::slice::from_raw_parts(name, len) }, b"Q");
+    assert!(unsafe { pycc_rt_ext_instance_carrier(q) }.is_null());
+    let mut host = 0u8;
+    let carrier = (&mut host as *mut u8).cast::<c_void>();
+    unsafe { pycc_rt_ext_instance_set_carrier(q, carrier) };
+    assert_eq!(unsafe { pycc_rt_ext_instance_carrier(q) }, carrier);
+    unsafe { pycc_rt_ext_instance_set_carrier(q, std::ptr::null_mut()) };
+    assert!(unsafe { pycc_rt_ext_instance_carrier(q) }.is_null());
 }
