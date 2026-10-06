@@ -96,6 +96,15 @@ pub(crate) struct ExtExport {
     /// The declared return type, which picks the cast's return type and the
     /// egress: a `pycc_ext_pack_*` call, or `Py_RETURN_NONE` for `-> None`.
     pub(crate) return_ty: Ty,
+    /// The source names of the carried parameters, parallel to
+    /// [`ExtExport::params`], when a host call may pass them as keywords
+    /// (#1461), or `None` when every keyword is refused.
+    ///
+    /// `Some` selects `METH_FASTCALL | METH_KEYWORDS` and the four-argument
+    /// wrapper signature together, so the flag and the signature can never
+    /// disagree. Set by [`super::keywords::bind_keyword_names`]; see that
+    /// module for when an export qualifies.
+    pub(crate) keyword_names: Option<Vec<String>>,
 }
 
 /// The names of the module's classes whose instances may cross the `--ext`
@@ -357,6 +366,7 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
             }),
             defaults: defaults::carried_defaults(module, name, receiver != ExtReceiver::None),
             return_ty: return_ty.clone(),
+            keyword_names: None,
         };
         // A module may rebind a public name -- two `def`s, a `def` over an
         // imported name, or two `@staticmethod def f` in one class body,

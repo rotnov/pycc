@@ -199,6 +199,7 @@ fn getter_export(
         param_writable: Vec::new(),
         defaults: Vec::new(),
         return_ty: return_ty.clone(),
+        keyword_names: None,
     })
 }
 

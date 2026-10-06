@@ -22,6 +22,7 @@ fn echo_export(receiver: ExtReceiver) -> ExtExport {
         params: vec![Ty::Int, conf()],
         param_writable: vec![false; 2],
         return_ty: conf(),
+        keyword_names: None,
     }
 }
 

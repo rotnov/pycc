@@ -25,11 +25,11 @@
 //!
 //! Assertion convention: text pycc authors is asserted **exactly**; text
 //! CPython authors is asserted by exception *type* plus a substring both
-//! supported versions share. Exactly two shapes below are CPython-authored
-//! -- the keyword-argument refusal, which `METH_FASTCALL` dispatch emits
-//! before the wrapper is entered at all, and the lone-surrogate
-//! `UnicodeEncodeError` from `PyUnicode_AsUTF8AndSize` -- and each carries
-//! a comment saying so.
+//! supported versions share. Exactly one shape below is CPython-authored
+//! -- the lone-surrogate `UnicodeEncodeError` from
+//! `PyUnicode_AsUTF8AndSize` -- and it carries a comment saying so. (The
+//! keyword-argument shape was the second until #1461 made the generated
+//! binder author it.)
 //!
 //! `#[ignore]`d for the reason every `ext` test is: it asks an installed
 //! CPython 3.13+ to import a built artifact, which is a property of the
@@ -176,11 +176,13 @@ refuse(m.two, (1, 2, 3), {}, TypeError,
 refuse(m.take_int, (), {}, TypeError,
        'take_int() takes exactly 1 argument (0 given)', True, (1,), 2)
 
-# Shape 6: keyword arguments. CPython-authored -- `METH_FASTCALL` dispatch
-# refuses these before the generated wrapper is entered, and qualifies the
-# name with the module, so only the shared substring is asserted.
-refuse(m.two, (), {'a': 1, 'b': 2}, TypeError,
-       'takes no keyword arguments', False, (1, 2), 3)
+# Shape 6: keyword arguments. Since #1461 a keyword naming a parameter is
+# bound as CPython binds it (`m.two(a=1, b=2)` returns 3), so the refused
+# shape is a keyword naming no parameter. pycc-authored text, worded as
+# CPython's own.
+refuse(m.two, (1,), {'c': 2}, TypeError,
+       "two() got an unexpected keyword argument 'c'", True, (1, 2), 3)
+assert m.two(b=2, a=1) == 3
 
 # Shapes 7-9: `tuple`. Length, container type, and element type are three
 # distinct refusals, and the element one is 1-based in its own message.

@@ -737,6 +737,7 @@ mod tests {
             params: Vec::new(),
             param_writable: Vec::new(),
             return_ty,
+            keyword_names: None,
         }
     }
 

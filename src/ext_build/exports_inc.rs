@@ -56,8 +56,9 @@ pub(crate) fn generate_exports_inc(
         // belongs to the per-class tables below.
         out.push_str(&format!(
             "    {{\"{name}\", (PyCFunction)(void (*)(void))pycc_ext_wrap_{name}, \
-             METH_FASTCALL, NULL}},\n",
-            name = export.name
+             {flags}, NULL}},\n",
+            name = export.name,
+            flags = super::keywords::method_flags("METH_FASTCALL", export),
         ));
     }
     out.push_str("    {NULL, NULL, 0, NULL},\n};\n\n");

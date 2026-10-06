@@ -44,6 +44,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 pycc_parser = { path = "crates/pycc_parser" }
+pycc_ast = { path = "crates/pycc_ast" }
 pycc_hir = { path = "crates/pycc_hir" }
 pycc_types = { path = "crates/pycc_types" }
 pycc_mir = { path = "crates/pycc_mir" }

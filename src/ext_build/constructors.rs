@@ -277,6 +277,7 @@ fn ctor_descriptor(module: &HirModule, class: &str) -> Option<ExtCtor> {
         defaults: defaults::carried_defaults(module, name, true),
         slot_names: instance_slot_names(module, class_def),
         getsets: getset::collect_getsets(module, class_def, &mro_class_defs(module, class_def)),
+        keyword_names: None,
     })
 }
 
@@ -379,6 +380,10 @@ pub(crate) struct ExtCtor {
     /// a slot's descriptor is also writable since Part 1 of #1443 (see
     /// `ext_build/getset.rs`).
     pub(crate) getsets: Vec<ExtGetset>,
+    /// The constructor's carried parameter names when `Py_tp_init` binds
+    /// keywords (#1461), meaning exactly what [`ExtExport::keyword_names`]
+    /// means; `None` keeps the hand-written keyword refusal.
+    pub(crate) keyword_names: Option<Vec<String>>,
 }
 
 /// The constructible classes among the published ones, in publication order.

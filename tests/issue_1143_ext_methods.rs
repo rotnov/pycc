@@ -140,23 +140,29 @@ else:
 
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn both_method_kinds_refuse_a_keyword_argument() {
-    // D-244 rule 7's closed boundary: `METH_FASTCALL` makes CPython itself
-    // raise before the wrapper is entered, on a type object exactly as on the
-    // module.
+fn both_method_kinds_bind_a_keyword_and_refuse_an_unknown_one() {
+    // D-244 rule 7 as amended by #1461: a keyword naming a parameter is
+    // bound as CPython binds it, on a type object exactly as on the module,
+    // and one naming no parameter raises CPython's own wording.
     let dir = ScratchDir::new("ext_1143_kw").expect("scratch");
     build_ext(&dir, "grid", GRID);
     run_python(
         &dir,
         "\
 import grid
-for call in (lambda: grid.Grid.scale(n=1), lambda: grid.Grid.make(n=1)):
+assert grid.Grid.scale(n=1) == 3, grid.Grid.scale(n=1)
+assert grid.Grid.make(n=1) == 2, grid.Grid.make(n=1)
+for call, name in (
+    (lambda: grid.Grid.scale(k=1), 'scale'),
+    (lambda: grid.Grid.make(k=1), 'make'),
+):
     try:
         call()
-    except TypeError:
-        pass
+    except TypeError as e:
+        want = f\"Grid.{name}() got an unexpected keyword argument 'k'\"
+        assert str(e) == want, str(e)
     else:
-        raise AssertionError('a keyword argument should be refused')
+        raise AssertionError('an unknown keyword should be refused')
 ",
     );
 }

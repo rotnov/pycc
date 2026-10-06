@@ -23,6 +23,7 @@ fn plain_export(name: &str) -> ExtExport {
         params: vec![Ty::Int],
         param_writable: vec![false],
         return_ty: Ty::Int,
+        keyword_names: None,
     }
 }
 

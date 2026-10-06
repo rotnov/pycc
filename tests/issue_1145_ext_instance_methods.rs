@@ -15,8 +15,8 @@
 //! interpreter rather than of the emitted bytes: that `mod.Class(...)` really
 //! allocates and initializes a native instance, that a bound
 //! `mod.Class(...).method()` really reaches the compiled body with the right
-//! receiver, that the hand-written keyword boundary in `tp_init` really
-//! raises where `METH_FASTCALL` would have raised for free, and that the
+//! receiver, that `tp_init` really binds a keyword and refuses an unknown
+//! one (#1461), and that the
 //! object model around the published type (subclassing, refcounts,
 //! `__new__`) behaves as D-244's amendment says it does.
 
@@ -130,36 +130,34 @@ assert not hasattr(grid, 'Grid.__init__'), dir(grid)
 
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn the_constructor_refuses_a_keyword_even_with_the_right_positional_count() {
-    // The discriminating case for D-244 rule 7 at `tp_init`. Every other
-    // export gets the keyword `TypeError` from `METH_FASTCALL` for free;
-    // `tp_init` receives a `kwds` dictionary and has to refuse it itself. A
-    // keyword with a *wrong* positional count would be caught by the arity
-    // check and prove nothing, so this passes the right count and a keyword.
+fn the_constructor_binds_keywords_and_refuses_an_unknown_one_at_the_right_count() {
+    // D-244 rule 7 at `tp_init`, as amended by #1461. `tp_init` receives a
+    // `kwds` dictionary and binds it itself, so a keyword naming a
+    // parameter is accepted. An unknown keyword with a *wrong* positional
+    // count would be caught by the arity check and prove nothing, so the
+    // refusal passes the right count and a keyword.
     let dir = ScratchDir::new("ext_1145_kw").expect("scratch");
     build_ext(&dir, "grid", GRID);
     run_python(
         &dir,
         "\
 import grid
-for call in (
-    lambda: grid.Grid(2, 3, extra=1),
-    lambda: grid.Grid(w=2, h=3),
-    lambda: grid.Grid(2, h=3),
-):
-    try:
-        call()
-    except TypeError:
-        pass
-    else:
-        raise AssertionError('a keyword argument should be refused')
-# The instance method's own boundary, which `METH_FASTCALL` closes.
+assert grid.Grid(w=2, h=3).area() == 6
+assert grid.Grid(2, h=3).area() == 6
+assert grid.Grid(h=3, w=2).area() == 6
+try:
+    grid.Grid(2, 3, extra=1)
+except TypeError as e:
+    assert str(e) == \"Grid.__init__() got an unexpected keyword argument 'extra'\", str(e)
+else:
+    raise AssertionError('an unknown keyword should be refused')
+# The instance method's own boundary: `area` has no parameter to name.
 try:
     grid.Grid(2, 3).area(n=1)
-except TypeError:
-    pass
+except TypeError as e:
+    assert str(e) == \"Grid.area() got an unexpected keyword argument 'n'\", str(e)
 else:
-    raise AssertionError('a keyword argument should be refused')
+    raise AssertionError('an unknown keyword should be refused')
 ",
     );
 }
