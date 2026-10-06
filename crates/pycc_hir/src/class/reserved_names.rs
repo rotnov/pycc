@@ -99,7 +99,8 @@
 //!   checked on the same two routes, at the same points, as the store set,
 //!   and a `Protocol` body is exempt for the same reason. A module-level
 //!   `def __getattr__` (PEP 562) is not a class body and never reaches this
-//!   module (#1467 tracks its `--ext` divergence).
+//!   module; since #1467 an `--ext` build publishes the entry module's hook
+//!   as a module attribute (`src/ext_build/module_hooks.rs`).
 //!
 //! Scope notes that are easy to get wrong. Each bullet was measured at
 //! `28a1b194` unless it names a different commit, or names #984 -- this

@@ -78,6 +78,8 @@ fn every_import_spelling_that_binds_a_hook_name_is_refused() {
         "import os.path as __getattr__\n",
         "import os\nif os.name:\n    from lib import __getattr__\n",
         "try:\n    pass\nexcept ImportError:\n    from lib import __dir__\n",
+        // Deliberately over-inclusive: the guard is not evaluated.
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from lib import __getattr__\n",
     ] {
         let refused = refusals(source);
         assert_eq!(refused.len(), 1, "{source}");

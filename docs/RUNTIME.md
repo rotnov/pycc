@@ -538,7 +538,8 @@ and CPython never applies it to the entry module. An import that binds a
 hook name in the entry module (`from lib import __getattr__`, `import x as
 __dir__`), at the top level or inside a top-level `if`/`try`, is refused
 with a located `C0001`, since CPython would install a hook the boundary
-cannot publish; a hook whose signature the boundary cannot carry is a
+cannot publish (the scan does not evaluate guards, so an import under
+`if TYPE_CHECKING:` is refused too); a hook whose signature the boundary cannot carry is a
 `C0003` whose remedy is to change the signature, not to rename it. Two
 residuals are recorded in D-244's #1467 amendment: a name CPython's module
 dict holds but the extension does not publish -- a module global, a private

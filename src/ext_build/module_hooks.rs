@@ -60,7 +60,10 @@ impl EntryHooks {
     /// and every import alias that binds a hook name -- at the top level or
     /// anywhere inside a top-level compound statement, but not inside a
     /// function or class body, whose bindings are not module attributes --
-    /// is one located `C0001`.
+    /// is one located `C0001`. The scan is deliberately over-inclusive: it
+    /// does not evaluate a guard, so an import CPython never executes --
+    /// under `if TYPE_CHECKING:`, say -- is refused too. That costs a
+    /// spurious refusal of a rare spelling, never a silently ignored hook.
     pub(crate) fn scan(module: &ModModule) -> Result<Self, Vec<Diagnostic>> {
         let defined = module
             .body
