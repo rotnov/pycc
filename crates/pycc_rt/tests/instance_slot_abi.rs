@@ -1,8 +1,8 @@
 //! #1388: the instance-slot entry points generated code calls --
 //! `pycc_rt_instance_new` with its layout descriptor and the checked read
 //! `pycc_rt_instance_get_slot_checked` -- and #1435's `--ext` carrier
-//! accessors and #1455's `copy.copy` clone the shim calls, exercised through
-//! the `rlib`.
+//! accessors, #1455's `copy.copy` clone and #1443's slot store and delete the
+//! shim calls, exercised through the `rlib`.
 //!
 //! `crates/pycc_rt/src/instance.rs`'s unit tests own the semantics; this
 //! file pins them from outside the crate, which is also where the
@@ -15,7 +15,8 @@ use std::ffi::c_void;
 use pycc_rt::{
     EXCEPTION_TYPE_ATTRIBUTE_ERROR, pycc_rt_exception_active, pycc_rt_exception_clear,
     pycc_rt_ext_instance_carrier, pycc_rt_ext_instance_class, pycc_rt_ext_instance_copy,
-    pycc_rt_ext_instance_set_carrier, pycc_rt_ext_pending_message, pycc_rt_ext_pending_type,
+    pycc_rt_ext_instance_delete_slot, pycc_rt_ext_instance_set_carrier,
+    pycc_rt_ext_instance_store_slot, pycc_rt_ext_pending_message, pycc_rt_ext_pending_type,
     pycc_rt_instance_get_slot, pycc_rt_instance_get_slot_checked, pycc_rt_instance_new,
     pycc_rt_instance_set_slot,
 };
@@ -114,4 +115,22 @@ fn the_ext_instance_copy_clones_the_slots() {
     let slotless = unsafe { pycc_rt_instance_new(0, LAYOUT.as_ptr(), 1) };
     assert!(!unsafe { pycc_rt_ext_instance_copy(slotless, std::ptr::null(), 0) }.is_null());
     assert!(unsafe { pycc_rt_ext_instance_copy(q, std::ptr::null(), 2) }.is_null());
+}
+
+/// #1443: the host's store into a slot assigns it, and its `del` un-assigns
+/// it, raising the checked read's `AttributeError` when there is nothing to
+/// delete.
+#[test]
+fn the_ext_slot_store_and_delete_assign_and_unassign() {
+    static LAYOUT: &[u8] = b"R\0x";
+    let r = unsafe { pycc_rt_instance_new(1, LAYOUT.as_ptr(), LAYOUT.len()) };
+    unsafe { pycc_rt_ext_instance_store_slot(r, 0, b'w', 7) };
+    assert_eq!(unsafe { pycc_rt_instance_get_slot_checked(r, 0) }, 7);
+    assert_eq!(pycc_rt_exception_active(), 0);
+    assert_eq!(unsafe { pycc_rt_ext_instance_delete_slot(r, 0, b'w') }, 0);
+    assert_eq!(pycc_rt_exception_active(), 0);
+    assert_eq!(unsafe { pycc_rt_ext_instance_delete_slot(r, 0, b'w') }, -1);
+    let (tag, message) = take_pending();
+    assert_eq!(tag, i32::from(EXCEPTION_TYPE_ATTRIBUTE_ERROR));
+    assert_eq!(message, "'R' object has no attribute 'x'");
 }

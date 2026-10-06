@@ -2019,6 +2019,7 @@ fn grid_slot_getsets() -> Vec<crate::ext_build::ExtGetset> {
             name: (*name).to_string(),
             index,
             ty: Ty::Int,
+            writable: true,
         })
         .collect()
 }

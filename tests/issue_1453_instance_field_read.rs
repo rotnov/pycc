@@ -2,7 +2,7 @@
 //! module is readable from the host. lark's `ParserState.parse_conf:
 //! ParseConf` is the shape: `InteractiveParser.accepts()` reads
 //! `parser_state.parse_conf` from host code. Each constructible published
-//! class's read-only `Py_tp_getset` table (#1442) now describes such a slot
+//! class's `Py_tp_getset` table (#1442) now describes such a slot
 //! or `@property` too, packing the stored instance through #1449's egress
 //! (`pycc_ext_pack_instance`), so the instance's live carrier is returned
 //! again and two reads are the same object (`src/ext_build/getset.rs`).
@@ -14,8 +14,9 @@
 //! differences: the compiled `o.parse_conf` read in `conf_of` keeps one
 //! reference per call -- the attribute-read temporary #1092 tracks, which
 //! #1442's `other.state_stack` read keeps too, not the descriptor -- an
-//! enum-typed slot gets no descriptor, and a host-side store is refused
-//! (#1443).
+//! enum-typed slot gets no descriptor, and a host-side store of an object
+//! that is not a carrier of the declared class is refused with the
+//! parameter row's `TypeError` (Part 1 of #1443).
 //!
 //! The hosted test is `#[ignore]`d and contributes no line coverage; the
 //! Tier-1 `native-build-test` leg runs it with
@@ -200,15 +201,15 @@ for _ in range(100):
 print(sys.getrefcount(c) - before)
 print(hasattr(s, 'color'))
 try:
-    s.parse_conf = m.Conf(4)
-except AttributeError as e:
-    print('AttributeError', e)
+    s.parse_conf = object()
+except TypeError as e:
+    print('TypeError', e)
 print(s.parse_conf is c)
 "#;
 
 const EXT_ONLY_OUT: &str = "100\n\
     False\n\
-    AttributeError attribute 'parse_conf' of 'pycc_instance_field_mod.St' objects is not writable\n\
+    TypeError St.parse_conf() argument 1 must be pycc_instance_field_mod.Conf, not object\n\
     True\n";
 
 fn run(script: &str, path_entry: &Path, cwd: &Path) -> Output {

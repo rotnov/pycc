@@ -101,6 +101,15 @@ extern void pycc_rt_ext_instance_set_carrier(void *instance, void *carrier);
 extern void *pycc_rt_ext_instance_copy(void *instance, const char *kinds, size_t kinds_len);
 extern long long pycc_rt_instance_get_slot(void *instance, long long slot);
 
+/* A host store into, and `del` of, a slot (Part 1 of #1443), called by the
+ * generated slot setters (`src/ext_build/getset/setter.rs`). The kind byte is
+ * the copy's: the replaced or deleted word's `s`/`i` reference is released by
+ * `pycc_rt`; `o`/`w` release nothing. The delete answers -1 with the checked
+ * read's `AttributeError` pending for a slot not assigned. */
+extern void pycc_rt_ext_instance_store_slot(void *instance, long long slot, unsigned char kind,
+                                            long long word);
+extern int pycc_rt_ext_instance_delete_slot(void *instance, long long slot, unsigned char kind);
+
 /* `pycc_rt::ext_bridge`'s classification codes. */
 #define PYCC_EXT_INT_SMALLINT 0
 #define PYCC_EXT_INT_FALSE 1

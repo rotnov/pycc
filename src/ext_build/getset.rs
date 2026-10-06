@@ -1,7 +1,8 @@
-//! The read-only `Py_tp_getset` descriptors a constructible published class
-//! carries (#1442): one per carriable instance-attribute slot and one per
-//! carriable `@property`, so `instance.field` reads the compiled value on
-//! the CPython side.
+//! The `Py_tp_getset` descriptors a constructible published class carries
+//! (#1442): one per carriable instance-attribute slot and one per carriable
+//! `@property`, so `instance.field` reads the compiled value on the CPython
+//! side, and (Part 1 of #1443) a slot's `instance.field = v` and
+//! `del instance.field` store into it.
 //!
 //! **Why the host needs them.** D-258 makes an unannotated or `Any`/`object`
 //! operand the opaque CPython object, and compiled code reads an attribute
@@ -13,10 +14,15 @@
 //! attribute the host's own lookup finds, so the same read now answers the
 //! compiled field, and a host program reading `obj.field` gets it too.
 //!
-//! **Read-only.** No descriptor has a setter: a host-side store keeps
-//! CPython's own `AttributeError` for a getset without one. Writing a slot
-//! from the host is a separate contract (ownership of the replaced word,
-//! the declared type of the slot) and is not part of this change.
+//! **Slot stores (Part 1 of #1443).** A slot descriptor has a setter
+//! ([`setter`]): a store converts the value by the slot type's parameter row
+//! and releases the replaced word as a compiled store does; a `del`
+//! un-assigns the slot. Two kinds of descriptor stay read-only and keep
+//! CPython's own `AttributeError` for a getset without a setter: a property
+//! (a compiled property setter is #1458), and every slot of a class whose
+//! MRO defines a compiled `__setattr__` or `__delattr__`, because the
+//! extension does not route a store through that method (#1459) and a raw
+//! slot store would silently bypass it.
 //!
 //! **Instance-typed fields (#1453).** A slot or property declared as a
 //! regular class compiled in the same module -- lark's
@@ -48,10 +54,12 @@ use std::collections::BTreeSet;
 
 use pycc_hir::{HirClassDef, HirItem, HirModule, Ty, flat_attr_layout};
 
+mod setter;
+
 use super::export_name::ExtReceiver;
 use super::{ExtCtor, ExtExport, carrier_class_names, inherited, namespace_owner, wrapper_for};
 
-/// One read-only attribute a constructible published class exposes.
+/// One attribute descriptor a constructible published class exposes.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ExtGetset {
     /// An instance-attribute slot, read straight out of the inner
@@ -64,8 +72,13 @@ pub(crate) enum ExtGetset {
         /// The slot index in `pycc_hir::flat_attr_layout` order -- the
         /// layout `ExtCtor::slot_names` allocates.
         index: usize,
-        /// The slot's declared type, which picks the packer.
+        /// The slot's declared type, which picks the packer and the
+        /// setter's unpack helper.
         ty: Ty,
+        /// Whether the descriptor has a setter (Part 1 of #1443): false for
+        /// every slot of a class whose MRO defines a compiled `__setattr__`
+        /// or `__delattr__` (#1459).
+        writable: bool,
     },
     /// A `@property`, read by calling its compiled getter through the same
     /// `METH_FASTCALL` wrapper an instance method gets.
@@ -117,11 +130,17 @@ pub(crate) fn collect_getsets(
 ) -> Vec<ExtGetset> {
     let class = class_def.name.as_str();
     let carrier_classes = carrier_class_names(module);
+    let writable = !intercepts_stores(mro_defs);
     let mut out: Vec<ExtGetset> = flat_attr_layout(mro_defs)
         .into_iter()
         .enumerate()
         .filter(|(_, (_, ty))| carried(ty, &carrier_classes))
-        .map(|(index, (name, ty))| ExtGetset::Slot { name, index, ty })
+        .map(|(index, (name, ty))| ExtGetset::Slot {
+            name,
+            index,
+            ty,
+            writable,
+        })
         .collect();
     for def in mro_defs {
         for prop in &def.properties {
@@ -141,6 +160,16 @@ pub(crate) fn collect_getsets(
         }
     }
     out
+}
+
+/// Whether a class of the MRO `mro_defs` defines a compiled `__setattr__`
+/// or `__delattr__`, which CPython would run on every store or `del`.
+fn intercepts_stores(mro_defs: &[&HirClassDef]) -> bool {
+    mro_defs.iter().any(|def| {
+        def.methods
+            .iter()
+            .any(|(name, _)| name == "__setattr__" || name == "__delattr__")
+    })
 }
 
 /// The zero-argument instance export for the compiled getter `getter`, or
@@ -212,7 +241,8 @@ fn pack_slot_word(class: &str, name: &str, ty: &Ty) -> String {
 }
 
 /// The C text for one constructible class's descriptors: each property's
-/// getter wrapper, each descriptor's getter function and the
+/// getter wrapper, each descriptor's getter function, each writable slot's
+/// setter function and the
 /// `pycc_ext_type_getset_<Class>` table [`super::method_types_c`] installs
 /// as `Py_tp_getset`. Empty when the class has no descriptor, in which case
 /// no slot is installed and the class's generated C is unchanged.
@@ -232,7 +262,12 @@ pub(crate) fn getset_c(ctor: &ExtCtor, emitted: &mut Vec<String>) -> String {
         let name = getset.name();
         let symbol = getter_symbol(class, name);
         match getset {
-            ExtGetset::Slot { index, ty, .. } => {
+            ExtGetset::Slot {
+                index,
+                ty,
+                writable,
+                ..
+            } => {
                 // A carrier `PyType_GenericNew` zeroed and `tp_init` never
                 // filled (`mod.Class.__new__(mod.Class)`) has no instance, so
                 // every slot of it is unassigned: the same `AttributeError`
@@ -254,6 +289,9 @@ pub(crate) fn getset_c(ctor: &ExtCtor, emitted: &mut Vec<String>) -> String {
                      pycc_ext_raise_pending();\n        return NULL;\n    }}\n{}}}\n\n",
                     pack_slot_word(class, name, ty)
                 ));
+                if *writable {
+                    out.push_str(&setter::slot_setter_c(class, name, *index, ty));
+                }
             }
             ExtGetset::Property { getter, .. } => {
                 if !emitted.contains(&getter.name) {
@@ -281,8 +319,12 @@ pub(crate) fn getset_c(ctor: &ExtCtor, emitted: &mut Vec<String>) -> String {
     ));
     for getset in &ctor.getsets {
         let name = getset.name();
+        let setter = match getset {
+            ExtGetset::Slot { writable: true, .. } => setter::setter_symbol(class, name),
+            _ => "NULL".to_string(),
+        };
         out.push_str(&format!(
-            "    {{\"{name}\", {}, NULL, NULL, NULL}},\n",
+            "    {{\"{name}\", {}, {setter}, NULL, NULL}},\n",
             getter_symbol(class, name)
         ));
     }
