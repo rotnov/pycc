@@ -45,6 +45,8 @@ mod object_compare;
 mod object_comprehension;
 // Part 2d of #1371: a list display built as a CPython `list`.
 mod object_list_display;
+// #1457: storing and deleting an attribute of a CPython object.
+mod object_attr_store;
 // Part 2b of #1371: membership in, and slices of, a CPython object.
 mod object_membership_slice;
 mod object_raise;

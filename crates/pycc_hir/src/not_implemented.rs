@@ -234,6 +234,7 @@ fn stmt_returns_not_implemented(stmt: &HirStmt) -> bool {
         | HirStmt::AttrSet { .. }
         | HirStmt::Delete { .. }
         | HirStmt::DeleteSlice { .. }
+        | HirStmt::DeleteAttr { .. }
         | HirStmt::ForeignImport { .. }
         | HirStmt::Raise { .. } => false,
     }

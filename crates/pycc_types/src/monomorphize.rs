@@ -1161,6 +1161,11 @@ fn rewrite_generic_calls_in_stmt(
             }
             Ok(())
         }
+        // #1457: an attribute `del` reads its base.
+        HirStmt::DeleteAttr { base, .. } => {
+            rewrite_generic_calls_in_expr(env, local_names, base, instantiations, seen)?;
+            Ok(())
+        }
         HirStmt::Match { subject, cases } => {
             rewrite_generic_calls_in_expr(env, local_names, subject, instantiations, seen)?;
             for case in cases.iter_mut() {
@@ -1593,6 +1598,9 @@ pub(crate) fn collect_generic_class_instantiations_from_stmt(
             for bound in [start, stop, step].into_iter().flatten() {
                 collect_generic_class_instantiations_from_expr(bound, out);
             }
+        }
+        HirStmt::DeleteAttr { base, .. } => {
+            collect_generic_class_instantiations_from_expr(base, out)
         }
         HirStmt::Return(Some(expr)) => collect_generic_class_instantiations_from_expr(expr, out),
         HirStmt::AttrSet { base, value, .. } => {
@@ -2655,6 +2663,17 @@ fn rewrite_protocol_calls_in_stmt(
                     seen,
                 );
             }
+        }
+        // #1457: an attribute `del` reads its base, for the same reason.
+        HirStmt::DeleteAttr { base, .. } => {
+            rewrite_protocol_calls_in_expr(
+                base,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
         // #1254: the loop variable is bound in a scoped clone of `env`
         // before `cond` and the elements are walked, so a protocol call

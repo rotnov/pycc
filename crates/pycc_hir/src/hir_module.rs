@@ -173,6 +173,7 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
             | HirStmt::Return(_)
             | HirStmt::Delete { .. }
             | HirStmt::DeleteSlice { .. }
+            | HirStmt::DeleteAttr { .. }
             | HirStmt::ForeignImport { .. }
             | HirStmt::Raise { .. } => {}
         }

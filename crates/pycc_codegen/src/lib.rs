@@ -60,6 +60,7 @@ mod foreign_len;
 mod foreign_pack;
 mod foreign_raise;
 mod foreign_slice;
+mod foreign_store;
 mod foreign_unpack;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
@@ -104,14 +105,15 @@ pub use ext::{
 use ext::{
     EXT_NAME_ERROR_SYMBOL, EXT_OBJ_BUILD_LIST_SYMBOL, EXT_OBJ_CALL_BORROWED_SYMBOL,
     EXT_OBJ_CALL_KW_BORROWED_SYMBOL, EXT_OBJ_CALL_KW_SYMBOL, EXT_OBJ_CALL_SYMBOL,
-    EXT_OBJ_COLLECT_SYMBOL, EXT_OBJ_CONTAINS_SYMBOL, EXT_OBJ_DELSLICE_SYMBOL,
-    EXT_OBJ_ERROR_BRIDGE_SYMBOL, EXT_OBJ_FORMAT_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL,
-    EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_GETSLICE_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
-    EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL, EXT_OBJ_ISINSTANCE_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL,
-    EXT_OBJ_LEN_SYMBOL, EXT_OBJ_NEW_COLLECTION_SYMBOL, EXT_OBJ_NONE_SYMBOL,
-    EXT_OBJ_NOT_IMPLEMENTED_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL,
-    EXT_OBJ_PACK_INSTANCE_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_OBJECT_SYMBOL,
-    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RAISE_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL,
+    EXT_OBJ_COLLECT_SYMBOL, EXT_OBJ_CONTAINS_SYMBOL, EXT_OBJ_DELATTR_SYMBOL,
+    EXT_OBJ_DELSLICE_SYMBOL, EXT_OBJ_ERROR_BRIDGE_SYMBOL, EXT_OBJ_FORMAT_SYMBOL,
+    EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL,
+    EXT_OBJ_GETSLICE_SYMBOL, EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL,
+    EXT_OBJ_ISINSTANCE_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL,
+    EXT_OBJ_NEW_COLLECTION_SYMBOL, EXT_OBJ_NONE_SYMBOL, EXT_OBJ_NOT_IMPLEMENTED_SYMBOL,
+    EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INSTANCE_SYMBOL,
+    EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_OBJECT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL,
+    EXT_OBJ_RAISE_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL, EXT_OBJ_SETATTR_SYMBOL,
     EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
     EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, ObjCollectionKind, entry_fn_name, is_module_entry_symbol,
 };
@@ -8117,6 +8119,27 @@ fn emit_stmt<'ctx>(
                     foreign_slice::emit_del_slice(context, builder, module, rt, base, bounds)
                 },
             );
+            Ok(())
+        }
+        // #1457 (Part 2 of #1443): `o.x = v` and `del o.x` on a CPython
+        // object; `foreign_store` owns the evaluation order and packing.
+        MirStmt::ObjAttrSet { base, attr, value } => {
+            foreign_store::emit_set_attr(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                base,
+                attr,
+                value,
+            );
+            Ok(())
+        }
+        MirStmt::ObjDelAttr { base, attr } => {
+            let base = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            foreign_store::emit_del_attr(context, builder, module, rt, base, attr);
             Ok(())
         }
         // `base.attr = value` (D-154, Part 1 of #375): writes the raw slot

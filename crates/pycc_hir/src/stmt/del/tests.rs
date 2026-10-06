@@ -1,4 +1,4 @@
-//! `del o[a:b:c]` lowering (Part 2c of #1371).
+//! `del o[a:b:c]` lowering (Part 2c of #1371) and `del o.x` lowering (#1457).
 
 use crate::{HirExpr, HirItem, HirStmt};
 use pycc_diag::Span;
@@ -136,4 +136,49 @@ fn a_function_body_slice_target_lowers() {
         ),
         "{body:?}"
     );
+}
+
+/// #1457: an attribute target lowers to one `DeleteAttr` per target, in
+/// source order next to the other target kinds, located at the target and
+/// unbinding no name.
+#[test]
+fn an_attribute_target_lowers_to_one_delete_attr_per_target() {
+    let stmts = top_level("a = 1\no = 2\ndel a, o.x, (o.y, o[1:])\n");
+    assert!(matches!(&stmts[2], HirStmt::Delete { name } if name == "a"));
+    assert_eq!(
+        stmts[3],
+        HirStmt::DeleteAttr {
+            base: name("o"),
+            attr: "x".to_string(),
+            span: Span::new(19, 22),
+        }
+    );
+    assert_eq!(
+        stmts[4],
+        HirStmt::DeleteAttr {
+            base: name("o"),
+            attr: "y".to_string(),
+            span: Span::new(25, 28),
+        }
+    );
+    assert!(matches!(&stmts[5], HirStmt::DeleteSlice { .. }));
+    let deleted = super::deleted_names(&stmts);
+    assert!(!deleted.contains("o"), "{deleted:?}");
+}
+
+/// A walrus in the base is refused at the attribute target, and a base the
+/// expression lowering refuses keeps that refusal.
+#[test]
+fn an_attribute_target_refuses_a_walrus_or_unlowerable_base() {
+    let err = lower("o = 1\ndel (n := o).x\n").expect_err("a walrus base");
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message.contains("a walrus assignment"),
+        "{}",
+        err.message
+    );
+    assert_eq!(err.span.expect("located").start, 10);
+    let err = lower("o = 1\ndel (lambda: 1).x\n").expect_err("a lambda base");
+    assert_eq!(err.code, "C0001");
+    assert!(!err.message.contains("walrus"), "{}", err.message);
 }

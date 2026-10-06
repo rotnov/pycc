@@ -280,6 +280,8 @@ impl Verifier<'_> {
                 base: key, value, ..
             } => self.exprs([key, value]),
             MirStmt::BufferSet { base, index, value } => self.exprs([base, index, value]),
+            MirStmt::ObjAttrSet { base, value, .. } => self.exprs([base, value]),
+            MirStmt::ObjDelAttr { base, .. } => self.expr(base),
             MirStmt::ObjDelSlice {
                 base,
                 start,

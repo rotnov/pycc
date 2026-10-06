@@ -1193,6 +1193,20 @@ pub enum HirStmt {
         step: Option<Box<HirExpr>>,
         span: Span,
     },
+    /// `del base.attr` (Part 2 of #1443, #1457), one per attribute target of
+    /// a `del` statement, in the statement's left-to-right target order. Like
+    /// [`HirStmt::DeleteSlice`] it unbinds no name: it *reads* `base` and at
+    /// run time asks it to delete `attr`. `pycc_hir` cannot see types, so
+    /// every attribute target lowers here; `pycc_types` admits only a
+    /// CPython-object base (`PyObject_DelAttr`, `foreign::attr_del`) and
+    /// refuses every other base with this node's `span` -- the attribute
+    /// target's own range. `docs/TYPE_SYSTEM.md`'s "`del` statement" section
+    /// is the canonical statement of the rule.
+    DeleteAttr {
+        base: Box<HirExpr>,
+        attr: String,
+        span: Span,
+    },
     /// A CPython-backed `import X` or `import X as Y` nested in a
     /// module-level `if`/`try` block (Part 1 of #1282, #1291). Each
     /// `(local_name, module_path)` pair, in alias order, binds `local_name`

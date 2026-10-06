@@ -341,6 +341,24 @@ pub const EXT_OBJ_BUILD_LIST_SYMBOL: &str = "pycc_ext_obj_build_list";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_DELSLICE_SYMBOL: &str = "pycc_ext_obj_delslice";
 
+/// The fixed C shim's attribute-store helper (#1457, Part 2 of #1443):
+/// `int pycc_ext_obj_setattr(PyObject *o, const char *name, PyObject *value)`
+/// with `o` borrowed and `value` a packer's new reference the helper
+/// consumes on every path, a `NULL` from a failed packer included -- which
+/// it reports as `-1` without calling `PyObject_SetAttrString`, whose `NULL`
+/// value would *delete* the attribute. Returns `0`, or `-1` with the CPython
+/// exception already set.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_SETATTR_SYMBOL: &str = "pycc_ext_obj_setattr";
+
+/// The fixed C shim's attribute-deletion helper (#1457):
+/// `int pycc_ext_obj_delattr(PyObject *o, const char *name)` with `o`
+/// borrowed. Returns `0`, or `-1` with the CPython exception already set.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_DELATTR_SYMBOL: &str = "pycc_ext_obj_delattr";
+
 /// The fixed C shim's `raise o` helper (Part 9 of #1371): `void
 /// pycc_ext_obj_raise(PyObject *o)` with `o` borrowed. It decides what is
 /// raised the way CPython's own `raise` does -- an exception class is
@@ -889,6 +907,8 @@ pub fn body_returns_buffer_slice(body: &[pycc_mir::MirStmt]) -> bool {
         | MirStmt::Return(_)
         | MirStmt::AttrSet { .. }
         | MirStmt::ObjDelSlice { .. }
+        | MirStmt::ObjAttrSet { .. }
+        | MirStmt::ObjDelAttr { .. }
         | MirStmt::ObjRaise { .. }
         | MirStmt::Raise { .. }
         | MirStmt::RaiseFrom { .. }

@@ -725,6 +725,7 @@ pub(crate) fn lower_stmt(
         | HirStmt::TryStar { .. }
         | HirStmt::Delete { .. }
         | HirStmt::DeleteSlice { .. }
+        | HirStmt::DeleteAttr { .. }
         | HirStmt::ForeignImport { .. } => false,
         HirStmt::Raise { exc, cause } => {
             exc.as_ref().is_some_and(contains_named_expr)

@@ -213,6 +213,9 @@ pub(super) fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<Stri
         // `del o[a:b]` (Part 2c of #1371) binds no name, and `pycc_hir`
         // refuses a walrus in its operands.
         MirStmt::ObjDelSlice { .. } => {}
+        // `o.x = v` and `del o.x` (#1457) bind no name either: the store
+        // writes into the object, and `pycc_hir` refuses a walrus in a `del`.
+        MirStmt::ObjAttrSet { .. } | MirStmt::ObjDelAttr { .. } => {}
         // `MirStmt::ForDict`, produced when a `for k in d:` HIR loop's
         // base resolves to a dict-typed binding (mirrors `MirStmt::ForList`
         // above, which is produced for the list-typed case). `Ty::Str` for

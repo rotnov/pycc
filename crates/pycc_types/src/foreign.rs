@@ -307,7 +307,7 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
         "I0404",
         format!(
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
-             value and implements attribute access, scalar-, `None`-, \
+             value and implements attribute access, store and deletion, scalar-, `None`-, \
              object- or class-instance-argument method calls and direct calls with \
              positional or keyword arguments \
              (including a call of a subscript result), `len`, truth \
@@ -576,6 +576,7 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
     }
 }
 
+pub(crate) mod attr_store;
 pub(crate) mod compare;
 pub(crate) mod for_loop;
 pub(crate) mod keyword_call;
