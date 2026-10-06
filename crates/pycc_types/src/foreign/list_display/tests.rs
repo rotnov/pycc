@@ -154,3 +154,37 @@ fn the_shapes_outside_part_2d_keep_their_diagnostics() {
         "cannot assign",
     );
 }
+
+/// #1445: the object evidence may depend on a name bound inside a `try`
+/// suite. Lark `lalr_parser_state.py` binds `action, arg` inside a
+/// `try`/`except KeyError` (line 75) and derives the slice bound from it
+/// (`size = len(rule.expansion)`, line 91), so `s = value_stack[-size:]`
+/// (line 93) only types once the flat binder walks the `try`. Before, `s`
+/// was never bound to the object and line 97's `s = []` was `T0003`. The
+/// `try`/`except*` spelling takes the same walk.
+#[test]
+fn an_empty_display_whose_object_evidence_needs_a_try_suite_is_an_object() {
+    for handler in ["except KeyError", "except* KeyError"] {
+        let source = format!(
+            "def f(value_stack: object, states: object) -> object:\n    \
+             try:\n        arg = states[0]\n    {handler}:\n        \
+             raise ValueError('no rule')\n    \
+             size = len(arg)\n    \
+             if size:\n        s = value_stack[-size:]\n    else:\n        s = []\n    \
+             return s\n"
+        );
+        assert_accepted(&source, true);
+    }
+}
+
+/// #1445's native face: the same binder feeds source 2 of the native
+/// resolution, so a list bound inside a `try` suite now types an empty
+/// display of the same name in a handler, where it was `T0003`.
+#[test]
+fn a_native_empty_display_typed_from_a_try_bound_list_resolves() {
+    assert_accepted(
+        "def f(n: int) -> int:\n    try:\n        xs = [n]\n    \
+         except ValueError:\n        xs = []\n    return len(xs)\n",
+        false,
+    );
+}
