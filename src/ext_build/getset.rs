@@ -18,13 +18,24 @@
 //! from the host is a separate contract (ownership of the replaced word,
 //! the declared type of the slot) and is not part of this change.
 //!
+//! **Instance-typed fields (#1453).** A slot or property declared as a
+//! regular class compiled in the same module -- lark's
+//! `ParserState.parse_conf: ParseConf` -- is packed through the #1449
+//! egress, `pycc_ext_pack_instance`, so the stored instance's live carrier
+//! is returned again: `s.parse_conf is s.parse_conf`, and a host-constructed
+//! instance reads back as the host's own object. The admitted classes are exactly the ones a
+//! published signature may name ([`super::carrier_class_names`]): an enum
+//! or exception-class field still gets no descriptor.
+//!
 //! **Silently partial.** A slot or property whose declared type the boundary
-//! cannot pack from one machine word (a `list[int]` slot, an instance-typed
-//! one, a `tuple`- or `memoryview`-returning getter) simply gets no
-//! descriptor; it is never a `C0003`. The descriptors widen what a host can
+//! cannot pack from one machine word (a `list[int]` slot, an enum- or
+//! exception-class-typed one, a `tuple`- or `memoryview`-returning getter)
+//! simply gets no descriptor; it is never a `C0003`. The descriptors widen what a host can
 //! observe of an object it already holds, and refusing a whole build because
 //! one field cannot be observed would turn an additive capability into a
-//! regression for every program that has such a field today.
+//! regression for every program that has such a field today. An optional
+//! instance slot (`C | None`) never reaches this table: its annotation is
+//! still refused at compile time with `T0049`.
 //!
 //! **Constructible classes only, for now.** The descriptors are part of
 //! [`super::ExtCtor`], so only a constructible class's type object carries
@@ -33,10 +44,12 @@
 //! wraps a live `inst`; those carry no table yet (#1448), so a field read
 //! through one still raises `AttributeError`.
 
+use std::collections::BTreeSet;
+
 use pycc_hir::{HirClassDef, HirItem, HirModule, Ty, flat_attr_layout};
 
 use super::export_name::ExtReceiver;
-use super::{ExtCtor, ExtExport, inherited, namespace_owner, wrapper_for};
+use super::{ExtCtor, ExtExport, carrier_class_names, inherited, namespace_owner, wrapper_for};
 
 /// One read-only attribute a constructible published class exposes.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,9 +90,15 @@ impl ExtGetset {
 }
 
 /// Whether a slot or getter of type `ty` gets a descriptor: the five types
-/// whose value the boundary packs from one machine word.
-fn carried(ty: &Ty) -> bool {
-    matches!(ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Object)
+/// whose value the boundary packs from one machine word, and (#1453) an
+/// instance of one of `carrier_classes`, the module's regular classes,
+/// whose word is the instance pointer #1449's egress packs.
+fn carried(ty: &Ty, carrier_classes: &BTreeSet<String>) -> bool {
+    match ty {
+        Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Object => true,
+        Ty::Instance(class) => carrier_classes.contains(class.as_str()),
+        _ => false,
+    }
 }
 
 /// The getset descriptors the constructible class `class` publishes, given
@@ -97,10 +116,11 @@ pub(crate) fn collect_getsets(
     mro_defs: &[&HirClassDef],
 ) -> Vec<ExtGetset> {
     let class = class_def.name.as_str();
+    let carrier_classes = carrier_class_names(module);
     let mut out: Vec<ExtGetset> = flat_attr_layout(mro_defs)
         .into_iter()
         .enumerate()
-        .filter(|(_, (_, ty))| carried(ty))
+        .filter(|(_, (_, ty))| carried(ty, &carrier_classes))
         .map(|(index, (name, ty))| ExtGetset::Slot { name, index, ty })
         .collect();
     for def in mro_defs {
@@ -111,7 +131,8 @@ pub(crate) fn collect_getsets(
                 continue;
             }
             let getter = inherited::receiver_exact_member(module, class, &prop.name, &prop.getter);
-            if let Some(export) = getter_export(module, class, &prop.name, getter) {
+            if let Some(export) = getter_export(module, class, &prop.name, getter, &carrier_classes)
+            {
                 out.push(ExtGetset::Property {
                     name: prop.name.clone(),
                     getter: export,
@@ -126,14 +147,20 @@ pub(crate) fn collect_getsets(
 /// `None` when its return type gets no descriptor. The *last* definition of
 /// the name is the one codegen binds `fnptr_<name>` to, so it is the one
 /// read.
-fn getter_export(module: &HirModule, class: &str, prop: &str, getter: &str) -> Option<ExtExport> {
+fn getter_export(
+    module: &HirModule,
+    class: &str,
+    prop: &str,
+    getter: &str,
+    carrier_classes: &BTreeSet<String>,
+) -> Option<ExtExport> {
     let return_ty = module.items.iter().rev().find_map(|item| match item {
         HirItem::Function {
             name, return_ty, ..
         } if name == getter => Some(return_ty),
         _ => None,
     })?;
-    carried(return_ty).then(|| ExtExport {
+    carried(return_ty, carrier_classes).then(|| ExtExport {
         name: getter.to_string(),
         class: Some(class.to_string()),
         method: Some(prop.to_string()),
@@ -171,7 +198,14 @@ fn pack_slot_word(class: &str, name: &str, ty: &Ty) -> String {
         Ty::Str => "    pycc_rt_str_incref((void *)(intptr_t)word);\n    \
                     return pycc_ext_pack_str((void *)(intptr_t)word);\n"
             .to_string(),
-        // `collect_getsets` admits exactly the five `carried` types, so the
+        // #1453: the word is the stored instance's pointer. The instance is
+        // never freed (D-107, D-154) and the packer takes no reference on
+        // it, only a new one on the carrier it returns -- the live one when
+        // the instance has one, so a repeated read is the same object.
+        Ty::Instance(_) => {
+            "    return pycc_ext_pack_instance((void *)(intptr_t)word);\n".to_string()
+        }
+        // `collect_getsets` admits exactly the `carried` types, so the
         // remaining one is the opaque object.
         _ => "    return pycc_ext_pack_object((void *)(intptr_t)word);\n".to_string(),
     }

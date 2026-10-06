@@ -270,3 +270,83 @@ fn a_subclass_s_property_descriptor_reads_its_receiver_exact_copy() {
         "{inc}"
     );
 }
+
+/// #1453: lark's `ParserState.parse_conf: ParseConf` shape. A slot or
+/// property declared as a regular class of the module -- generic or not --
+/// is described; an enum- or exception-class-typed slot or property is
+/// not, and the skip leaves the later slot indices undisturbed.
+const INSTANCE_FIELDS: &str = "from enum import Enum\n\
+    from typing import Generic, TypeVar\n\
+    T = TypeVar('T')\n\
+    class Color(Enum):\n\
+    \x20   RED = 1\n\
+    class Oops(Exception):\n\
+    \x20   def __init__(self, m: str) -> None:\n\
+    \x20       self.m = m\n\
+    class Conf(Generic[T]):\n\
+    \x20   def __init__(self, n: int) -> None:\n\
+    \x20       self.n = n\n\
+    class St(Generic[T]):\n\
+    \x20   parse_conf: Conf[T]\n\
+    \x20   color: Color\n\
+    \x20   err: Oops\n\
+    \x20   def __init__(self, parse_conf: Conf[T], k: int) -> None:\n\
+    \x20       self.parse_conf = parse_conf\n\
+    \x20       self.color = Color.RED\n\
+    \x20       self.err = Oops('x')\n\
+    \x20       self.k = k\n\
+    \x20   @property\n\
+    \x20   def conf(self) -> Conf[T]:\n\
+    \x20       return self.parse_conf\n\
+    \x20   @property\n\
+    \x20   def tint(self) -> Color:\n\
+    \x20       return self.color\n\
+    \x20   def get(self) -> int:\n\
+    \x20       return self.k\n";
+
+fn conf_ty() -> Ty {
+    Ty::Instance(Box::new("Conf".to_string()))
+}
+
+#[test]
+fn a_same_module_instance_slot_and_property_get_a_descriptor() {
+    let (ctors, _) = ext_build("1453_instance_fields", INSTANCE_FIELDS);
+    let getsets = getsets_of(&ctors, "St");
+    let names: Vec<&str> = getsets.iter().map(ExtGetset::name).collect();
+    assert_eq!(names, ["parse_conf", "k", "conf"]);
+    assert_eq!(getsets[0], slot("parse_conf", 0, conf_ty()));
+    assert_eq!(getsets[1], slot("k", 3, Ty::Int));
+    // The slots come first, so the walk passes both arms before `conf`.
+    let property_return = getsets
+        .iter()
+        .find_map(|getset| match getset {
+            ExtGetset::Property { getter, .. } => Some(getter.return_ty.clone()),
+            ExtGetset::Slot { .. } => None,
+        })
+        .expect("`conf` is a property descriptor");
+    assert_eq!(property_return, conf_ty());
+}
+
+/// The instance slot's getter packs its word through #1449's egress, which
+/// returns the instance's live carrier when it has one; the property's
+/// wrapper returns through the same packer.
+#[test]
+fn an_instance_slot_getter_packs_through_the_instance_egress() {
+    let (_, inc) = ext_build("1453_instance_fields_c", INSTANCE_FIELDS);
+    let getter = "static PyObject *pycc_ext_get_2_St_10_parse_conf(PyObject *self, void *closure)\n{\n    \
+                  void *inst = ((PyccExtInstance *)self)->inst;\n    long long word;\n    \
+                  (void)closure;\n    if (inst == NULL) {\n        \
+                  PyErr_SetString(PyExc_AttributeError, \"'St' object has no attribute 'parse_conf'\");\n        \
+                  return NULL;\n    }\n    word = pycc_rt_instance_get_slot_checked(inst, 0);\n    \
+                  if (pycc_rt_ext_pending_type() >= 0) {\n        pycc_ext_raise_pending();\n        \
+                  return NULL;\n    }\n    \
+                  return pycc_ext_pack_instance((void *)(intptr_t)word);\n}\n\n";
+    assert!(inc.contains(getter), "missing:\n{getter}\nin:\n{inc}");
+    assert!(
+        inc.contains("return pycc_ext_pack_instance(result);"),
+        "{inc}"
+    );
+    for absent in ["_St_5_color", "_St_3_err", "_St_4_tint"] {
+        assert!(!inc.contains(absent), "{absent} in:\n{inc}");
+    }
+}
