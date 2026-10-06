@@ -10,7 +10,9 @@
 //! the same driver run against CPython's own execution of the source. The
 //! hosted tests are `#[ignore]`d and contribute no line coverage; the
 //! Tier-1 `native-build-test` leg runs them with
-//! `cargo test --workspace -- --include-ignored`. The changed lines are
+//! `cargo test --workspace -- --include-ignored`. The refusal test needs
+//! no host interpreter, since it only runs `pycc build`, so it is not
+//! ignored and runs on every leg. The changed lines are
 //! covered by the unit tests in
 //! `crates/pycc_types/src/empty_container/object_slot_tests.rs`.
 
