@@ -346,3 +346,78 @@ fn a_private_unannotated_defaulted_parameter_still_infers() {
     assert_eq!(params_of(&module, "C._m")[1].1, crate::Ty::Infer);
     assert_eq!(params_of(&module, "_f")[0].1, crate::Ty::Infer);
 }
+
+/// #1387: `class C` with `body` beside `__init__` and one public method.
+fn class_with(body: &str) -> String {
+    format!(
+        "class C:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\n{body}\n    def size(self) -> int:\n        return self.n\n"
+    )
+}
+
+#[test]
+fn an_unannotated_equality_operand_is_an_object_in_an_ext_module() {
+    // lark's `ParserState.__eq__(self, other) -> bool` (line 51), and its
+    // `__ne__` counterpart.
+    for name in ["__eq__", "__ne__"] {
+        let source = class_with(&format!(
+            "    def {name}(self, other) -> bool:\n        return other is None\n"
+        ));
+        let mangled = format!("C.{name}");
+        assert_eq!(
+            params_of(&lowered(&source, true), &mangled)[1],
+            ("other".to_string(), crate::Ty::Object),
+            "{source}"
+        );
+        // A `native` module has no `object` to give it: the operand stays
+        // an inference variable, which `pycc_types` reports as `T0021`.
+        assert_eq!(
+            params_of(&lowered(&source, false), &mangled)[1].1,
+            crate::Ty::Infer,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn only_the_bare_operand_of_eq_and_ne_becomes_an_object() {
+    for (body, mangled, expected) in [
+        // Another rich comparison: its operand is not this rule's.
+        (
+            "    def __lt__(self, other) -> bool:\n        return False\n",
+            "C.__lt__",
+            vec![crate::Ty::Infer],
+        ),
+        // An annotated operand keeps its annotation.
+        (
+            "    def __eq__(self, other: int) -> bool:\n        return other == 1\n",
+            "C.__eq__",
+            vec![crate::Ty::Int],
+        ),
+        // A defaulted operand is not the data model's operand shape, and a
+        // private method's defaulted parameter keeps inferring (#1409).
+        (
+            "    def __eq__(self, other=1) -> bool:\n        return other == 1\n",
+            "C.__eq__",
+            vec![crate::Ty::Infer],
+        ),
+        // A second parameter: not the data model's binary shape.
+        (
+            "    def __eq__(self, other, extra) -> bool:\n        return False\n",
+            "C.__eq__",
+            vec![crate::Ty::Infer, crate::Ty::Infer],
+        ),
+    ] {
+        let source = class_with(body);
+        let params = params_of(&lowered(&source, true), mangled);
+        let tail: Vec<crate::Ty> = params[1..].iter().map(|(_, ty)| ty.clone()).collect();
+        assert_eq!(tail, expected, "{source}");
+    }
+    // A static method has no receiver, so its one parameter is no operand.
+    let source =
+        class_with("    @staticmethod\n    def __eq__(other) -> bool:\n        return False\n");
+    assert_eq!(
+        params_of(&lowered(&source, true), "C.__eq__.static"),
+        vec![("other".to_string(), crate::Ty::Infer)],
+        "{source}"
+    );
+}

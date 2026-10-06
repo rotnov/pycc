@@ -164,8 +164,10 @@ fn the_shapes_outside_part_2a_are_refused() {
             "calling a subscript expression is not supported yet",
         ),
         (
+            // A plain keyword argument is admitted since Part 8 of #1371
+            // (`tests/issue_1371_object_call_kwargs.rs`); `**` is not.
             "obj_calls_keyword",
-            "callbacks[\"len\"](obj=1)\n",
+            "d = {\"obj\": 1}\ncallbacks[\"len\"](**d)\n",
             "C0001",
             "keyword call arguments are not supported yet",
         ),

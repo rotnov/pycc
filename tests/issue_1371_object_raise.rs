@@ -72,8 +72,9 @@ fn assert_one_error(tag: &str, body: &str, code: &str, needle: &str) {
 /// `lark.exceptions`: `Boom` takes lark's two positional arguments, and
 /// `Odd` is a class whose constructor does not return an instance.
 const ERRS: &str = "class Boom(Exception):\n    \
-    def __init__(self, token, expected):\n        \
-    super().__init__(f\"unexpected {token!r}, expected {sorted(expected)}\")\n\
+    def __init__(self, token, expected, state=None, interactive_parser=None):\n        \
+    super().__init__(f\"unexpected {token!r}, expected {sorted(expected)}\")\n        \
+    self.state = state\n\
     \n\
     \n\
     class Odd(Exception):\n    \
@@ -358,17 +359,18 @@ fn an_object_raised_inside_a_host_handler_chains_its_context_like_cpython() {
     );
 }
 
-/// lark `lalr_parser_state.py` line 80 in a function of its own, with the
-/// keyword arguments and `state=self` removed: `raise UnexpectedToken(token,
-/// expected)`, spelled `Boom` here, on an `object`-annotated token and a
-/// computed set.
+/// lark `lalr_parser_state.py` line 80 in a function of its own, with only
+/// `state=self` (a pycc instance, still `I0404`) replaced by `None`:
+/// `raise UnexpectedToken(token, expected, state=None,
+/// interactive_parser=None)`, spelled `Boom` here, on an `object`-annotated
+/// token and a computed set. The keyword call is Part 8's.
 const LARK_LINE: &str = "import builtins\n\
     from errs import Boom\n\
     \n\
     \n\
     def feed_token(token: object, states: object) -> None:\n    \
     expected = builtins.set(states)\n    \
-    raise Boom(token, expected)\n\
+    raise Boom(token, expected, state=None, interactive_parser=None)\n\
     \n\
     \n\
     feed_token(builtins.str(\"NAME\"), builtins.list(\"ba\"))\n";

@@ -150,10 +150,11 @@
 //!   program, and a `def`-body call to the rebound name falls through to
 //!   `pycc_types`' span-less guard as before #944. A plain assignment
 //!   rebinding the name is the module frame's case already.
-//! - A call with a keyword argument (`Color(value=1)`) is skipped:
-//!   `lower_expr` already reports exactly one `C0001 keyword call arguments
-//!   are not supported yet` at that call, and the scan runs on failed items
-//!   too, so without the skip that program would carry two `C0001`s at one
+//! - A call with a keyword argument (`Color(value=1)`) is skipped: it
+//!   reports exactly one `C0001 keyword call arguments are not supported
+//!   yet` at that call -- from `pycc_types` since Part 8 of #1371, which
+//!   refuses a `HirExpr::KeywordCall` of anything but a CPython object --
+//!   so without the skip that program would carry two `C0001`s at one
 //!   span. The skip is *not* extended to a starred argument (`Color(*xs)`):
 //!   the starred `C0001` sits at `*xs`, a different span, and the call is a
 //!   genuine enum call.

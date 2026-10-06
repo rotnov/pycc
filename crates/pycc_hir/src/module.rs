@@ -411,9 +411,18 @@ pub fn lower_module(
         } else {
             FuturePosition::Body
         };
+        // #1418: in an `ext` module, a `NotImplemented` outside an admitted
+        // `return NotImplemented` refuses its item the same way.
         let outcome = match assert_refusal.take_if(|(refused, _)| *refused == index) {
             Some((_, diagnostic)) => Err(diagnostic),
-            None => lower_top_level_item(stmt, &mut state, resolved, position),
+            None => match resolved
+                .ext_module()
+                .then(|| crate::not_implemented::refusal(stmt))
+                .flatten()
+            {
+                Some(diagnostic) => Err(diagnostic),
+                None => lower_top_level_item(stmt, &mut state, resolved, position),
+            },
         };
         match outcome {
             Ok(()) => {
@@ -960,7 +969,8 @@ fn lower_top_level_item<'a>(
         block_imports.substitute(error)
     })?;
     // A synthesized name -- a chained-assignment temporary (`0chain_<offset>`,
-    // #1213) or a comprehension loop variable (`0comp_<offset>_<name>`,
+    // #1213), a tuple-unpacking temporary (`0unpack_<offset>`, Part 1 of
+    // #891) or a comprehension loop variable (`0comp_<offset>_<name>`,
     // D-117, #1237) -- is not a definition the source wrote, so it never
     // takes part in `program::link`'s cross-module collision check -- the
     // same reason the `__name__` seed is not recorded (see `lower_module`).
@@ -978,8 +988,8 @@ fn lower_top_level_item<'a>(
 }
 
 /// Whether `name` was synthesized by lowering rather than written in the
-/// source. Every synthesized name -- #1213's `0chain_<offset>` and D-117's
-/// `0comp_<offset>_<name>` -- starts with an ASCII digit, which no Python
+/// source. Every synthesized name -- #1213's `0chain_<offset>`, #891's
+/// `0unpack_<offset>` and D-117's `0comp_<offset>_<name>` -- starts with an ASCII digit, which no Python
 /// identifier can, so the test cannot match a source name.
 pub(crate) fn is_synthesized_name(name: &str) -> bool {
     name.as_bytes().first().is_some_and(u8::is_ascii_digit)

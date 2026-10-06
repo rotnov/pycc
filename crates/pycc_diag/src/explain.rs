@@ -45,8 +45,8 @@ pub const EXPLANATIONS: &[DiagnosticExplanation] = &[
 C0001 is a versioned capability diagnostic, not a rejected-by-design language \
 rule: it fires whenever HIR lowering reaches a syntactically valid Python \
 statement, expression, or annotation shape that this pycc version's frontend \
-does not yet lower -- a `with` statement, a tuple-unpacking assignment, an \
-unrecognized import shape, or a type annotation this version's lowering \
+does not yet lower -- a `with` statement, a starred or nested \
+tuple-unpacking target, an unrecognized import shape, or a type annotation this version's lowering \
 does not recognize, for example. Since D-228 (issue #918), widened by \
 issue #925, the parameterized container annotations `list[T]`, `set[T]`, \
 `dict[K, V]` and `tuple[A, B, ...]` *are* lowered in parameter, return, \
@@ -320,9 +320,10 @@ unannotated `self.xs = []` in `__init__` reports it too when no source types \
 the slot: annotate the attribute (`self.xs: list[int] = []`) or append a value \
 to it in one of the class's own methods (`self.xs.append(1)`); a renamed \
 receiver (`def __init__(this)`) is named as written. An unannotated \
-`self.d = {}` establishing the attribute in `__init__` and a tuple-unpacking \
-target (`L, R = [], []`) never reach this check: both are rejected earlier \
-with `C0001`. A class-body declaration (`d: dict[str, int]`) types an \
+`self.d = {}` establishing the attribute in `__init__` never reaches this \
+check: it is rejected earlier with `C0001`. A tuple-unpacking assignment \
+(`L, R = [], []`) does reach it: each `[]` is an element of a tuple display, \
+a nested literal, not a name's own value. A class-body declaration (`d: dict[str, int]`) types an \
 establishing `self.d = {}` instead, and an establishing `[]` or `{}` of the \
 wrong shape for its declared slot does reach this check. A later `self.d = {}` or `self.xs = {}` reset in another method \
 does reach it when the slot it stores into is not a `dict`. Where a binding \
@@ -396,7 +397,10 @@ subclass (#1337, D-254) whose body returns `self` from a method annotated \
 with the base class: the copy's `self` is the subclass, which the base-typed \
 return slot would silently widen, so the program is refused and the \
 diagnostic carries the note \"while compiling `D.m` inherited by subclass \
-`C`\".",
+`C`\". A CPython object (a foreign-import value, such as the result of \
+`o == 1`) returned from a `-> bool`, `-> int`, `-> float` or `-> str` \
+function is refused rather than converted implicitly (D-258, #1419): the \
+help names the explicit conversion, e.g. `return bool(o == 1)`.",
         example: "\
 def f() -> int:
     return \"not an int\"
@@ -463,7 +467,10 @@ subclass (#1337, D-254) whose body binds `self` to a local annotated with \
 the base class (`x: A = self`): the copy's `self` is the subclass, which \
 the annotation would silently widen, so the program is refused and the \
 diagnostic carries the note \"while compiling `D.m` inherited by subclass \
-`C`\".",
+`C`\". A CPython object (a foreign-import value) initializing a `bool`, \
+`int`, `float` or `str` annotation, such as `b: bool = o == 1`, is refused \
+rather than converted implicitly (D-258, #1419): the help names the \
+explicit conversion, e.g. `b: bool = bool(o == 1)`.",
         example: "\
 def f() -> None:
     x: int = \"hello\"
@@ -1127,6 +1134,26 @@ def f() -> int:
 ",
     },
     DiagnosticExplanation {
+        code: "T0055",
+        severity: Severity::Error,
+        summary: "tuple-unpacking assignment names the wrong number of targets",
+        explanation: "\
+T0055 fires when a tuple-unpacking assignment (`a, b = t`, Part 1 of #891) \
+unpacks a native `tuple[...]` whose length differs from the number of target \
+names. CPython raises `ValueError` at run time with the same message; pycc \
+knows the tuple's length statically, so it reports the error before the \
+program runs, for the same reason an out-of-range literal tuple index is \
+T0040 rather than a run-time `IndexError` (D-116). A `try`/`except \
+ValueError` around such an unpack therefore never runs: the program is \
+refused instead. Write exactly as many target names as the tuple has elements. A CPython object's length is not \
+known statically: unpacking one in an `--ext` build is checked at run time \
+and raises CPython's own `ValueError`.",
+        example: "\
+t = (1, 2, 3)
+a, b = t  # T0055 -- too many values to unpack (expected 2, got 3)
+",
+    },
+    DiagnosticExplanation {
         code: "O0201",
         severity: Severity::Error,
         summary: "value used after move across scope boundary",
@@ -1442,31 +1469,49 @@ other evaluates CPython's own `PyObject_RichCompare` and yields an \
 `object` result usable as a condition or printed; an identity test \
 (`is`, `is not`) compares the object with another object or `None`; and \
 `isinstance(o, C)` is admitted when `C` is `int`, `float`, `bool`, `str` \
-or itself a CPython object. Part 2a of #1371 lets a second CPython \
+or itself a CPython object; since Part 7 of #1371 also when `C` is \
+`list`, `dict` or `tuple`, or a plain class compiled in the same module, \
+which is true of the host-side instances of its published family (an \
+`--ext` class with an exported method and its published subclasses). \
+Part 2a of #1371 lets a second CPython \
 object be a method or direct call's argument or a subscript key, and \
 admits a call of a subscript result (`callbacks[k](tok)`) under the same \
-argument rule; the result is another CPython object. Part 2b of #1371 \
+argument rule; the result is another CPython object. Part 8 of #1371 \
+lets each of those three call shapes take keyword arguments \
+(`o.split(\",\", maxsplit=1)`, `sorted(xs, reverse=True)`) under the same \
+argument rule, and admits `None` as a positional or keyword argument; \
+`**` unpacking stays refused by `C0001`. Part 2b of #1371 \
 admits a membership test (`k in o`, `k not in o`) of an `int`, `float`, \
 `bool`, `str` or `object` item in the object, evaluated by CPython's own \
 `PySequence_Contains` with a `bool` result, and a slice load \
 (`o[a:b:c]`, any bound omitted) whose bounds are of those same types, \
 answered by the object's own `__getitem__` with a `slice` key; the result \
-is another CPython object. The loop is \
+is another CPython object. Part 2d of #1371 builds a list display \
+bound to an object slot -- annotated `object`, `Any` or a bare `list`, \
+or an empty `[]` assigned to a name whose other binding is a CPython \
+object -- as a fresh CPython `list` of its `int`, `float`, `bool`, `str` \
+or `object` elements. Part 6 of #1371 admits `and`/`or` with an \
+object operand: as a condition the object's truth is `PyObject_IsTrue`, \
+and as a value the result is an `object` when the other operand is an \
+`object`, `int`, `float`, `bool` or `str`, a native operand boxed only \
+when it is the one selected. The loop is \
 admitted when the iterable is written as an attribute load \
 (`for x in o.attr:`), a method call (`for x in o.method(...):`) or a bare \
 name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
 a bare imported module is iterated too, and raises CPython's own \
 `TypeError` at run time. Everything else is \
-still refused, including `isinstance` against a pycc class or a tuple of \
-classes, a comparison chain with an object link (`a < o < b`), an \
+still refused, including `isinstance` against a tuple of classes or a \
+pycc exception class, protocol, enum or generic class, a comparison chain with an object link (`a < o < b`), an \
 equality test against a bare `None`, a rich comparison with an operand \
 of any other type, a `match` subject, iterating over a subscript load \
 (`for x in o[k]:`) or inside a comprehension, \
 passing an argument of any other type to one of its methods, to the \
 object itself or to a subscript result, indexing or slicing with a key \
-or bound of any other type, and testing membership of an item of any \
+or bound of any other type, joining an object with a value of any other \
+type in an `and`/`or`, and testing membership of an item of any \
 other type in an object or of an `object` item in a native container \
-(membership between two native values keeps its `C0001`). A subscript call whose base is a bare name and whose key is \
+(membership between two native values keeps its `C0001`), and a list \
+display bound to an object slot with an element of any other type. A subscript call whose base is a bare name and whose key is \
 `int`, `float`, `bool` or `str` (`handlers[int](x)`) is still read as a \
 generic class instantiation and refused by that path's own diagnostic. Storing through a \
 subscript (`o[k] = v`) or a slice (`o[a:b] = v`) and \
@@ -1493,8 +1538,8 @@ this code still refuses iterating the object with `for` (Part 2 of \
 parameter would be inferred as the object and then used as a method-call \
 receiver or called reports `T0021` instead (Part 3 of #1333). The \
 refusal narrows as the later parts of #1026 (the boundary conversions) and \
-of #1371 (calls, subscripts and `raise` on an object, `isinstance` against \
-a pycc class, comparison chains and `and`/`or` over an object) land, and \
+of #1371 (calls, subscripts and `raise` on an object, comparison chains \
+over an object) land, and \
 this code is retired when they have.",
         example: "\
 import numpy

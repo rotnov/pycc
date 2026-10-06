@@ -38,6 +38,7 @@ mod bin_op_kind;
 mod comprehension;
 mod container_call;
 pub(crate) mod keyword_bind;
+pub(crate) mod object_keyword_call;
 mod receiver_class_call;
 pub(crate) mod receiver_dispatch;
 mod std_receiver;
@@ -479,13 +480,21 @@ pub(crate) fn lower_expr(
             // arguments on every one of those shapes. `is_bindable_call`
             // answers `true` only for the one shape the tail of this arm can
             // actually bind.
+            //
+            // Part 8 of #1371: a keyword call the binder cannot bind is no
+            // longer refused outright -- `object_keyword_call` keeps it as a
+            // `KeywordCall` for the shapes whose callee can be a CPython
+            // object, and refuses every other shape with the same `C0001`.
             if !call.arguments.keywords.is_empty()
                 && !keyword_bind::is_bindable_call(signatures, call)
             {
-                return Err(unsupported(
-                    "keyword call arguments are not supported yet",
-                    call.range,
-                ));
+                return object_keyword_call::lower(
+                    call,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                );
             }
             if let Expr::Attribute(attr) = call.func.as_ref() {
                 // #433: `super().method(args)` — recognize a zero-arg
@@ -993,6 +1002,7 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => false,
         HirExpr::Call { args, .. } => args.iter().any(contains_named_expr),
@@ -1007,14 +1017,17 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
         HirExpr::IfExp { test, body, orelse } => {
             contains_named_expr(test) || contains_named_expr(body) || contains_named_expr(orelse)
         }
-        HirExpr::UnaryOp { operand, .. } => contains_named_expr(operand),
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
+            contains_named_expr(operand)
+        }
         HirExpr::FString(parts) => parts.iter().any(|part| match part {
             FStringPart::Literal(_) => false,
             FStringPart::Interpolation(e) => contains_named_expr(e),
         }),
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
-            es.iter().any(contains_named_expr)
-        }
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => es.iter().any(contains_named_expr),
         HirExpr::Subscript { base, index } => {
             contains_named_expr(base) || contains_named_expr(index)
         }
@@ -1053,6 +1066,9 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
             contains_named_expr(callee) || args.iter().any(contains_named_expr)
         }
         HirExpr::ReceiverClassCall { args } => args.iter().any(contains_named_expr),
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            contains_named_expr(call) || keywords.iter().any(|(_, v)| contains_named_expr(v))
+        }
         HirExpr::Comprehension(comp) => comprehension::comprehension_contains_named_expr(comp),
     }
 }

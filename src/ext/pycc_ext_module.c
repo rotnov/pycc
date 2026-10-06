@@ -102,6 +102,18 @@ extern long long pycc_ext_module_exec(void);
 static PyObject *pycc_ext_user_exception_class(unsigned char tag);
 
 /*
+ * Part 7 of #1371: `isinstance(o, C)` for a class `C` compiled in this
+ * module. Defined in the generated companion for the same reason as the
+ * declaration above (`COMPILED_CLASS_ISINSTANCE_DECL` in `src/ext_build.rs`).
+ * Returns 1 when `o` is an instance of the host type object of any
+ * *published* class whose MRO contains `name`, -1 with the exception set
+ * when `PyObject_IsInstance` raises, and 0 otherwise. A name no published
+ * class descends from has no carrier on the CPython side at all, and is
+ * answered by `pycc_ext_unpublished_class_isinstance` below.
+ */
+static int pycc_ext_compiled_class_isinstance(PyObject *o, const char *name);
+
+/*
  * The failed-import bridge (#1293, Part 3 of #1282). A foreign import nested
  * in a module-level `if`/`try` block whose `PyImport_ImportModule` raised an
  * `ImportError` is translated into a pending pycc exception, so the block's
@@ -1846,6 +1858,77 @@ PyObject *pycc_ext_obj_call_borrowed(PyObject *callee, PyObject **args,
 }
 
 /*
+ * Part 8 of #1371: a call on a CPython object that passes keyword
+ * arguments -- `o.method(x, key=v)`, `f(a, b=c)`, `Cls(arg, flag=True)`
+ * (`EXT_OBJ_CALL_KW_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `args` holds `nargs + nkw` slots: the positional arguments, then the
+ * keyword values, each an owned reference from a `pycc_ext_obj_pack_*`
+ * helper. `names` holds the `nkw` keyword names as NUL-terminated UTF-8
+ * (compile-time constants; the parser already refused a repeated name).
+ * The names become the `kwnames` tuple of CPython's own vectorcall
+ * keyword protocol, which every callable honours -- a callable without a
+ * vectorcall slot gets the arguments re-packed into a `kwargs` dict by
+ * CPython itself -- so this is observably `PyObject_Call(callable, args,
+ * kwargs)` without building the dict here.
+ *
+ * Ownership is exactly `pycc_ext_obj_call`'s: `callable` and every
+ * `args[i]` are CONSUMED on every path, including a failed packer (a NULL
+ * slot, whose exception is propagated unchanged) and a failure to build
+ * `kwnames`. Returns a new reference (never released, #1092) or NULL with
+ * a Python exception set.
+ */
+PyObject *pycc_ext_obj_call_kw(PyObject *callable, PyObject **args,
+                               long long nargs, const char **names,
+                               long long nkw)
+{
+    PyObject *result = NULL;
+    PyObject *kwnames = NULL;
+    long long total = nargs + nkw;
+    long long i;
+    int packed = 1;
+
+    for (i = 0; i < total; i++) {
+        if (args[i] == NULL) {
+            packed = 0;
+        }
+    }
+    if (callable != NULL && packed) {
+        kwnames = PyTuple_New((Py_ssize_t)nkw);
+        for (i = 0; kwnames != NULL && i < nkw; i++) {
+            PyObject *name = PyUnicode_InternFromString(names[i]);
+            if (name == NULL || PyTuple_SetItem(kwnames, (Py_ssize_t)i, name) < 0) {
+                Py_CLEAR(kwnames);
+            }
+        }
+        if (kwnames != NULL) {
+            result = PyObject_Vectorcall(callable, args, (size_t)nargs, kwnames);
+        }
+    }
+    Py_XDECREF(kwnames);
+    Py_XDECREF(callable);
+    for (i = 0; i < total; i++) {
+        Py_XDECREF(args[i]);
+    }
+    return result;
+}
+
+/*
+ * Part 8 of #1371: `pycc_ext_obj_call_kw` with a BORROWED callable
+ * (`EXT_OBJ_CALL_KW_BORROWED_SYMBOL`), the keyword twin of
+ * `pycc_ext_obj_call_borrowed`: a module global such as a foreign class or
+ * function, or a `for` loop target. The extra reference taken here is the
+ * one `pycc_ext_obj_call_kw` releases. Every `args[i]` is consumed.
+ */
+PyObject *pycc_ext_obj_call_kw_borrowed(PyObject *callable, PyObject **args,
+                                        long long nargs, const char **names,
+                                        long long nkw)
+{
+    Py_XINCREF(callable);
+    return pycc_ext_obj_call_kw(callable, args, nargs, names, nkw);
+}
+
+/*
  * Part 3 of #1026 (PR 3a of #1082): `len(o)` on a CPython object value
  * (`EXT_OBJ_LEN_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *
@@ -1987,10 +2070,24 @@ PyObject *pycc_ext_obj_none(void)
 }
 
 /*
+ * #1418: a *borrowed* pointer to CPython's `NotImplemented` singleton, the
+ * value of an admitted `return NotImplemented` in a comparison method
+ * (`EXT_OBJ_NOT_IMPLEMENTED_SYMBOL`). It is immortal on CPython 3.13+, so a
+ * compiled return may hand the borrow back as is; when the result crosses
+ * the export boundary, `pycc_ext_pack_object` takes the strong reference
+ * (`Py_NewRef`) the host caller owns.
+ */
+PyObject *pycc_ext_obj_not_implemented(void)
+{
+    return Py_NotImplemented;
+}
+
+/*
  * Part 1 of #1371: `isinstance(o, cls)` with an object `o`
  * (`EXT_OBJ_ISINSTANCE_SYMBOL`). Both operands are borrowed. A `NULL`
  * `cls` selects a builtin class by `builtin`: 0 `int`, 1 `str`, 2 `float`,
- * 3 `bool` (`pycc_mir::ObjBuiltinClass::shim_code`). Returns 1, 0, or -1
+ * 3 `bool`, and since Part 7 of #1371 4 `list`, 5 `dict`, 6 `tuple`
+ * (`pycc_mir::ObjBuiltinClass::shim_code`). Returns 1, 0, or -1
  * with the exception set (`PyObject_IsInstance` raises `TypeError` for a
  * `cls` that is not a class, and propagates a raising
  * `__instancecheck__`).
@@ -2011,6 +2108,15 @@ int pycc_ext_obj_isinstance(PyObject *o, PyObject *cls, int builtin)
         case 3:
             cls = (PyObject *)&PyBool_Type;
             break;
+        case 4:
+            cls = (PyObject *)&PyList_Type;
+            break;
+        case 5:
+            cls = (PyObject *)&PyDict_Type;
+            break;
+        case 6:
+            cls = (PyObject *)&PyTuple_Type;
+            break;
         default:
             PyErr_SetString(PyExc_SystemError,
                             "pycc_ext_obj_isinstance: unrecognized builtin class selector");
@@ -2022,6 +2128,44 @@ int pycc_ext_obj_isinstance(PyObject *o, PyObject *cls, int builtin)
         return -1;
     }
     return PyObject_IsInstance(o, cls);
+}
+
+/*
+ * The answer for a compiled class no published type descends from (a
+ * private class, one exporting no method, every class of an embedded
+ * build): no CPython object is an instance of it, but CPython's own
+ * `isinstance` does not answer False before it has looked up the object's
+ * `__class__` (`object_isinstance` in `Objects/abstract.c`), so an error
+ * raised there propagates as -1 here too. A missing `__class__` is 0, and
+ * whatever it names cannot be a subclass of a class with no type object.
+ * The generated `pycc_ext_compiled_class_isinstance` calls it by the name
+ * `UNPUBLISHED_CLASS_ISINSTANCE` in `src/ext_build/method_types.rs` spells.
+ */
+static int pycc_ext_unpublished_class_isinstance(PyObject *o)
+{
+    PyObject *cls = NULL;
+    if (PyObject_GetOptionalAttrString(o, "__class__", &cls) < 0) {
+        return -1;
+    }
+    Py_XDECREF(cls);
+    return 0;
+}
+
+/*
+ * Part 7 of #1371: `isinstance(o, C)` with an object `o` and a class `C`
+ * compiled in this module (`EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL`). `o` is
+ * borrowed; `name` is the class's NUL-terminated name, a constant string
+ * compiled code owns. Same 1/0/-1 contract as `pycc_ext_obj_isinstance`;
+ * the generated `pycc_ext_compiled_class_isinstance` declared above carries
+ * the rule.
+ */
+int pycc_ext_obj_isinstance_compiled(PyObject *o, const char *name)
+{
+    if (o == NULL || name == NULL) {
+        PyErr_SetString(PyExc_SystemError, "pycc_ext_obj_isinstance_compiled: NULL operand");
+        return -1;
+    }
+    return pycc_ext_compiled_class_isinstance(o, name);
 }
 
 /*
@@ -2111,6 +2255,55 @@ PyObject *pycc_ext_obj_getslice(PyObject *o, PyObject *start, PyObject *stop, Py
     result = PyObject_GetItem(o, slice);
     Py_DECREF(slice);
     return result;
+}
+
+/*
+ * Part 2d of #1371: a list display bound to an object slot, `x: object =
+ * [a, b]` (`EXT_OBJ_BUILD_LIST_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `items` holds `n` *packed* elements, in source order, each a new
+ * reference a `pycc_ext_obj_pack_*` helper produced. Every one is consumed
+ * on every path, exactly as `pycc_ext_obj_call` consumes its arguments: a
+ * `NULL` element is a packer that already set the exception, so the list is
+ * never built and the rest are released; a failed `PyList_New` releases
+ * them all. Otherwise each reference moves into the fresh list through
+ * `PyList_SetItem`, which steals it -- the limited API (abi3) has no
+ * `PyList_SET_ITEM`. The index is always in range of a list just built
+ * with `n` slots, so it cannot fail; the check is defence in depth and
+ * releases what has not moved yet. The result is a *new* reference that
+ * is deliberately never released, on the leak-only rule `docs/RUNTIME.md`
+ * records, or `NULL` with the exception set.
+ */
+PyObject *pycc_ext_obj_build_list(PyObject **items, long long n)
+{
+    PyObject *list = NULL;
+    int failed = 0;
+    long long i;
+
+    for (i = 0; i < n; i++) {
+        if (items[i] == NULL) {
+            failed = 1;
+        }
+    }
+    if (!failed) {
+        list = PyList_New((Py_ssize_t)n);
+    }
+    if (list == NULL) {
+        for (i = 0; i < n; i++) {
+            Py_XDECREF(items[i]);
+        }
+        return NULL;
+    }
+    for (i = 0; i < n; i++) {
+        if (PyList_SetItem(list, (Py_ssize_t)i, items[i]) < 0) {
+            for (i = i + 1; i < n; i++) {
+                Py_DECREF(items[i]);
+            }
+            Py_DECREF(list);
+            return NULL;
+        }
+    }
+    return list;
 }
 
 /*
@@ -2264,6 +2457,67 @@ long long pycc_ext_obj_iter_next(PyObject *it, PyObject **out)
         return 1;
     }
     return PyErr_Occurred() == NULL ? 0 : -1;
+}
+
+/*
+ * Part 1 of #1255: the empty result of a list or set comprehension over a
+ * CPython object (`EXT_OBJ_NEW_COLLECTION_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`). `kind` is `ObjCollectionKind`'s code
+ * there: `0` builds a `list`, `1` a `set`; any other code is a code
+ * generator defect and raises `SystemError` rather than guessing.
+ *
+ * The result is a *new* reference -- the comprehension's value -- that is
+ * deliberately never released, on the leak-only rule `docs/RUNTIME.md`
+ * records, or `NULL` with the exception set.
+ */
+PyObject *pycc_ext_obj_new_collection(long long kind)
+{
+    if (kind == 0) {
+        return PyList_New(0);
+    }
+    if (kind == 1) {
+        return PySet_New(NULL);
+    }
+    PyErr_SetString(PyExc_SystemError,
+                    "pycc_ext_obj_new_collection called with an unknown kind");
+    return NULL;
+}
+
+/*
+ * Part 1 of #1255: one element step of a list or set comprehension over a
+ * CPython object (`EXT_OBJ_COLLECT_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`). `collection` is borrowed and was built
+ * by `pycc_ext_obj_new_collection` with the same `kind`.
+ *
+ * `item` is a *packed* element, a new reference a `pycc_ext_obj_pack_*`
+ * helper produced, and it is consumed on every path, exactly as
+ * `pycc_ext_obj_call` consumes its arguments. A `NULL` item is a packer that
+ * already set the exception, so it is reported as a failure without a new
+ * one. `PyList_Append` and `PySet_Add` take their own reference, so the
+ * packed one is released after either; `PySet_Add` raises `TypeError` for an
+ * unhashable item, which is exactly what CPython's own set comprehension
+ * raises.
+ *
+ * Returns `0`, or `-1` with the exception set. A `NULL` collection or an
+ * unknown kind is a code generator defect and raises `SystemError`, as the
+ * other NULL guards in this file do.
+ */
+int pycc_ext_obj_collect(PyObject *collection, long long kind, PyObject *item)
+{
+    int status;
+
+    if (item == NULL) {
+        return -1;
+    }
+    if (collection == NULL || (kind != 0 && kind != 1)) {
+        Py_DECREF(item);
+        PyErr_SetString(PyExc_SystemError,
+                        "pycc_ext_obj_collect called with an invalid collection");
+        return -1;
+    }
+    status = kind == 0 ? PyList_Append(collection, item) : PySet_Add(collection, item);
+    Py_DECREF(item);
+    return status < 0 ? -1 : 0;
 }
 
 /*
@@ -2602,6 +2856,164 @@ int pycc_ext_obj_unpack_float_tuple(PyObject *o, long long arity, double *out)
         out[index] = value;
     }
     return 0;
+}
+
+/*
+ * The `tp_name` CPython's "cannot unpack non-iterable" message prints, as a
+ * new `str` reference, or NULL with an exception set. A static type's
+ * `tp_name` is "module.name", from which CPython derives both `__module__`
+ * and `__name__`, so it is rebuilt from them, a `builtins` type printing
+ * its bare name (`int`, `builtin_function_or_method`); a heap type created
+ * by a `class` statement has its `__name__` as `tp_name`. A heap type built
+ * from a `PyType_Spec` whose spec name is dotted prints `__name__` here and
+ * the dotted name in CPython: the Limited API cannot tell the two heap kinds
+ * apart.
+ */
+static PyObject *pycc_ext_obj_unpack_type_name(PyTypeObject *type)
+{
+    PyObject *name;
+    PyObject *module;
+    PyObject *dotted;
+
+    name = PyType_GetName(type);
+    if (name == NULL || (PyType_GetFlags(type) & Py_TPFLAGS_HEAPTYPE) != 0) {
+        return name;
+    }
+    module = PyType_GetModuleName(type);
+    if (module == NULL) {
+        Py_DECREF(name);
+        return NULL;
+    }
+    if (PyUnicode_CompareWithASCIIString(module, "builtins") == 0) {
+        Py_DECREF(module);
+        return name;
+    }
+    dotted = PyUnicode_FromFormat("%U.%U", module, name);
+    Py_DECREF(module);
+    Py_DECREF(name);
+    return dotted;
+}
+
+/*
+ * `t1, ..., tn = o` where `o` is a CPython object (Part 1 of #891,
+ * `EXT_OBJ_UNPACK_SYMBOL` in `crates/pycc_codegen/src/ext.rs`): a new
+ * reference to a `tuple` of exactly `n` items taken from `o`, or NULL with
+ * CPython's own exception set.
+ *
+ * It mirrors CPython's `unpack_iterable` (Python/ceval.c), which the
+ * Limited API does not export:
+ *
+ * - `iter(o)` failing with `TypeError` for an object that has neither
+ *   `__iter__` nor the sequence protocol is replaced by CPython's own
+ *   "cannot unpack non-iterable T object"; any other failure of `iter()`
+ *   (a raising `__iter__`, say) propagates unchanged. CPython prints the
+ *   type's `tp_name`, which the Limited API does not expose;
+ *   `pycc_ext_obj_unpack_type_name` rebuilds it (CPython's `%.200s`
+ *   truncation of a longer name is not mimicked);
+ * - fewer than `n` items is `ValueError` "not enough values to unpack
+ *   (expected n, got i)";
+ * - an `n + 1`-th item is `ValueError` "too many values to unpack
+ *   (expected n)". From CPython 3.14 the interpreter appends ", got K" when
+ *   `o` is an exact `list`, `tuple` or `dict`, whose size it can read
+ *   without consuming anything; this helper does the same when the running
+ *   interpreter is 3.14 or newer (`Py_Version`), so the message matches the
+ *   host's own byte for byte;
+ * - an exception raised by `__next__` propagates unchanged.
+ *
+ * # Ownership
+ *
+ * An exact `tuple` of exactly `n` items -- the common case, and lark's
+ * parse-table entries -- is returned itself with one new reference: a
+ * tuple is immutable, so the items read back from it are the ones
+ * iteration would have produced, and no allocation is made. Every other
+ * value is iterated into a fresh tuple. The iterator and every item
+ * fetched so far are released on each failing exit; on success the
+ * iterator is released and the items are owned by the returned tuple. The
+ * extra item fetched to detect "too many" is released at once. The
+ * returned reference joins the #1092 leak-only set like every other object
+ * result. `PyTuple_New` plus `PyTuple_SetItem` (which steals) build the
+ * fresh tuple, both in the Limited API.
+ *
+ * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents;
+ * `n` is guarded with it, codegen only ever emitting a positive arity.
+ */
+PyObject *pycc_ext_obj_unpack(PyObject *o, long long n)
+{
+    PyObject *iter;
+    PyObject *items;
+    PyObject *item;
+    PyObject *type_name;
+    Py_ssize_t index;
+    Py_ssize_t size;
+
+    if (o == NULL || n < 1) {
+        PyErr_SetString(PyExc_SystemError, "pycc_ext_obj_unpack called with an invalid argument");
+        return NULL;
+    }
+    if (PyTuple_CheckExact(o) && PyTuple_Size(o) == (Py_ssize_t)n) {
+        return Py_NewRef(o);
+    }
+    iter = PyObject_GetIter(o);
+    if (iter == NULL) {
+        if (PyErr_ExceptionMatches(PyExc_TypeError)
+            && PyType_GetSlot(Py_TYPE(o), Py_tp_iter) == NULL && !PySequence_Check(o)) {
+            type_name = pycc_ext_obj_unpack_type_name(Py_TYPE(o));
+            if (type_name != NULL) {
+                PyErr_Format(PyExc_TypeError, "cannot unpack non-iterable %U object", type_name);
+                Py_DECREF(type_name);
+            }
+        }
+        return NULL;
+    }
+    items = PyTuple_New((Py_ssize_t)n);
+    if (items == NULL) {
+        Py_DECREF(iter);
+        return NULL;
+    }
+    for (index = 0; index < (Py_ssize_t)n; index++) {
+        item = PyIter_Next(iter);
+        if (item == NULL) {
+            if (!PyErr_Occurred()) {
+                PyErr_Format(PyExc_ValueError,
+                             "not enough values to unpack (expected %zd, got %zd)",
+                             (Py_ssize_t)n, index);
+            }
+            Py_DECREF(items);
+            Py_DECREF(iter);
+            return NULL;
+        }
+        PyTuple_SetItem(items, index, item);
+    }
+    item = PyIter_Next(iter);
+    Py_DECREF(iter);
+    if (item != NULL) {
+        Py_DECREF(item);
+        size = -1;
+        if (Py_Version >= 0x030E0000) {
+            if (PyList_CheckExact(o)) {
+                size = PyList_Size(o);
+            } else if (PyTuple_CheckExact(o)) {
+                size = PyTuple_Size(o);
+            } else if (PyDict_CheckExact(o)) {
+                size = PyDict_Size(o);
+            }
+        }
+        if (size >= 0) {
+            PyErr_Format(PyExc_ValueError,
+                         "too many values to unpack (expected %zd, got %zd)", (Py_ssize_t)n,
+                         size);
+        } else {
+            PyErr_Format(PyExc_ValueError, "too many values to unpack (expected %zd)",
+                         (Py_ssize_t)n);
+        }
+        Py_DECREF(items);
+        return NULL;
+    }
+    if (PyErr_Occurred()) {
+        Py_DECREF(items);
+        return NULL;
+    }
+    return items;
 }
 
 /*

@@ -13,6 +13,7 @@ fn mir_expr_ty_covers_every_variant() {
     assert_eq!(MirExpr::BoolLiteral(true).ty(), Ty::Bool);
     assert_eq!(MirExpr::StringLiteral("s".to_string()).ty(), Ty::Str);
     assert_eq!(MirExpr::FString(vec![]).ty(), Ty::Str);
+    assert_eq!(MirExpr::NotImplemented.ty(), Ty::Object);
     assert_eq!(
         MirExpr::Name {
             name: "x".to_string(),

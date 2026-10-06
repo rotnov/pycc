@@ -1,7 +1,10 @@
 //! Emission for `MirExpr::ObjMethodCall` (Part 2 of #1026, PR 2b of #1081),
 //! `MirExpr::ObjCall` (#1313, through the same argument marshalling; a
 //! computed callee since Part 2a of #1371, see [`callee_is_produced`]),
-//! `MirExpr::ObjSubscript` (Part 3 of #1026, PR 3b of #1082) and
+//! their keyword-argument form `MirExpr::ObjKeywordCall` ([`emit_call_kw`],
+//! Part 8 of #1371; `foreign_call_emit.rs` drives it from the MIR),
+//! `MirExpr::ObjSubscript` (Part 3 of #1026, PR 3b of #1082),
+//! `MirExpr::ObjList` (Part 2d of #1371, see [`emit_list`]) and
 //! `MirStmt::ForObject` (PR 3c of #1082). A slice of an object, loaded or
 //! deleted, is `foreign_slice.rs`'s (Parts 2b and 2c of #1371).
 //!
@@ -18,7 +21,9 @@
 //! immediate branch to the innermost exception target inside any other
 //! function (#1316). `emit_iter_loop` alone keeps the
 //! `expect_module_exec_entry` assertion, because `pycc_types` still admits
-//! `for x in <object>:` only in a module body (Part 2 of #1333).
+//! `for x in <object>:` only in a module body (Part 2 of #1333); its two
+//! halves, which a comprehension over an object shares (Part 1 of #1255),
+//! take whichever edge the current function has.
 //! What is new here is *argument marshalling*: each already-evaluated pycc
 //! scalar becomes a `PyObject *` through one of the shim's
 //! `pycc_ext_obj_pack_*` helpers, the results go into a stack array, and
@@ -49,9 +54,10 @@
 
 use super::*;
 use crate::foreign_attr::{expect_module_exec_entry, expect_object_pointer};
-use crate::foreign_fail::{ForeignFailEdge, route_null};
+use crate::foreign_fail::{ForeignFailEdge, emit_failure, route_null};
 use crate::foreign_pack::{emit_pack, shim_fn};
 use inkwell::builder::Builder;
+use inkwell::values::BasicMetadataValueEnum;
 
 /// Allocates `slots` argument pointers in the *entry block* of `entry_fn`,
 /// leaving the builder positioned exactly where it was.
@@ -80,6 +86,94 @@ fn alloca_in_entry_block<'ctx>(
     })
 }
 
+/// Packs every scalar of `values` through its `pycc_ext_obj_pack_*` helper
+/// into a `PyObject *` array hoisted into `entry_fn`'s entry block, in
+/// order, and answers the array.
+///
+/// The one spelling of the array half of the packer contract, shared by a
+/// call's arguments ([`emit_call_with`]) and a list display's elements
+/// ([`emit_list`]): the helper each array is handed to consumes every slot
+/// on every path, a failed packer's `NULL` included, so no slot is checked
+/// here.
+///
+/// A zero-length array would be `alloca [0 x ptr]`, a pointer it is not
+/// meaningful to GEP into -- and `gc.disable()` and an empty `[]` are both
+/// zero-length shapes. One slot is always allocated and simply left
+/// unread; the consumer reads only the count it is passed.
+fn emit_packed_array<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    entry_fn: FunctionValue<'ctx>,
+    values: &[Scalar<'ctx>],
+) -> inkwell::values::PointerValue<'ctx> {
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let i64_type = context.i64_type();
+    let slots = values.len().max(1);
+    let array = alloca_in_entry_block(context, builder, entry_fn, slots);
+    for (index, value) in values.iter().enumerate() {
+        let packed = emit_pack(context, builder, module, *value, "foreign_call_arg");
+        let slot = unsafe {
+            builder
+                .build_in_bounds_gep(
+                    ptr,
+                    array,
+                    &[i64_type.const_int(index as u64, false)],
+                    "foreign_call_arg_slot",
+                )
+                .expect("build_in_bounds_gep should not fail")
+        };
+        builder
+            .build_store(slot, packed)
+            .expect("build_store should not fail");
+    }
+    array
+}
+
+/// Emits one list display bound to a CPython object slot (Part 2d of
+/// #1371), yielding the fresh CPython `list` as an opaque
+/// [`Scalar::Object`].
+///
+/// The elements are already evaluated, left to right, by `emit_expr`'s own
+/// arm. Each is packed into a hoisted array ([`emit_packed_array`]) and
+/// handed to `pycc_ext_obj_build_list`, which consumes every packed
+/// reference on every path -- a failed packer's `NULL` and a failed
+/// `PyList_New` included -- so the display keeps exactly one failure edge,
+/// on a `NULL` result. The list is a new reference, leaked on the same
+/// leak-only rule as every other object this boundary produces (#1092).
+pub(super) fn emit_list<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    elements: &[Scalar<'ctx>],
+) -> Scalar<'ctx> {
+    let edge = ForeignFailEdge::for_current(builder);
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let i64_type = context.i64_type();
+    let items = emit_packed_array(context, builder, module, edge.function(), elements);
+    let build_list = shim_fn(
+        module,
+        EXT_OBJ_BUILD_LIST_SYMBOL,
+        ptr.fn_type(&[ptr.into(), i64_type.into()], false),
+    );
+    let result = builder
+        .build_call(
+            build_list,
+            &[
+                items.into(),
+                i64_type.const_int(elements.len() as u64, false).into(),
+            ],
+            "foreign_list",
+        )
+        .expect("build_call should not fail for pycc_ext_obj_build_list")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_build_list returns PyObject *")
+        .into_pointer_value();
+    route_null(context, builder, module, rt, edge, result, "foreign_list");
+    Scalar::Object(result)
+}
+
 /// The blocks and per-iteration item of a lowered `for x in <object>:`
 /// loop, handed back to `emit_stmt` so it can emit the body between them.
 pub(super) struct ForeignIterLoop<'ctx> {
@@ -100,24 +194,28 @@ pub(super) struct ForeignIterLoop<'ctx> {
 ///
 /// # Shape
 ///
-/// The preheader calls [`EXT_OBJ_GET_ITER_SYMBOL`] once -- Python binds the
-/// iterator the `for` statement evaluated, so a body-level rebinding cannot
-/// retarget the loop, exactly the reasoning `MirStmt::ForList`'s own
-/// `list_ptr` read carries -- and routes a NULL through the module-exec
-/// failure edge. The header calls [`EXT_OBJ_ITER_NEXT_SYMBOL`] and
-/// **switches** on its three-valued result: `1` enters the body, `0` exits
-/// the loop, and anything else -- `-1` and, fail-closed, any value the shim
-/// could not produce -- takes a second failure edge of its own.
+/// The preheader calls [`EXT_OBJ_GET_ITER_SYMBOL`] once ([`emit_get_iter`])
+/// -- Python binds the iterator the `for` statement evaluated, so a
+/// body-level rebinding cannot retarget the loop, exactly the reasoning
+/// `MirStmt::ForList`'s own `list_ptr` read carries -- and routes a NULL
+/// through the failure edge. The header ([`emit_iter_header`]) calls
+/// [`EXT_OBJ_ITER_NEXT_SYMBOL`] and **switches** on its three-valued
+/// result: `1` enters the body, `0` exits the loop, and anything else --
+/// `-1` and, fail-closed, any value the shim could not produce -- takes a
+/// second failure edge of its own.
 ///
-/// Those two are the only new unconditional `EXT_MODULE_EXEC_FAILED`
-/// returns this PR adds; **exhaustion is deliberately not one of them**,
-/// which is the entire reason the shim helper is three-valued rather than
-/// NULL-signalling (see [`EXT_OBJ_ITER_NEXT_SYMBOL`]).
+/// Those two are the only failure edges the loop adds; **exhaustion is
+/// deliberately not one of them**, which is the entire reason the shim
+/// helper is three-valued rather than NULL-signalling (see
+/// [`EXT_OBJ_ITER_NEXT_SYMBOL`]).
 ///
-/// The out-parameter is a single `alloca` hoisted into the entry block via
-/// [`alloca_in_entry_block`], never the header: an `alloca` in a block that
-/// executes once per iteration grows the frame without bound, which is the
-/// defect that helper exists to prevent.
+/// `pycc_types` admits the statement only in a module body (Part 2 of
+/// #1333), so the edge is always the module-exec return there. A list or
+/// set comprehension over an object (Part 1 of #1255,
+/// `object_comprehension.rs`) shares the two halves in any function, which
+/// is why each takes its edge from [`ForeignFailEdge::for_current`]; inside
+/// `pycc_ext_module_exec` that edge emits the same `EXT_MODULE_EXEC_FAILED`
+/// return this loop always had.
 pub(super) fn emit_iter_loop<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -125,12 +223,24 @@ pub(super) fn emit_iter_loop<'ctx>(
     rt: &RtFns<'ctx>,
     iterable: Scalar<'ctx>,
 ) -> ForeignIterLoop<'ctx> {
-    let entry_fn = expect_module_exec_entry(builder);
+    expect_module_exec_entry(builder);
+    let iterator = emit_get_iter(context, builder, module, rt, iterable);
+    emit_iter_header(context, builder, module, rt, iterator)
+}
+
+/// The preheader half of [`emit_iter_loop`]: `iter(iterable)`, with its
+/// NULL routed to the current function's failure edge. Returns the
+/// iterator, a *new* reference that is deliberately never released (#1092).
+pub(super) fn emit_get_iter<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    iterable: Scalar<'ctx>,
+) -> PointerValue<'ctx> {
+    let edge = ForeignFailEdge::for_current(builder);
     let iterable_ptr = expect_object_pointer(iterable);
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
-
-    let out_slot = alloca_in_entry_block(context, builder, entry_fn, 1);
-
     let get_iter = shim_fn(
         module,
         EXT_OBJ_GET_ITER_SYMBOL,
@@ -147,15 +257,38 @@ pub(super) fn emit_iter_loop<'ctx>(
         builder,
         module,
         rt,
-        ForeignFailEdge::ModuleExec(entry_fn),
+        edge,
         iterator,
         "foreign_iter_get",
     );
+    iterator
+}
 
-    let header_bb = context.append_basic_block(entry_fn, "foreign_iter_header");
-    let body_bb = context.append_basic_block(entry_fn, "foreign_iter_body");
-    let after_bb = context.append_basic_block(entry_fn, "foreign_iter_after");
-    let next_fail_bb = context.append_basic_block(entry_fn, "foreign_iter_next_fail");
+/// The header half of [`emit_iter_loop`]: branches from the current block
+/// into a header that advances `iterator` and switches on the result, and
+/// leaves the builder at the start of the body with the item loaded.
+///
+/// The out-parameter is a single `alloca` hoisted into the entry block via
+/// [`alloca_in_entry_block`], never the header: an `alloca` in a block that
+/// executes once per iteration grows the frame without bound, which is the
+/// defect that helper exists to prevent.
+pub(super) fn emit_iter_header<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    iterator: PointerValue<'ctx>,
+) -> ForeignIterLoop<'ctx> {
+    let edge = ForeignFailEdge::for_current(builder);
+    let function = edge.function();
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+
+    let out_slot = alloca_in_entry_block(context, builder, function, 1);
+
+    let header_bb = context.append_basic_block(function, "foreign_iter_header");
+    let body_bb = context.append_basic_block(function, "foreign_iter_body");
+    let after_bb = context.append_basic_block(function, "foreign_iter_after");
+    let next_fail_bb = context.append_basic_block(function, "foreign_iter_next_fail");
 
     builder
         .build_unconditional_branch(header_bb)
@@ -189,13 +322,7 @@ pub(super) fn emit_iter_loop<'ctx>(
         .expect("build_switch should not fail for an i64 selector");
 
     builder.position_at_end(next_fail_bb);
-    builder
-        .build_return(Some(
-            &context
-                .i64_type()
-                .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
-        ))
-        .expect("build_return should not fail");
+    emit_failure(context, builder, module, rt, edge);
 
     builder.position_at_end(body_bb);
     let item = builder
@@ -304,6 +431,7 @@ pub(super) fn emit_call<'ctx>(
         EXT_OBJ_CALL_SYMBOL,
         bound,
         args,
+        &[],
     )
 }
 
@@ -336,6 +464,7 @@ pub(super) fn emit_call_borrowed<'ctx>(
         EXT_OBJ_CALL_BORROWED_SYMBOL,
         callee_ptr,
         args,
+        &[],
     )
 }
 
@@ -344,7 +473,8 @@ pub(super) fn emit_call_borrowed<'ctx>(
 ///
 /// An allowlist of the shim's own new-reference producers: a subscript load
 /// (`pycc_ext_obj_getitem`), an attribute load (`pycc_ext_obj_getattr`) and
-/// a method or direct call's result (`pycc_ext_obj_call`). Each such result
+/// a method or direct call's result (`pycc_ext_obj_call`, or
+/// `pycc_ext_obj_call_kw` with keyword arguments). Each such result
 /// is otherwise leaked under the leak-only rule (#1092), so handing it to
 /// the consuming `pycc_ext_obj_call` is what releases it. Every other
 /// callee is a *borrow* and goes to `pycc_ext_obj_call_borrowed`: a `Name`
@@ -361,6 +491,7 @@ pub(super) fn callee_is_produced(callee: &MirExpr) -> bool {
             | MirExpr::ObjAttrGet { .. }
             | MirExpr::ObjMethodCall { .. }
             | MirExpr::ObjCall { .. }
+            | MirExpr::ObjKeywordCall(_)
     )
 }
 
@@ -386,10 +517,49 @@ pub(super) fn emit_object_call<'ctx>(
     }
 }
 
-/// The shared body of [`emit_call`] and [`emit_call_borrowed`]: the two
-/// shim helpers take the same `(callable, args, nargs)` parameters and
-/// differ only in who owns `callable`, so the packer loop, the hoisted
-/// argument array and the failure edge are written once.
+/// Marshals `args` and calls `callable` with the last `names.len()` of them
+/// passed as keyword arguments named `names` (Part 8 of #1371), yielding the
+/// call's result as an opaque [`Scalar::Object`].
+///
+/// `args` holds the positional arguments followed by the keyword values, in
+/// the order they were evaluated, which is CPython's. `consume` says who
+/// owns `callable`: a bound method from [`emit_lookup`] or a callee
+/// [`callee_is_produced`] lists is a new reference the call consumes
+/// ([`EXT_OBJ_CALL_KW_SYMBOL`]); anything else is a borrow
+/// ([`EXT_OBJ_CALL_KW_BORROWED_SYMBOL`]), exactly the split
+/// [`emit_object_call`] makes for a positional call. The shim builds the
+/// `kwnames` tuple from `names` and vectorcalls, consuming every packed
+/// argument on every path.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_call_kw<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    consume: bool,
+    callable: inkwell::values::PointerValue<'ctx>,
+    args: &[Scalar<'ctx>],
+    names: &[String],
+) -> Scalar<'ctx> {
+    debug_assert!(
+        !names.is_empty() && names.len() <= args.len(),
+        "a keyword call passes at least one keyword value"
+    );
+    let symbol = if consume {
+        EXT_OBJ_CALL_KW_SYMBOL
+    } else {
+        EXT_OBJ_CALL_KW_BORROWED_SYMBOL
+    };
+    emit_call_with(context, builder, module, rt, symbol, callable, args, names)
+}
+
+/// The shared body of [`emit_call`], [`emit_call_borrowed`] and
+/// [`emit_call_kw`]: the positional helpers take the same
+/// `(callable, args, nargs)` parameters and differ only in who owns
+/// `callable`; the keyword helpers append `(names, nkw)`, where the last
+/// `nkw` of the `args` slots are the keyword values. The packer loop, the
+/// hoisted argument array and the failure edge are written once.
+#[allow(clippy::too_many_arguments)]
 fn emit_call_with<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -398,51 +568,65 @@ fn emit_call_with<'ctx>(
     symbol: &str,
     callable: inkwell::values::PointerValue<'ctx>,
     args: &[Scalar<'ctx>],
+    names: &[String],
 ) -> Scalar<'ctx> {
     let edge = ForeignFailEdge::for_current(builder);
     let entry_fn = edge.function();
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
     let i64_type = context.i64_type();
 
-    // `PyObject_Vectorcall` reads `nargs` slots, so a zero-argument call
-    // needs no storage at all -- but LLVM's `alloca [0 x ptr]` yields a
-    // pointer it is not meaningful to GEP into, and `gc.disable()` is
-    // exactly the zero-argument shape this PR's acceptance test exercises.
-    // One slot is always allocated and simply left unread.
-    let slots = args.len().max(1);
-    let arg_array = alloca_in_entry_block(context, builder, entry_fn, slots);
-    for (index, arg) in args.iter().enumerate() {
-        let packed = emit_pack(context, builder, module, *arg, "foreign_call_arg");
-        let slot = unsafe {
-            builder
-                .build_in_bounds_gep(
-                    ptr,
-                    arg_array,
-                    &[i64_type.const_int(index as u64, false)],
-                    "foreign_call_arg_slot",
-                )
-                .expect("build_in_bounds_gep should not fail")
-        };
-        builder
-            .build_store(slot, packed)
-            .expect("build_store should not fail");
-    }
+    let arg_array = emit_packed_array(context, builder, module, entry_fn, args);
 
-    let call = shim_fn(
-        module,
-        symbol,
-        ptr.fn_type(&[ptr.into(), ptr.into(), i64_type.into()], false),
-    );
-    let result = builder
-        .build_call(
-            call,
-            &[
+    let nargs = i64_type.const_int((args.len() - names.len()) as u64, false);
+    let (fn_type, operands): (_, Vec<BasicMetadataValueEnum<'ctx>>) = if names.is_empty() {
+        (
+            ptr.fn_type(&[ptr.into(), ptr.into(), i64_type.into()], false),
+            vec![callable.into(), arg_array.into(), nargs.into()],
+        )
+    } else {
+        let name_array = alloca_in_entry_block(context, builder, entry_fn, names.len());
+        for (index, name) in names.iter().enumerate() {
+            let text = builder
+                .build_global_string_ptr(name, &format!("pycc_foreign_kwname_{name}"))
+                .expect("build_global_string_ptr should not fail")
+                .as_pointer_value();
+            let slot = unsafe {
+                builder
+                    .build_in_bounds_gep(
+                        ptr,
+                        name_array,
+                        &[i64_type.const_int(index as u64, false)],
+                        "foreign_call_kwname_slot",
+                    )
+                    .expect("build_in_bounds_gep should not fail")
+            };
+            builder
+                .build_store(slot, text)
+                .expect("build_store should not fail");
+        }
+        (
+            ptr.fn_type(
+                &[
+                    ptr.into(),
+                    ptr.into(),
+                    i64_type.into(),
+                    ptr.into(),
+                    i64_type.into(),
+                ],
+                false,
+            ),
+            vec![
                 callable.into(),
                 arg_array.into(),
-                i64_type.const_int(args.len() as u64, false).into(),
+                nargs.into(),
+                name_array.into(),
+                i64_type.const_int(names.len() as u64, false).into(),
             ],
-            "foreign_call",
         )
+    };
+    let call = shim_fn(module, symbol, fn_type);
+    let result = builder
+        .build_call(call, &operands, "foreign_call")
         .expect("build_call should not fail for a foreign call helper")
         .try_as_basic_value()
         .expect_basic("a foreign call helper returns PyObject *")
