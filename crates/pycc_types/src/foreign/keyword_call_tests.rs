@@ -86,10 +86,12 @@ fn a_non_packable_keyword_value_is_refused() {
         "I0404",
         "passing a `list[int]` argument to a CPython object's method",
     );
+    // An instance keyword value is admitted since #1435; a class method's
+    // `cls`, which holds no instance, is not.
     refused(
-        "class P:\n    def f(self) -> None:\n        product(state=self)\n",
+        "class P:\n    @classmethod\n    def f(cls) -> None:\n        product(state=cls)\n",
         "I0404",
-        "passing a `P` argument to a CPython object's call",
+        "passing a class method's `cls` argument to a CPython object's call",
     );
 }
 

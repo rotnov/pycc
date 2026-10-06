@@ -41,10 +41,12 @@ pub(super) fn shim_fn<'ctx>(
 /// Every admitted operand has exactly one packer, and the mapping is total
 /// over what `pycc_types` admits as an argument of a call on a `Ty::Object`
 /// or as the key of a `Ty::Object` subscript: `int`/`float`/`bool`/`str`,
-/// and since Part 2a of #1371 a second `object`. A `None` call argument
-/// (Part 8 of #1371) reaches here already replaced by [`none_pointer`]'s
-/// `object`. Any other `Scalar` is a front-end defect: the checker refuses
-/// a container and an instance there before lowering ever runs.
+/// since Part 2a of #1371 a second `object`, and since #1435 an instance of
+/// a regular user class -- a call argument only, never a key, a list
+/// element or a comparison operand. A `None` call argument (Part 8 of
+/// #1371) reaches here already replaced by [`none_pointer`]'s `object`. Any
+/// other `Scalar` is a front-end defect: the checker refuses a container
+/// there before lowering ever runs.
 pub(super) fn packer_for<'ctx>(scalar: Scalar<'ctx>) -> (&'static str, BasicValueEnum<'ctx>) {
     match scalar {
         Scalar::Int(value) => (EXT_OBJ_PACK_INT_SYMBOL, value.into()),
@@ -52,10 +54,11 @@ pub(super) fn packer_for<'ctx>(scalar: Scalar<'ctx>) -> (&'static str, BasicValu
         Scalar::Bool(value) => (EXT_OBJ_PACK_BOOL_SYMBOL, value.into()),
         Scalar::Str(value) => (EXT_OBJ_PACK_STR_SYMBOL, value.into()),
         Scalar::Object(value) => (EXT_OBJ_PACK_OBJECT_SYMBOL, value.into()),
+        Scalar::Instance(value) => (EXT_OBJ_PACK_INSTANCE_SYMBOL, value.into()),
         _ => panic!(
             "pycc_codegen: internal error: an operand of a foreign object operation did not \
              evaluate to a marshallable scalar -- pycc_types admits only `int`, `float`, \
-             `bool`, `str` and `object` there"
+             `bool`, `str`, `object` and a class instance there"
         ),
     }
 }

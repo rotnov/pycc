@@ -237,6 +237,17 @@ pub struct Environment {
     /// has no return. A whole-function constant, like
     /// `returns_inside_finally`, so no join rule is owed for it.
     pub(crate) return_inferred: bool,
+    /// #1435: the function being checked is a `@classmethod` (its mangled
+    /// name ends in `.classmethod`). Its `cls` parameter is typed as an
+    /// instance of the class but carries no instance -- `pycc_mir` passes a
+    /// null `NullInstance` for it -- so `crate::foreign::check_object_call_args`
+    /// refuses `cls` as an argument to a CPython object's call rather than
+    /// let the carrier packer meet a null pointer.
+    ///
+    /// Set once per function in `crate::check_function_in`. A
+    /// whole-function constant, like `returns_inside_finally`, so no join
+    /// rule is owed for it; `false` in the module-level environment.
+    pub(crate) in_classmethod: bool,
     /// Part 2a of #1142 (#1165): the names whose `Ty::MemoryView` binding is
     /// storage **this artifact allocated** (`a = ndarray(n)`), as opposed to
     /// a buffer parameter the `pycc build --ext` wrapper borrowed from the

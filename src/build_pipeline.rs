@@ -390,12 +390,14 @@ fn plan_ext(
     let classes = ext_build::collect_user_exception_classes(typed_hir);
     let publications = ext_build::collect_class_publications(typed_hir, &exports);
     let ctors = ext_build::collect_constructors(typed_hir, &publications);
+    let carriers = ext_build::collect_carrier_classes(typed_hir);
     let inc_body = ext_build::generate_exports_inc(
         &output.module_name,
         &exports,
         &classes,
         &publications,
         &ctors,
+        &carriers,
     );
     write_ext_source(&shim, ext_build::SHIM_C)?;
     write_ext_source(&inc, &inc_body)?;

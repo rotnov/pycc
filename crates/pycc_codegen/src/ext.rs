@@ -239,6 +239,14 @@ pub const EXT_OBJ_PACK_STR_SYMBOL: &str = "pycc_ext_obj_pack_str";
 /// reference.
 pub const EXT_OBJ_PACK_OBJECT_SYMBOL: &str = "pycc_ext_obj_pack_object";
 
+/// The shim's class-instance argument packer (#1435): a borrowed
+/// `PyInstanceObj *` in, a new reference to the `PyccExtInstance` carrier
+/// standing for it out -- the instance's live carrier when it has one, so
+/// identity survives the crossing, otherwise a fresh carrier of its
+/// run-time class. `pycc_types` admits an instance only as a call
+/// argument.
+pub const EXT_OBJ_PACK_INSTANCE_SYMBOL: &str = "pycc_ext_obj_pack_instance";
+
 /// The fixed C shim's `len` helper (Part 3 of #1026): it takes a borrowed
 /// `PyObject *` and an out-pointer, writes the D-141 encoded `int` word for
 /// `PyObject_Size(o)` through it and returns `0`, or returns `-1` with a

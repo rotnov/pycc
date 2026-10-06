@@ -523,7 +523,9 @@ pub(crate) fn plan_embed(
     let shim = obj_path.with_file_name(ext_build::SHIM_C_NAME);
     let launcher = obj_path.with_file_name(LAUNCHER_C_NAME);
     let classes = ext_build::collect_user_exception_classes(typed_hir);
-    let exports_inc = ext_build::generate_exports_inc("__main__", &[], &classes, &[], &[]);
+    let carriers = ext_build::collect_carrier_classes(typed_hir);
+    let exports_inc =
+        ext_build::generate_exports_inc("__main__", &[], &classes, &[], &[], &carriers);
     write_source(&shim, ext_build::SHIM_C)?;
     let exports_path = obj_path.with_file_name(ext_build::EXPORTS_INC_NAME);
     write_source(&exports_path, &exports_inc)?;

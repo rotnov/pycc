@@ -53,6 +53,7 @@
 //! heap object in this file.
 
 use std::cell::Cell;
+use std::ffi::c_void;
 
 use crate::exception::{EXCEPTION_TYPE_ATTRIBUTE_ERROR, raise_builtin};
 
@@ -69,11 +70,24 @@ use crate::exception::{EXCEPTION_TYPE_ATTRIBUTE_ERROR, raise_builtin};
 /// [`pycc_rt_instance_get_slot_checked`], which raises it too.
 ///
 /// `layout` is the static descriptor the constructor call site passes (see
-/// [`pycc_rt_instance_new`]); it is read only to word that error.
+/// [`pycc_rt_instance_new`]); it is read only to word that error and, since
+/// #1435, to name the instance's class to an `--ext` host
+/// ([`pycc_rt_ext_instance_class`]).
+///
+/// `carrier` is the `--ext` host-side object currently standing for this
+/// instance, or null (#1435). It is opaque here: `pycc_rt` keeps no CPython
+/// dependency (D-244 rule 2), and only the C shim reads or writes it, through
+/// [`pycc_rt_ext_instance_carrier`] and [`pycc_rt_ext_instance_set_carrier`].
 pub struct PyInstanceObj {
     slots: Cell<Vec<Option<i64>>>,
     layout: &'static [u8],
+    carrier: Cell<*mut c_void>,
 }
+
+mod carrier;
+pub use carrier::{
+    pycc_rt_ext_instance_carrier, pycc_rt_ext_instance_class, pycc_rt_ext_instance_set_carrier,
+};
 
 /// Allocates a fresh instance with `slot_count` unassigned slots. A negative
 /// `slot_count` is an internal-error panic (impossible from real
@@ -88,6 +102,7 @@ fn new_instance(slot_count: i64, layout: &'static [u8]) -> PyInstanceObj {
     PyInstanceObj {
         slots: Cell::new(vec![None; slot_count]),
         layout,
+        carrier: Cell::new(std::ptr::null_mut()),
     }
 }
 

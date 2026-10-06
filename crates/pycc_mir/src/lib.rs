@@ -460,8 +460,9 @@ pub enum MirExpr {
     /// loop target's slot) -- goes to `pycc_ext_obj_call_borrowed`, which
     /// takes its own reference first.
     ///
-    /// `args` are already-checked packable operands (scalars or `object`)
-    /// under the method call's rule
+    /// `args` are already-checked call arguments (scalars, `object`, or
+    /// since #1435 an instance of a regular class) under the method call's
+    /// rule
     /// (`pycc_types`' `check_object_call_args`). The call can fail -- the
     /// object is not callable, or the call raises -- which is why
     /// `pycc_codegen::exception::expression_can_set_exception` answers

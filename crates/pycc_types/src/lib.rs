@@ -2755,6 +2755,7 @@ fn check_function_in(
     // `HirStmt::Return` arm; see `crate::buffer::buffer_return_inside_finally`.
     env.returns_inside_finally = pycc_hir::body_returns_inside_finally(body);
     env.return_inferred = *return_ty == Ty::Infer;
+    env.in_classmethod = name.ends_with(".classmethod");
     env.own_type_param = generic_type_param_name(params, return_ty).ok().flatten();
     // #433: extract the class name from a mangled `<ClassName>.<method>`
     // name so `infer_expr_in`'s `HirExpr::Super` arm can resolve the next

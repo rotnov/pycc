@@ -9,8 +9,9 @@
 //! receiver of a method call is an `object`, or a subscript callee is one.
 //! The positional half is then checked exactly as the keyword-free call is
 //! (`check_object_call_args` over its arguments), every keyword value is
-//! checked under the same argument rule, and the result is another opaque
-//! `Ty::Object`. Every other callee -- a pycc function, class or method, a
+//! checked under the same argument rule (so since #1435 a regular class's
+//! instance may be a keyword value, as lark's `state=self` is), and the
+//! result is another opaque `Ty::Object`. Every other callee -- a pycc function, class or method, a
 //! builtin -- keeps the `C0001` HIR reported for every keyword call before
 //! Part 8, at the call's own span, which the node carries.
 
@@ -66,6 +67,11 @@ pub(crate) fn infer_keyword_call(
     } else {
         "call"
     };
-    super::check_object_call_args(&keyword_tys, what)?;
+    super::check_object_call_args(
+        env,
+        keywords.iter().map(|(_, value)| value),
+        &keyword_tys,
+        what,
+    )?;
     Ok(ty)
 }
