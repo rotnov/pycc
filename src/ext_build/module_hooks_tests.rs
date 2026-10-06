@@ -121,6 +121,8 @@ fn every_other_module_scope_binding_of_a_hook_name_is_refused() {
             "try:\n    pass\nexcept* ValueError as __dir__:\n    pass\n",
             "bound by an except clause",
         ),
+        // Deliberately over-inclusive: a lambda body is its own scope.
+        ("f = lambda: (__dir__ := 1)\n", "bound by an assignment"),
         // A `def` or `class` header runs at module scope.
         (
             "def f(a: int = (__dir__ := 1)) -> int:\n    return a\n",

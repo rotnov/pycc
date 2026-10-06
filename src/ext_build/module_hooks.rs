@@ -71,8 +71,8 @@ impl EntryHooks {
     /// hook the boundary cannot publish. The scan is deliberately
     /// over-inclusive: it does not evaluate a guard, so a binding CPython
     /// never executes -- under `if TYPE_CHECKING:`, say -- is refused too,
-    /// and a comprehension target, which binds in the comprehension's own
-    /// scope, is refused as well. That costs a spurious refusal of a rare
+    /// and a comprehension target or a walrus in a `lambda` body, which bind
+    /// in their own scope, are refused as well. That costs a spurious refusal of a rare
     /// spelling, never a silently ignored hook. A `global` rebinding from
     /// inside a function body is not modelled.
     pub(crate) fn scan(module: &ModModule) -> Result<Self, Vec<Diagnostic>> {

@@ -542,7 +542,8 @@ statement, an `except ... as` name or a `match` capture -- at the top level,
 inside a top-level `if`/`try` or in a `def`/`class` header (a walrus in a
 default or decorator), is refused with a located `C0001`, since CPython would call (or
 lose) a hook the boundary cannot publish. The scan does not evaluate
-guards, so a binding under `if TYPE_CHECKING:` is refused too, and a
+guards, so a binding under `if TYPE_CHECKING:` is refused too, as are a
+comprehension target and a walrus in a `lambda` body, and a
 `global` rebinding from a function body is not modelled; a hook whose
 signature the boundary cannot carry is a
 `C0003` whose remedy is to change the signature, not to rename it. Two
