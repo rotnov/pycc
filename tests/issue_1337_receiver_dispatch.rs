@@ -323,13 +323,14 @@ const EXT_SCRIPT: &str = "import pycc_1337_mod as mod\n\
      b = mod.B()\n\
      a = mod.A()\n\
      print(b.g(), a.g(), b.getx(), a.getx(), mod.B.k(), mod.A.k())\n\
-     print(b.cx(), a.cx(), hasattr(mod.B, \"p\"), hasattr(mod.A, \"p\"))\n";
+     print(b.cx(), a.cx(), b.p, a.p, callable(mod.B.__dict__[\"p\"]))\n";
 
 /// A host calling an inherited method on a published subclass runs the
 /// copy compiled for that subclass, and constructing it runs the copied
 /// `__init__`, and a copied body reads the subclass's class attribute. A
-/// copied `@property` getter is not published as a plain method: like an
-/// own getter it publishes nothing (`docs/RUNTIME.md`).
+/// copied `@property` getter is not published as a plain method: since
+/// #1442 it answers the attribute through a read-only getset descriptor
+/// that runs the subclass's copy (`docs/RUNTIME.md`).
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn a_hosted_subclass_runs_its_receiver_exact_copies() {
@@ -352,7 +353,7 @@ fn a_hosted_subclass_runs_its_receiver_exact_copies() {
         .output()
         .expect("python3 should spawn");
     assert!(run.status.success(), "{}", text(&run.stderr));
-    assert_eq!(text(&run.stdout), "2 1 7 1 20 10\n3 1 False False\n");
+    assert_eq!(text(&run.stdout), "2 1 7 1 20 10\n3 1 2 1 False\n");
 }
 
 const STR_MIXIN: &str =

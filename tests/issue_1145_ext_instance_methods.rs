@@ -268,7 +268,8 @@ fn a_property_getter_is_not_published_while_a_plain_method_of_the_same_class_is(
     // instance method does, so the lexical predicate cannot tell them apart.
     // The `properties` table on the class definition is what excludes it, and
     // this is the discriminator that the exclusion is still in force now that
-    // the bare spelling is admitted.
+    // the bare spelling is admitted. Since #1442 the getter answers the
+    // attribute through a getset descriptor instead, never as a method.
     let dir = ScratchDir::new("ext_1145_property").expect("scratch");
     build_ext(
         &dir,
@@ -291,7 +292,9 @@ class Cell:
         "\
 import cells
 assert cells.Cell(3).plain() == 3, cells.Cell(3).plain()
-assert not hasattr(cells.Cell, 'doubled'), dir(cells.Cell)
+# Since #1442 the property is a read-only getset descriptor, not a method.
+assert type(cells.Cell.__dict__['doubled']).__name__ == 'getset_descriptor', cells.Cell.__dict__
+assert cells.Cell(3).doubled == 6, cells.Cell(3).doubled
 assert not hasattr(cells, 'Cell.doubled'), dir(cells)
 ",
     );
@@ -608,8 +611,10 @@ class Derived(Base):
         "\
 import shadow
 d = shadow.Derived(21)
-assert 'value' not in shadow.Derived.__dict__, dir(shadow.Derived)
-assert not callable(getattr(shadow.Derived, 'value', None)), shadow.Derived.value
+# Since #1442 the derived property itself is published, as a read-only
+# getset descriptor, so the host reads Python's own answer.
+assert type(shadow.Derived.__dict__['value']).__name__ == 'getset_descriptor', shadow.Derived.__dict__
+assert d.value == 121, d.value
 # The inherited, unshadowed method is unaffected, and `Base` keeps its own.
 assert d.twice() == 42, d.twice()
 assert shadow.Base(21).value() == 21, shadow.Base(21).value()

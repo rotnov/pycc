@@ -927,6 +927,9 @@ fn a_constructible_class_yields_one_constructor_descriptor_with_the_carried_tail
             params: vec![Ty::Int, Ty::Int],
             param_writable: vec![false; 2],
             slot_names: vec!["w".to_string(), "h".to_string()],
+            // #1442: both `int` slots are carriable, so both are read-only
+            // descriptors, indexed in slot order.
+            getsets: grid_slot_getsets(),
         }]
     );
 }
@@ -1107,6 +1110,9 @@ fn an_implicit_object_init_is_still_resolved_when_it_is_the_only_one() {
             params: Vec::new(),
             param_writable: Vec::new(),
             slot_names: vec!["w".to_string(), "h".to_string()],
+            // #1442: both `int` slots are carriable, so both are read-only
+            // descriptors, indexed in slot order.
+            getsets: grid_slot_getsets(),
         }]
     );
 }
@@ -1985,4 +1991,18 @@ fn a_constructors_buffer_parameter_carries_the_same_writability_flag() {
         ctors.iter().map(|c| &c.param_writable).collect::<Vec<_>>(),
         vec![&vec![true, false]]
     );
+}
+
+/// The two `int` slot descriptors [`constructible_module`]'s `Grid` exposes
+/// (#1442).
+fn grid_slot_getsets() -> Vec<crate::ext_build::ExtGetset> {
+    ["w", "h"]
+        .iter()
+        .enumerate()
+        .map(|(index, name)| crate::ext_build::ExtGetset::Slot {
+            name: (*name).to_string(),
+            index,
+            ty: Ty::Int,
+        })
+        .collect()
 }
