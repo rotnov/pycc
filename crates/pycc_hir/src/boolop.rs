@@ -58,11 +58,26 @@ impl BoolOpKind {
 /// | equal `bool`/`int`/`float`/`str`, equal `Optional[int\|float\|bool]`, the same class | that type |
 /// | `bool` with `int`, either order | `int` |
 /// | `T` with `Optional[T]`, either order | `Optional[T]` |
+/// | `object` with `object`, or `object` with `bool`/`int`/`float`/`str` in either order (Part 6 of #1371) | `object` |
 /// | anything else | `None` (refused) |
 ///
 /// `int` with `float` is deliberately refused rather than widened: `1 or 2.0`
 /// is the `int` `1` in CPython, and a `float` result would print `1.0`.
+///
+/// The `object` rows are decided on the operands *as written*, before the
+/// `or` stripping of a left `Optional[T]`: the selected operand of `o or n`
+/// is always one of the two operands themselves, and only an `object` and a
+/// scalar `pycc_codegen` can box (`pycc_ext_obj_pack_*`) have one
+/// representation in common -- the CPython object. An `Optional`, `None`, a
+/// container or an instance paired with an `object` has no such boxing, so
+/// this function returns `None`. `pycc_types` refuses a `None`, a container
+/// or an instance whose class defines `__bool__`/`__len__` earlier, with its
+/// operand `T0021`; only an `Optional[T]` or a dunder-free instance reaches
+/// the join and is reported as `I0404`.
 pub fn bool_op_result_ty(op: BoolOpKind, left: &Ty, right: &Ty) -> Option<Ty> {
+    if matches!(left, Ty::Object) || matches!(right, Ty::Object) {
+        return (is_object_joinable(left) && is_object_joinable(right)).then_some(Ty::Object);
+    }
     let left = match (op, left) {
         (BoolOpKind::Or, Ty::Optional(inner)) => inner.as_ref(),
         _ => left,
@@ -78,6 +93,13 @@ pub fn bool_op_result_ty(op: BoolOpKind, left: &Ty, right: &Ty) -> Option<Ty> {
         }
         _ => None,
     }
+}
+
+/// Whether a value of type `ty` may be one operand of an `and`/`or` whose
+/// result is the CPython object: the object itself, or a scalar
+/// `pycc_codegen` boxes on the arm that selects it.
+fn is_object_joinable(ty: &Ty) -> bool {
+    matches!(ty, Ty::Object | Ty::Bool | Ty::Int | Ty::Float | Ty::Str)
 }
 
 /// Marks `expr` as consumed only for its truth, when it is a boolean

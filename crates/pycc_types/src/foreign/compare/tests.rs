@@ -109,6 +109,121 @@ fn a_rich_comparison_on_an_object_is_an_object_not_a_bool() {
     }
 }
 
+/// #1419: a `bool` slot keeps refusing an object comparison -- pycc does
+/// not coerce it with `PyObject_IsTrue` (D-258's #1419 amendment) -- and
+/// the `T0022`/`T0025` refusal's `help` names the explicit `bool(...)`
+/// conversion: a `-> bool` return (module function and method) and an
+/// annotated binding at module level and in a function. Since #1423 an
+/// `and` with an object comparison operand is itself the object, so the
+/// #1207 subject's `return ... and self.position == other.position` shape
+/// meets the same refusal and help. Other refusals of
+/// an object in a `bool` slot (`T0026` after a value-less declaration,
+/// `T0021` for a `bool` call argument) keep their generic help.
+#[test]
+fn a_bool_slot_refuses_an_object_comparison_and_suggests_bool() {
+    const HELP: &str = "a CPython object reaches `bool` slots only through an explicit conversion: wrap the value in `bool(...)`";
+    for (source, code, phrase) in [
+        (
+            "def f() -> bool:\n    o = numpy.pi\n    return o == 1\n",
+            "T0022",
+            "expected `bool`, found `object`",
+        ),
+        (
+            "def f() -> bool:\n    return numpy.pi != numpy.e\n",
+            "T0022",
+            "expected `bool`, found `object`",
+        ),
+        (
+            "class C:\n    def eq(self) -> bool:\n        return numpy.pi < 4\n",
+            "T0022",
+            "expected `bool`, found `object`",
+        ),
+        (
+            "b: bool = numpy.pi == 1\n",
+            "T0025",
+            "cannot assign `object` to `b: bool`",
+        ),
+        (
+            "def f() -> None:\n    b: bool = numpy.pi >= 1\n",
+            "T0025",
+            "cannot assign `object` to `b: bool`",
+        ),
+        (
+            "def f(n: int) -> bool:\n    return n == 1 and numpy.pi == n\n",
+            "T0022",
+            "expected `bool`, found `object`",
+        ),
+    ] {
+        let diagnostics = check_foreign(source).expect_err(source);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?} for {source}");
+        assert_eq!(diagnostics[0].code, code, "{diagnostics:?} for {source}");
+        assert!(
+            diagnostics[0].message.contains(phrase),
+            "{diagnostics:?} for {source}"
+        );
+        assert_eq!(
+            diagnostics[0].help.as_deref(),
+            Some(HELP),
+            "{diagnostics:?} for {source}"
+        );
+    }
+}
+
+/// The same `help` names the matching conversion for each of the other
+/// three scalar slots, and stays the generic one for a non-scalar slot or
+/// a non-object value.
+#[test]
+fn an_object_into_a_scalar_slot_names_that_scalar_s_conversion() {
+    for (source, help) in [
+        (
+            "def f() -> int:\n    return numpy.pi\n",
+            "a CPython object reaches `int` slots only through an explicit conversion: wrap the value in `int(...)`",
+        ),
+        (
+            "def f() -> float:\n    return numpy.pi\n",
+            "a CPython object reaches `float` slots only through an explicit conversion: wrap the value in `float(...)`",
+        ),
+        (
+            "s: str = numpy.pi\n",
+            "a CPython object reaches `str` slots only through an explicit conversion: wrap the value in `str(...)`",
+        ),
+        (
+            "def f() -> list[int]:\n    return numpy.pi\n",
+            "return a `list[int]` value",
+        ),
+        ("def f() -> bool:\n    return 1\n", "return a `bool` value"),
+        (
+            "b: bool = 1\n",
+            "change the value to `bool` (the expected/declared type), or the declaration/annotation to `int` (the actual type)",
+        ),
+    ] {
+        let diagnostics = check_foreign(source).expect_err(source);
+        assert_eq!(
+            diagnostics[0].help.as_deref(),
+            Some(help),
+            "{diagnostics:?} for {source}"
+        );
+    }
+}
+
+/// The helper itself: only an object value into one of the four scalar
+/// slots gets the conversion `help`.
+#[test]
+fn object_into_scalar_help_covers_every_pair_shape() {
+    use crate::foreign::object_into_scalar_help;
+    use pycc_hir::Ty;
+    for scalar in [Ty::Bool, Ty::Int, Ty::Float, Ty::Str] {
+        let help = object_into_scalar_help(&Ty::Object, &scalar).expect("scalar slot");
+        assert!(
+            help.ends_with(&format!("`{}(...)`", scalar.name())),
+            "{help}"
+        );
+        assert_eq!(object_into_scalar_help(&Ty::Int, &scalar), None);
+    }
+    assert_eq!(object_into_scalar_help(&Ty::Object, &Ty::Object), None);
+    assert_eq!(object_into_scalar_help(&Ty::Object, &Ty::None), None);
+}
+
 #[test]
 fn a_rich_comparison_with_an_unpackable_operand_is_refused() {
     assert_refused(
@@ -141,8 +256,77 @@ fn isinstance_with_an_object_first_argument_is_admitted_for_a_builtin_or_object_
         "b = isinstance(numpy.pi, numpy.ndarray)\n",
         "b = isinstance(numpy.pi, numpy)\n",
         "def f() -> bool:\n    o = numpy.pi\n    return isinstance(o, str)\n",
+        "b = isinstance(numpy.pi, list)\n",
+        "b = isinstance(numpy.pi, dict)\n",
+        "b = isinstance(numpy.pi, tuple)\n",
     ] {
         assert_admitted(source);
+    }
+}
+
+/// Part 7 of #1371: a plain class compiled in this module is admitted as
+/// the `isinstance` class argument -- a base, a subclass, and from a
+/// method body with an object local, the lark `__eq__` shape.
+#[test]
+fn isinstance_of_an_object_against_a_plain_compiled_class_is_admitted() {
+    for source in [
+        "class C:\n    pass\n\n\nb = isinstance(numpy.pi, C)\n",
+        "class B:\n    pass\n\n\nclass D(B):\n    pass\n\n\nb = isinstance(numpy.pi, B)\n",
+        "class C:\n    def same(self) -> bool:\n        other = numpy.pi\n        \
+         if not isinstance(other, C):\n            return False\n        \
+         return True\n",
+    ] {
+        assert_admitted(source);
+    }
+}
+
+/// A local spelled like a compiled class shadows it, as in CPython: the
+/// test is then against the local's value, here an object, so even an
+/// exception class's name is admitted once shadowed.
+#[test]
+fn isinstance_against_a_local_shadowing_a_compiled_class_tests_the_local() {
+    assert_admitted(
+        "class E(Exception):\n    pass\n\n\ndef f() -> bool:\n    \
+         E = numpy.pi\n    return isinstance(numpy.e, E)\n",
+    );
+}
+
+/// A local spelled like a builtin class shadows it too: a native `list`
+/// local is then a `list[int]` class argument, which stays refused.
+#[test]
+fn isinstance_against_a_local_shadowing_a_builtin_class_tests_the_local() {
+    assert_refused(
+        "def f() -> bool:\n    list = [1]\n    return isinstance(numpy.e, list)\n",
+        "I0404",
+        "against a `list[int]` value",
+    );
+}
+
+/// Part 7 of #1371: the compiled classes that have no exported CPython type
+/// object of their own kind are refused, each naming its kind.
+#[test]
+fn isinstance_of_an_object_against_a_special_compiled_class_is_refused() {
+    for (source, phrase) in [
+        (
+            "class E(Exception):\n    pass\n\n\nb = isinstance(numpy.pi, E)\n",
+            "against the pycc exception class `E`",
+        ),
+        (
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    \
+             def m(self) -> int: ...\n\n\nb = isinstance(numpy.pi, P)\n",
+            "against the pycc protocol `P`",
+        ),
+        (
+            "from enum import Enum\n\n\nclass K(Enum):\n    A = 1\n\n\n\
+             b = isinstance(numpy.pi, K)\n",
+            "against the pycc enum `K`",
+        ),
+        (
+            "class G[T]:\n    pass\n\n\nb = isinstance(numpy.pi, G)\n",
+            "against the pycc generic class `G`",
+        ),
+    ] {
+        assert_refused(source, "I0404", phrase);
     }
 }
 
@@ -152,11 +336,6 @@ fn isinstance_with_an_object_first_argument_refuses_other_class_arguments() {
         "b = isinstance(numpy.pi, (int, str))\n",
         "I0404",
         "against a tuple of classes",
-    );
-    assert_refused(
-        "class C:\n    pass\n\n\nb = isinstance(numpy.pi, C)\n",
-        "I0404",
-        "against the pycc class `C`",
     );
     assert_refused(
         "x = 3\nb = isinstance(numpy.pi, x)\n",

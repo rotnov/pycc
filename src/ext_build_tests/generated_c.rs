@@ -12,7 +12,7 @@ use super::*;
 /// class -- every case in this file that predates #1066, and the one that
 /// asserts both generated class functions are still emitted with empty
 /// bodies so an artifact with no such class still links.
-fn inc_no_classes(module_name: &str, exports: &[ExtExport]) -> String {
+pub(super) fn inc_no_classes(module_name: &str, exports: &[ExtExport]) -> String {
     generate_exports_inc(module_name, exports, &[], &flat_publications(exports), &[])
 }
 
@@ -36,6 +36,7 @@ fn flat_publications(exports: &[ExtExport]) -> Vec<ExtPublishedClass> {
             None => published.push(ExtPublishedClass {
                 class: class.clone(),
                 methods: vec![export.clone()],
+                mro: vec![class.clone()],
             }),
         }
     }
@@ -505,6 +506,20 @@ fn the_embedded_shim_is_the_tracked_c_file_and_declares_the_limited_api_floor() 
     assert!(
         shim_c().contains(&format!("{USER_EXCEPTION_LOOKUP_DECL};")),
         "{USER_EXCEPTION_LOOKUP_DECL}"
+    );
+    // Part 7 of #1371: the compiled-class `isinstance` is the same
+    // forward-declared-above, defined-in-the-companion arrangement.
+    assert!(
+        shim_c().contains(&format!("{COMPILED_CLASS_ISINSTANCE_DECL};")),
+        "{COMPILED_CLASS_ISINSTANCE_DECL}"
+    );
+    // ... and the fall-through it calls is defined there under the one
+    // spelling the generator uses.
+    assert!(
+        shim_c().contains(&format!(
+            "static int {UNPUBLISHED_CLASS_ISINSTANCE}(PyObject *o)\n{{"
+        )),
+        "{UNPUBLISHED_CLASS_ISINSTANCE}"
     );
     // The registration call is the same two-spellings problem, so it is
     // built from its own constant rather than hand-typed: a rename that
@@ -1608,7 +1623,12 @@ fn an_export_with_no_memoryview_parameter_emits_no_release_at_all() {
 // --- #1143: the per-class type object and its method table --------------
 
 /// An exported `@staticmethod`, receiver-free.
-fn static_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> ExtExport {
+pub(super) fn static_export(
+    class: &str,
+    method: &str,
+    params: Vec<Ty>,
+    return_ty: Ty,
+) -> ExtExport {
     ExtExport {
         defaults: Vec::new(),
         name: format!("{class}.{method}.static"),
@@ -1650,6 +1670,17 @@ fn a_program_with_no_exported_method_still_defines_the_registration_function() {
         "{inc}"
     );
     assert!(!inc.contains("PyType_FromSpec"), "{inc}");
+    // Part 7 of #1371: the compiled-class `isinstance` is defined too, and
+    // with nothing published every class name falls through to the shim's
+    // unpublished-class answer.
+    assert!(
+        inc.contains(&format!(
+            "{COMPILED_CLASS_ISINSTANCE_DECL}\n{{\n    (void)name;\n    \
+             return {UNPUBLISHED_CLASS_ISINSTANCE}(o);\n}}\n"
+        )),
+        "{inc}"
+    );
+    assert!(!inc.contains("pycc_ext_type_object_"), "{inc}");
 }
 
 #[test]
@@ -1697,7 +1728,8 @@ fn an_exported_method_gets_a_method_table_a_slot_table_and_a_non_instantiable_sp
             "    type = PyType_FromSpec(&pycc_ext_type_spec_Grid);\n    \
              if (type == NULL) {\n        return -1;\n    }\n    \
              if (PyModule_AddObjectRef(module, \"Grid\", type) < 0) {\n        \
-             Py_DECREF(type);\n        return -1;\n    }\n    Py_DECREF(type);\n"
+             Py_DECREF(type);\n        return -1;\n    }\n    \
+             Py_XDECREF(pycc_ext_type_object_Grid);\n    pycc_ext_type_object_Grid = type;\n"
         ),
         "{inc}"
     );

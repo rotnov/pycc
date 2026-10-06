@@ -101,6 +101,11 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // `foreign_len::emit_unpack_float_tuple` owns the `-1` check that
         // actually stops the module body.
         | MirExpr::ObjUnpackFloatTuple { .. }
+        // Part 1 of #891: `ObjUnpack` joins them -- the shim raises
+        // CPython's own `TypeError` for a non-iterable and `ValueError` for
+        // a wrong item count, and propagates a raising `__iter__` or
+        // `__next__`; `foreign_unpack::emit_unpack` owns the `NULL` check.
+        | MirExpr::ObjUnpack { .. }
         // Part 2 of #1027: `BufferGet` joins them, and here the dependency
         // *is* live rather than conservative -- `pycc_rt_buffer_f64_get`
         // sets pycc's own D-173 pending state and returns a `0.0` sentinel
@@ -133,7 +138,11 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // either may raise. `foreign_compare::emit_contains` owns the `-1`
         // check and `foreign_slice::emit_slice` the `NULL` check.
         | MirExpr::ObjContains { .. }
-        | MirExpr::ObjSlice { .. } => true,
+        | MirExpr::ObjSlice { .. }
+        // Part 2d of #1371: boxing an element or allocating the CPython
+        // `list` may fail, and `foreign_call::emit_list` owns the `NULL`
+        // check.
+        | MirExpr::ObjList { .. } => true,
         // Part 1 of #1371: a rich comparison runs the operands' own
         // `__eq__`/`__lt__`/..., which may raise, and
         // `foreign_compare::emit_compare` owns the `NULL` check; an
@@ -247,7 +256,11 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // #1211 (Part 3 of #1018): `and`/`or` is a truth test, a branch
         // and a join, all infallible. Each operand is emitted through
         // `emit_expr` inside its own arm, which guards that operand where
-        // it is evaluated, so this node adds no edge of its own.
+        // it is evaluated, so this node adds no edge of its own. (Part 6 of
+        // #1371: an `object` operand's truth test raises through
+        // `foreign_len::emit_truthy`'s own failure edge, and boxing a native
+        // operand into an `object` node routes a packer `NULL` through
+        // `foreign_fail::route_null`, both branching immediately.)
         | MirExpr::BoolOp { .. }
         // #1395: a conditional expression is a truth test, a branch and a
         // join, all infallible; `test` and each branch are guarded by their
@@ -1577,6 +1590,12 @@ mod tests {
                 ty: pycc_mir::Ty::MemoryView,
             }),
             index: Box::new(MirExpr::IntLiteral(0)),
+        }));
+        // Part 2d of #1371: a list display built as a CPython `list` always
+        // may raise -- its elements are boxed and the list allocated --
+        // even an empty one.
+        assert!(expression_can_set_exception(&MirExpr::ObjList {
+            elements: Vec::new(),
         }));
         assert!(!expression_can_set_exception(&MirExpr::IntLiteral(1)));
     }

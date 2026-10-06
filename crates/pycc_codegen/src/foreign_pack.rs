@@ -89,7 +89,8 @@ pub(super) fn emit_pack<'ctx>(
 /// A borrowed pointer to CPython's `None` ([`EXT_OBJ_NONE_SYMBOL`]).
 ///
 /// Shared by an identity test's `None` side (`foreign_compare.rs`, Part 1
-/// of #1371) and a `None` call argument (Part 8 of #1371). pycc's own
+/// of #1371), a `None` call argument (Part 8 of #1371) and a `None`
+/// returned as an object (`object_return.rs`, Part 1 of #1387). pycc's own
 /// `None` is an all-zero placeholder with no `PyObject *`, so
 /// [`packer_for`] has no row for it; a `None` argument instead becomes this
 /// pointer as a [`Scalar::Object`], which [`emit_pack`] packs through the
@@ -97,7 +98,7 @@ pub(super) fn emit_pack<'ctx>(
 /// reference is the one the consuming call helper releases, so `None`'s
 /// refcount is unchanged by the call (and `None` is immortal on every
 /// supported CPython anyway).
-pub(super) fn none_pointer<'ctx>(
+pub(crate) fn none_pointer<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,

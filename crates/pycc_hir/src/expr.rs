@@ -1016,14 +1016,17 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
         HirExpr::IfExp { test, body, orelse } => {
             contains_named_expr(test) || contains_named_expr(body) || contains_named_expr(orelse)
         }
-        HirExpr::UnaryOp { operand, .. } => contains_named_expr(operand),
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
+            contains_named_expr(operand)
+        }
         HirExpr::FString(parts) => parts.iter().any(|part| match part {
             FStringPart::Literal(_) => false,
             FStringPart::Interpolation(e) => contains_named_expr(e),
         }),
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
-            es.iter().any(contains_named_expr)
-        }
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => es.iter().any(contains_named_expr),
         HirExpr::Subscript { base, index } => {
             contains_named_expr(base) || contains_named_expr(index)
         }

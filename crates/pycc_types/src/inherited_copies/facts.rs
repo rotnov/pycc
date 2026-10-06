@@ -89,6 +89,7 @@ impl<'a> Walker<'a> {
                 self.expr(stop);
                 self.expr(step);
             }
+            CompIter::Iterable(iterable) => self.expr(iterable),
             CompIter::Name(name) => self.name_use(name),
         }
     }
@@ -334,7 +335,9 @@ impl<'a> Walker<'a> {
                     self.expr(&link.right);
                 }
             }
-            HirExpr::UnaryOp { operand, .. } => self.expr(operand),
+            HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
+                self.expr(operand)
+            }
             HirExpr::FString(parts) => {
                 for part in parts {
                     if let FStringPart::Interpolation(expr) = part {
@@ -343,6 +346,7 @@ impl<'a> Walker<'a> {
                 }
             }
             HirExpr::ListLiteral(items)
+            | HirExpr::ObjectList(items)
             | HirExpr::SetLiteral(items)
             | HirExpr::TupleLiteral(items) => {
                 for item in items {

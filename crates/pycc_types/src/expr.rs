@@ -283,6 +283,9 @@ pub(crate) fn infer_expr_in(
         HirExpr::IfExp { test, body, orelse } => {
             crate::if_exp::infer_if_exp(env, local_names, test, body, orelse)
         }
+        HirExpr::Unpack { value, arity } => {
+            crate::unpack::infer_unpack(env, local_names, value, *arity)
+        }
         HirExpr::BinOp { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;
@@ -884,6 +887,11 @@ pub(crate) fn infer_expr_in(
             let dict_ty = Ty::Dict(pair.clone());
             pycc_hir::check_container_ty(&dict_ty, Span::new(0, 0))?;
             Ok(dict_ty)
+        }
+        // Part 2d of #1371: a list display the empty-container pre-pass
+        // resolved to an object slot, built as a CPython `list`.
+        HirExpr::ObjectList(elements) => {
+            crate::foreign::list_display::object_list_ty(env, local_names, elements)
         }
         HirExpr::ListLiteral(elements) => {
             // #1021: reaching this arm with no elements means the

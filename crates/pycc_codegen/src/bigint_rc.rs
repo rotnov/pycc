@@ -618,6 +618,8 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // `float`s, never `Ty::Int`, so it can never reach this function
         // either.
         | MirExpr::ObjUnpackFloatTuple { .. }
+        // Part 1 of #891: `ObjUnpack`'s `.ty()` is always `Ty::Object`.
+        | MirExpr::ObjUnpack { .. }
         // Part 2 of #1027: `BufferGet` joins them for the same structural
         // reason -- its own `.ty()` is always `Ty::Float`, never `Ty::Int`,
         // so it can never reach this function at all.
@@ -650,7 +652,10 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // Part 2b of #1371: a membership test's `.ty()` is `Ty::Bool` and an
         // object slice's is `Ty::Object` -- never `Ty::Int`.
         | MirExpr::ObjContains { .. }
-        | MirExpr::ObjSlice { .. } => false,
+        | MirExpr::ObjSlice { .. }
+        // Part 2d of #1371: a list display built as a CPython `list` is
+        // `Ty::Object`.
+        | MirExpr::ObjList { .. } => false,
     }
 }
 

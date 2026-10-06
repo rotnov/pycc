@@ -308,7 +308,9 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
                 collect_named_expr_targets_in_expr(&link.right, killed);
             }
         }
-        HirExpr::UnaryOp { operand, .. } => collect_named_expr_targets_in_expr(operand, killed),
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
+            collect_named_expr_targets_in_expr(operand, killed);
+        }
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(inner) = part {
@@ -316,7 +318,10 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
                 }
             }
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 collect_named_expr_targets_in_expr(e, killed);
             }
