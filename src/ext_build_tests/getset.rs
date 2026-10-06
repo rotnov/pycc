@@ -274,8 +274,7 @@ fn a_subclass_s_property_descriptor_reads_its_receiver_exact_copy() {
 /// #1453: lark's `ParserState.parse_conf: ParseConf` shape. A slot or
 /// property declared as a regular class of the module -- generic or not --
 /// is described; an enum- or exception-class-typed slot or property is
-/// not, and the skip leaves the later slot indices undisturbed. `St` has a
-/// method because a class with none publishes no type object (#1450).
+/// not, and the skip leaves the later slot indices undisturbed.
 const INSTANCE_FIELDS: &str = "from enum import Enum\n\
     from typing import Generic, TypeVar\n\
     T = TypeVar('T')\n\

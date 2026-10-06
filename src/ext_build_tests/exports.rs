@@ -1090,9 +1090,14 @@ fn an_implicit_object_init_ranks_below_a_real_one_in_the_same_mro() {
     hir.items.push(init_func("Base", &[], Ty::None));
     let exports = collect_exports(&hir).expect("not a capability gap");
     let ctors = collect_constructors(&hir, &collect_class_publications(&hir, &exports));
+    // `Base` is published too since #1450 (it is constructible through its
+    // implicit constructor), so the ranking is read off `Grid`'s own row.
     assert_eq!(
-        ctors.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
-        vec!["Grid.__init__"],
+        ctors
+            .iter()
+            .find(|c| c.class == "Grid")
+            .map(|c| c.name.as_str()),
+        Some("Grid.__init__"),
         "the implicit `object.__init__` outranked the real one: {ctors:?}"
     );
 }
@@ -1611,7 +1616,9 @@ fn a_class_binding_one_name_both_ways_publishes_the_slot_s_neighbours_only() {
     // `mod.C(1).value()` with `5` where CPython raises `TypeError: 'int'
     // object is not callable`. `Derived.twice` is the positive direction --
     // an unrelated name on a class whose MRO carries the slot still
-    // publishes.
+    // publishes. `Base` keeps a type object with no method row: it is
+    // constructible, and #1450 publishes a constructible class whatever its
+    // resolved set holds.
     let mut hir = inheriting_module();
     hir.class_defs[0]
         .1
@@ -1619,7 +1626,7 @@ fn a_class_binding_one_name_both_ways_publishes_the_slot_s_neighbours_only() {
         .push(("value".to_string(), Ty::Int));
     assert_eq!(
         publication_rows(&publications_of(&hir)),
-        vec![("Derived", vec!["Derived.twice"])]
+        vec![("Derived", vec!["Derived.twice"]), ("Base", vec![])]
     );
 }
 
@@ -1701,14 +1708,13 @@ fn a_protocol_base_s_annotation_only_attribute_shadows_nothing() {
 }
 
 #[test]
-fn a_class_whose_whole_resolved_set_is_shadowed_away_is_not_published_at_all() {
+fn a_constructible_class_whose_whole_resolved_set_is_shadowed_away_publishes_no_method() {
     // The collapse case the per-name matrix above never reaches: every one
     // of `Derived`'s resolved names is shadowed by a non-exporting binding,
-    // so it contributes no publication row rather than an empty one. Pinned
-    // because the generated `.inc` gives an empty row a type object the host
-    // could construct and then find nothing on. Verified end to end: the
-    // same source built with `--ext` produces a module whose only attribute
-    // is `Base`.
+    // so its row carries no method at all. Before #1450 such a class got no
+    // type object; it is constructible, so it is now published with an
+    // empty method table, as CPython's own module still answers
+    // `mod.Derived(...)` -- with `value` read from the instance, not called.
     let mut hir = inheriting_module();
     hir.class_defs[1]
         .1
@@ -1722,7 +1728,7 @@ fn a_class_whose_whole_resolved_set_is_shadowed_away_is_not_published_at_all() {
         .push(("value".to_string(), Ty::Int));
     assert_eq!(
         publication_rows(&publications_of(&hir)),
-        vec![("Base", vec!["Base.value"])]
+        vec![("Base", vec!["Base.value"]), ("Derived", vec![])]
     );
 }
 
@@ -1734,6 +1740,8 @@ fn a_derived_method_shadowing_a_base_property_is_published_unchanged() {
     // non-regression guard rather than a discriminator: the base contributes
     // no export under the name, so nothing exists for a first-exportable-hit
     // walk to fall through to and this shape answered the same before #1146.
+    // `Base` exports nothing but is constructible, so since #1450 it is
+    // published with an empty method table.
     let mut hir = inheriting_module();
     hir.class_defs[0]
         .1
@@ -1745,7 +1753,10 @@ fn a_derived_method_shadowing_a_base_property_is_published_unchanged() {
     declare_member(&mut hir, "Derived", Member::Method("value"));
     assert_eq!(
         publication_rows(&publications_of(&hir)),
-        vec![("Derived", vec!["Derived.twice", "Derived.value"])]
+        vec![
+            ("Derived", vec!["Derived.twice", "Derived.value"]),
+            ("Base", vec![])
+        ]
     );
 }
 

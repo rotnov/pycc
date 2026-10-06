@@ -168,6 +168,7 @@ mod compiled_isinstance;
 mod exports;
 mod generated_c;
 mod getset;
+mod init_only_publication;
 mod instance_boundary;
 mod method_defaults;
 mod object_text;

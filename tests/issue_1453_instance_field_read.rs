@@ -63,8 +63,7 @@ fn assert_ok(run: &Output) {
 /// made, which has no carrier until the first host read. `B`/`SubB`/`Holder`
 /// store a subclass instance in a base-typed slot. `color` is an enum slot.
 /// `conf_of` reads the field off an `Any` operand, which compiled code does
-/// through `PyObject_GetAttr` (D-258). Every class the host constructs has
-/// a method, because a class with none publishes no type object (#1450).
+/// through `PyObject_GetAttr` (D-258).
 const MODULE: &str = r#"from enum import Enum
 from typing import Any, Generic, TypeVar
 
