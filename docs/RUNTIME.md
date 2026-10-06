@@ -555,7 +555,10 @@ makes it constructible, gets a type object with an empty method table, so
 the host can name it, construct it, read its fields and pass the instance to
 a compiled function (`tests/issue_1450_init_only_class.rs`). A public class
 that resolves nothing and is not constructible -- its `__init__` takes a
-`tuple`, say -- still gets no type object.
+`tuple`, say -- still gets no type object, and so does a monomorphized
+generic specialization (`0gen_<Class>__...`, the class `Cell[int](6)`
+instantiates) that resolves nothing: its `__init__` has no `fnptr_` global
+for a generated `tp_init` to call.
 
 *Which methods each type object carries.* Every exported member of the class
 and of its bases, resolved along the class's MRO most-derived-first. The walk
@@ -1588,13 +1591,16 @@ above. Four rules fix what that carrier is.
   the shared deallocator, and a non-constructible one keeps
   `Py_TPFLAGS_DISALLOW_INSTANTIATION` -- so the host can call the class's
   exported methods on what it received. Any other class (private, neither
-  resolving a method nor constructible, or a generic class) gets a method-less type named
+  resolving a method nor constructible, or a monomorphized generic
+  specialization) gets a method-less type named
   `<module>.<Class>` (`__main__.<Class>` in an embedded executable), created
   on first use with `Py_TPFLAGS_DISALLOW_INSTANTIATION` and cached by class
   name for the module's lifetime. The cache key is the bare class name, which
   is unique per artifact because the project namespace is flat (a second
-  top-level `Q` is a `C0001`); a generic class's instantiations share one
-  layout name and are never published, so they share one method-less type.
+  top-level `Q` is a `C0001`); a generic class's specializations
+  (`0gen_<Class>__...`) share their generic class's layout name and are
+  never published on the constructor ground (their `__init__` has no
+  `fnptr_` global for a `tp_init` to call), so they share one carrier type.
 - *Identity is CPython's while a carrier lives.* The instance keeps a weak
   back-pointer to its live carrier (`pycc_rt_ext_instance_carrier` /
   `_set_carrier`), set by `tp_init` for a host-constructed object and by the

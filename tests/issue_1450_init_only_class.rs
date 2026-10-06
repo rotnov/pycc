@@ -45,7 +45,9 @@ fn write(dir: &Path, file: &str, body: &str) -> PathBuf {
 /// constructor, as lark's `ParserState` does. `Empty` has no member at all.
 /// `Pair`'s only member is an `__init__` taking a `tuple`, which no
 /// generated constructor can carry, so it stays unpublished (the pinned
-/// deviation below).
+/// deviation below). `Cell[int]` is a monomorphized specialization that
+/// resolves no method: it must not be published, or the artifact references
+/// an `__init__` function pointer no specialization has and fails to load.
 const MODULE: &str = "from typing import Any, Generic, TypeVar\n\
     \n\
     T = TypeVar(\"T\")\n\
@@ -74,7 +76,13 @@ const MODULE: &str = "from typing import Any, Generic, TypeVar\n\
     def make_conf(n: int) -> ParseConf[Any]:\n    return ParseConf(n, \"made\")\n\
     \n\
     \n\
-    def make_empty() -> Empty:\n    return Empty()\n";
+    def make_empty() -> Empty:\n    return Empty()\n\
+    \n\
+    \n\
+    class Cell[V]:\n    def __init__(self, v: V) -> None:\n        self.v = v\n\
+    \n\
+    \n\
+    def cell_v() -> int:\n    return Cell[int](6).v\n";
 
 /// The host-side driver; `{module}` is the module it imports as `mod`.
 /// Reference counts are compared as deltas over many calls, never as
@@ -93,6 +101,7 @@ const DRIVER: &str = "import gc\n\
     print(isinstance(c, mod.ParseConf), isinstance(s, mod.ParseConf))\n\
     e = mod.Empty()\n\
     print(type(e).__name__, type(mod.make_empty()) is mod.Empty)\n\
+    print(mod.cell_v())\n\
     for call in (lambda: mod.ParseConf(), lambda: mod.ParseConf(1, 'a', 3), \
     lambda: mod.Empty(1)):\n\
     \x20   try:\n\
@@ -109,7 +118,7 @@ const DRIVER: &str = "import gc\n\
 
 /// What `DRIVER` prints under CPython.
 const EXPECTED: &str = "ParseConf True\n3 x\n7 True\n3 9\nTrue 5 made\nTrue False\n\
-    Empty True\nTypeError\nTypeError\nTypeError\n0\n";
+    Empty True\n6\nTypeError\nTypeError\nTypeError\n0\n";
 
 fn python(dir: &Path, script: &str) -> Output {
     host_python()

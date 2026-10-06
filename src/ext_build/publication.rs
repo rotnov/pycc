@@ -84,6 +84,10 @@ pub(crate) struct ExtPublishedClass {
 /// publishable class that resolves nothing and is not constructible --
 /// an `__init__` with an uncarriable parameter, an enum, a Protocol -- still
 /// gets no type object, since there is nothing the host could do with one.
+/// Neither does a monomorphized generic specialization (`0gen_<Class>__...`)
+/// that resolves nothing: it has no `fnptr_` global for a generated
+/// `tp_init` to call, and its instances cross as a carrier named after the
+/// generic class.
 ///
 /// The class list is the export set's classes in first-export order, then
 /// every remaining published class, in `HirModule::class_defs`
@@ -159,8 +163,12 @@ pub(crate) fn collect_class_publications(
         }
         // #1450: a constructible class is published even when it resolves
         // no method -- lark's `__init__`-only `ParseConf` -- so a host can
-        // name it, build it and hand the result to a compiled function.
-        if !methods.is_empty() || class_constructible(module, class) {
+        // name it, build it and hand the result to a compiled function. A
+        // monomorphized specialization (`0gen_`) is never published on that
+        // ground: its `__init__` has no `fnptr_` global for a `tp_init` to
+        // call (codegen dispatches specializations directly).
+        let constructible = !class.starts_with("0gen_") && class_constructible(module, class);
+        if !methods.is_empty() || constructible {
             published.push(ExtPublishedClass {
                 class: class.to_string(),
                 methods,

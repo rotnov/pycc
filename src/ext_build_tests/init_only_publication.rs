@@ -155,6 +155,10 @@ fn an_init_only_class_the_host_cannot_construct_or_name_gets_no_type_object() {
     // attribute (`class_publishable`).
     rows.push(("private name", init_only_module("_Conf")));
 
+    // Constructible and publishable by name, but a monomorphized
+    // specialization: its `__init__` has no `fnptr_` global to call.
+    rows.push(("0gen_ specialization", init_only_module("0gen_Conf__T_int")));
+
     let mut no_init = init_only_module("Conf");
     no_init.class_defs[0].1.methods.clear();
     rows.push(("no resolved __init__", no_init));
