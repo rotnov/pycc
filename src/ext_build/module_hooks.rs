@@ -21,15 +21,19 @@
 //! source, because the export set is collected from D-222's linked program,
 //! where a helper module's `def __getattr__` is an indistinguishable
 //! `HirItem::Function`. CPython never applies a helper's hook to the entry
-//! module, so only a `def` at the entry module's top level counts. An
-//! import that binds a hook name in the entry module would put a hook in
+//! module, so only a `def` at the entry module's top level counts. Any
+//! other module-scope binding of a hook name in the entry module -- an
+//! import, an assignment, a `class` statement -- would put a value in
 //! CPython's dict that this boundary cannot publish, so it is refused with
 //! a located `C0001` rather than ignored.
 
 use std::collections::BTreeSet;
 
 use pycc_ast::visitor::{self, Visitor};
-use pycc_ast::{Alias, ModModule, Stmt};
+use pycc_ast::{
+    Expr, ExprContext, ModModule, Pattern, PatternMatchAs, PatternMatchMapping, PatternMatchStar,
+    Stmt,
+};
 use pycc_diag::{Diagnostic, Span};
 
 /// The module-level names CPython calls implicitly (PEP 562).
@@ -57,13 +61,18 @@ impl EntryHooks {
     }
 
     /// Scans the entry module: a top-level `def` of a hook name defines it,
-    /// and every import alias that binds a hook name -- at the top level or
-    /// anywhere inside a top-level compound statement, but not inside a
-    /// function or class body, whose bindings are not module attributes --
-    /// is one located `C0001`. The scan is deliberately over-inclusive: it
-    /// does not evaluate a guard, so an import CPython never executes --
-    /// under `if TYPE_CHECKING:`, say -- is refused too. That costs a
-    /// spurious refusal of a rare spelling, never a silently ignored hook.
+    /// and every other binding of a hook name -- an import alias, a store
+    /// or `del` target, a `class` statement, a `match` capture -- at the top
+    /// level or anywhere inside a top-level compound statement, but not
+    /// inside a function or class body, whose bindings are not module
+    /// attributes, is one located `C0001`: CPython would call (or lose) a
+    /// hook the boundary cannot publish. The scan is deliberately
+    /// over-inclusive: it does not evaluate a guard, so a binding CPython
+    /// never executes -- under `if TYPE_CHECKING:`, say -- is refused too,
+    /// and a comprehension target, which binds in the comprehension's own
+    /// scope, is refused as well. That costs a spurious refusal of a rare
+    /// spelling, never a silently ignored hook. A `global` rebinding from
+    /// inside a function body is not modelled.
     pub(crate) fn scan(module: &ModModule) -> Result<Self, Vec<Diagnostic>> {
         let defined = module
             .body
@@ -75,12 +84,12 @@ impl EntryHooks {
                 _ => None,
             })
             .collect();
-        let mut imports = ImportBindings::default();
-        imports.visit_body(&module.body);
-        if imports.refusals.is_empty() {
+        let mut bindings = HookBindings::default();
+        bindings.visit_body(&module.body);
+        if bindings.refusals.is_empty() {
             Ok(Self { defined })
         } else {
-            Err(imports.refusals)
+            Err(bindings.refusals)
         }
     }
 
@@ -90,30 +99,40 @@ impl EntryHooks {
     }
 }
 
-/// Collects a refusal for every import alias that binds a hook name at
-/// module scope.
+/// Collects a refusal for every binding of a hook name at module scope
+/// other than a top-level `def`.
 #[derive(Default)]
-struct ImportBindings {
+struct HookBindings {
     refusals: Vec<Diagnostic>,
 }
 
-impl ImportBindings {
-    fn check(&mut self, alias: &Alias, bound: &str) {
+impl HookBindings {
+    fn check(&mut self, bound: &str, range: impl Into<std::ops::Range<u32>>, how: &str) {
         if is_module_hook(bound) {
-            let range: std::ops::Range<u32> = alias.range.into();
-            self.refusals.push(import_binding_refusal(
+            let range = range.into();
+            self.refusals.push(binding_refusal(
                 bound,
+                how,
                 Span::new(range.start, range.end),
             ));
         }
     }
 }
 
-impl<'a> Visitor<'a> for ImportBindings {
+impl<'a> Visitor<'a> for HookBindings {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
         match stmt {
-            // A local scope: nothing bound in it is a module attribute.
-            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
+            // A local scope: nothing bound in it is a module attribute. A
+            // top-level `def` of a hook name is the published form.
+            Stmt::FunctionDef(_) => return,
+            Stmt::ClassDef(class) => {
+                self.check(
+                    class.name.as_str(),
+                    class.name.range,
+                    "bound by a class statement",
+                );
+                return;
+            }
             // `import a.b` binds `a`; `import a.b as c` binds `c`.
             Stmt::Import(import) => {
                 for alias in &import.names {
@@ -121,26 +140,59 @@ impl<'a> Visitor<'a> for ImportBindings {
                         || alias.name.as_str().split('.').next().unwrap_or_default(),
                         |asname| asname.as_str(),
                     );
-                    self.check(alias, bound);
+                    self.check(bound, alias.range, "bound by an import");
                 }
             }
             Stmt::ImportFrom(import) => {
                 for alias in &import.names {
-                    self.check(alias, alias.asname.as_ref().unwrap_or(&alias.name).as_str());
+                    let bound = alias.asname.as_ref().unwrap_or(&alias.name).as_str();
+                    self.check(bound, alias.range, "bound by an import");
                 }
             }
             _ => {}
         }
         visitor::walk_stmt(self, stmt);
     }
+
+    /// Every store or `del` target: an assignment, an augmented or
+    /// annotated one, a `for` or `with` target, a walrus, a `type` alias.
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if let Expr::Name(name) = expr {
+            match name.ctx {
+                ExprContext::Store => {
+                    self.check(name.id.as_str(), name.range, "bound by an assignment");
+                }
+                ExprContext::Del => {
+                    self.check(name.id.as_str(), name.range, "deleted by a `del` statement");
+                }
+                _ => {}
+            }
+        }
+        visitor::walk_expr(self, expr);
+    }
+
+    /// A capture in a `match` pattern binds its name as an assignment does.
+    fn visit_pattern(&mut self, pattern: &'a Pattern) {
+        let captured = match pattern {
+            Pattern::MatchAs(PatternMatchAs { name, .. })
+            | Pattern::MatchStar(PatternMatchStar { name, .. }) => name.as_ref(),
+            Pattern::MatchMapping(PatternMatchMapping { rest, .. }) => rest.as_ref(),
+            _ => None,
+        };
+        if let Some(name) = captured {
+            self.check(name.as_str(), name.range, "bound by a match pattern");
+        }
+        visitor::walk_pattern(self, pattern);
+    }
 }
 
-/// The located `C0001` for an import that binds the hook `hook`.
-fn import_binding_refusal(hook: &str, span: Span) -> Diagnostic {
+/// The located `C0001` for a module-scope binding of the hook `hook` that
+/// is not a top-level `def`; `how` names the binding form.
+fn binding_refusal(hook: &str, how: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
         "C0001",
         format!(
-            "--ext cannot publish a module `{hook}` bound by an import -- CPython calls a \
+            "--ext cannot publish a module `{hook}` {how} -- CPython calls a \
              module's own `{hook}` implicitly (PEP 562), and pycc publishes only a \
              `def {hook}` written at the top level of the entry module; define it there, or \
              build without --ext (#1467)"

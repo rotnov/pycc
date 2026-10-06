@@ -95,6 +95,66 @@ fn every_import_spelling_that_binds_a_hook_name_is_refused() {
 }
 
 #[test]
+fn every_other_module_scope_binding_of_a_hook_name_is_refused() {
+    for (source, how) in [
+        ("__getattr__ = 5\n", "bound by an assignment"),
+        ("__dir__: int = 5\n", "bound by an assignment"),
+        ("__dir__ += 1\n", "bound by an assignment"),
+        ("a, __getattr__ = 1, 2\n", "bound by an assignment"),
+        (
+            "for __dir__ in range(3):\n    pass\n",
+            "bound by an assignment",
+        ),
+        (
+            "with open('f') as __getattr__:\n    pass\n",
+            "bound by an assignment",
+        ),
+        ("if (__dir__ := 1):\n    pass\n", "bound by an assignment"),
+        ("type __getattr__ = int\n", "bound by an assignment"),
+        ("del __getattr__\n", "deleted by a `del` statement"),
+        ("class __dir__:\n    pass\n", "bound by a class statement"),
+        (
+            "match 1:\n    case __getattr__:\n        pass\n",
+            "bound by a match pattern",
+        ),
+        (
+            "match [1]:\n    case [*__dir__]:\n        pass\n",
+            "bound by a match pattern",
+        ),
+        (
+            "match {}:\n    case {**__dir__}:\n        pass\n",
+            "bound by a match pattern",
+        ),
+    ] {
+        let refused = refusals(source);
+        assert_eq!(refused.len(), 1, "{source}");
+        assert_eq!(refused[0].code, "C0001", "{source}");
+        assert!(
+            refused[0].message.contains(how),
+            "{source}: {}",
+            refused[0].message
+        );
+    }
+}
+
+#[test]
+fn a_store_is_located_at_its_target_name() {
+    let refused = refusals("x = 1\n__getattr__ = 5\n");
+    assert_eq!(refused[0].span, Some(Span::new(6, 17)));
+}
+
+#[test]
+fn a_read_of_a_hook_name_and_a_non_hook_store_are_not_refused() {
+    assert!(
+        defined(
+            "def __getattr__(name: str) -> int:\n    return 1\n\n\n\
+             g = __getattr__\nx = 1\nmatch 1:\n    case y:\n        pass\n"
+        )
+        .contains(&"__getattr__".to_string())
+    );
+}
+
+#[test]
 fn the_refusal_is_located_at_the_binding_alias() {
     let refused = refusals("import os\nfrom lib import f, __getattr__ as __dir__\n");
     let span = refused[0].span.expect("a located refusal");

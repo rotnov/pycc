@@ -534,12 +534,16 @@ the host as `AttributeError`, so `hasattr` and `getattr(mod, name,
 default)` behave as in CPython. Which hooks are published is read from the
 entry module's own source (`src/ext_build/module_hooks.rs`), because a
 helper module's `def __getattr__` is linked into the same program (D-222)
-and CPython never applies it to the entry module. An import that binds a
-hook name in the entry module (`from lib import __getattr__`, `import x as
-__dir__`), at the top level or inside a top-level `if`/`try`, is refused
-with a located `C0001`, since CPython would install a hook the boundary
-cannot publish (the scan does not evaluate guards, so an import under
-`if TYPE_CHECKING:` is refused too); a hook whose signature the boundary cannot carry is a
+and CPython never applies it to the entry module. Any other module-scope
+binding of a hook name in the entry module -- an import (`from lib import
+__getattr__`, `import x as __dir__`), an assignment or other store or `del`
+target (`__getattr__ = 5`, a `for`/`with` target, a walrus), a `class`
+statement or a `match` capture -- at the top level or inside a top-level
+`if`/`try`, is refused with a located `C0001`, since CPython would call (or
+lose) a hook the boundary cannot publish. The scan does not evaluate
+guards, so a binding under `if TYPE_CHECKING:` is refused too, and a
+`global` rebinding from a function body is not modelled; a hook whose
+signature the boundary cannot carry is a
 `C0003` whose remedy is to change the signature, not to rename it. Two
 residuals are recorded in D-244's #1467 amendment: a name CPython's module
 dict holds but the extension does not publish -- a module global, a private

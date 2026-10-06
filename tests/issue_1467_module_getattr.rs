@@ -260,6 +260,34 @@ fn an_import_binding_a_hook_name_is_refused_at_its_line() {
     );
 }
 
+/// A module-level assignment to a hook name compiled, and the host then
+/// raised `AttributeError` where CPython raises `TypeError: 'int' object is
+/// not callable` from the bound value: refused at its target instead.
+#[test]
+fn an_assignment_binding_a_hook_name_is_refused_at_its_target() {
+    let dir = ScratchDir::new("ext_module_getattr_assign").expect("scratch");
+    let source = write(
+        &dir,
+        "m.py",
+        "__getattr__ = 5\n\n\ndef f() -> int:\n    return 1\n",
+    );
+    let output = build_ext(&source, &dir.join("m"));
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stderr.matches("error[").count(), 1, "{stderr}");
+    assert!(
+        stderr.contains(
+            "error[C0001]: --ext cannot publish a module `__getattr__` bound by an assignment"
+        ),
+        "{stderr}"
+    );
+    assert!(stderr.contains("m.py:1:1"), "{stderr}");
+    assert!(
+        !dir.join("m").exists(),
+        "a refused build leaves no artifact"
+    );
+}
+
 /// A hook whose signature the boundary cannot carry is a `C0003` whose
 /// remedy is not "rename it private": that would silently stop the host
 /// from calling it, the defect #1467 removed.
