@@ -86,14 +86,16 @@ fn assert_one_error(tag: &str, body: &str, code: &str, needle: &str) -> String {
 }
 
 /// A native-mode `pycc check` admits a store and a `del` on an object a
-/// foreign import produced, in a module body and in a function body.
+/// foreign import produced, in a module body and in a function body, and
+/// through a parameter annotated with a class a foreign import binds.
 #[test]
 fn check_accepts_an_object_store_and_delete() {
     let dir = ScratchDir::new("obj_attr_store_check").expect("scratch");
     let output = check_with(
         &dir,
-        "import types\n\nns = types.SimpleNamespace()\nns.a = 1\nns.b = None\nns.c = ns\n\
-         del ns.a, ns.c\n\n\ndef f(v: int) -> None:\n    ns.d = v\n    del ns.d\n",
+        "import types\nfrom types import SimpleNamespace\n\nns = types.SimpleNamespace()\nns.a = 1\nns.b = None\nns.c = ns\n\
+         del ns.a, ns.c\n\n\ndef f(v: int) -> None:\n    ns.d = v\n    del ns.d\n\n\n\
+         def g(o: SimpleNamespace) -> None:\n    o.e = 1.5\n    del o.e\n",
     );
     assert_eq!(
         output.status.code(),

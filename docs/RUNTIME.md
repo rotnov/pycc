@@ -1882,7 +1882,9 @@ never becomes a deletion. The base is borrowed by both helpers, so neither
 adds to the leaked set: the hosted test stores, deletes and re-stores an
 object 200 times inside a function and pins its `sys.getrefcount`
 (measured inside compiled code, so the argument boundary's own references
-do not enter it) unchanged on a `types.SimpleNamespace`. A store into an
+do not enter it) on a `types.SimpleNamespace` at `+1`, the one reference
+the attribute still holds, whatever the iteration count (CPython also
+answers `+1`), and a final `del` at `-1`. A store into an
 object slot of a compiled instance goes through that slot's descriptor
 (Part 1 of [#1443](https://github.com/rotnov/pycc/issues/1443)), which
 keeps the reference a replaced or deleted object held -- the slot store's

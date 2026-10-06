@@ -40,8 +40,8 @@ fn synthesize_chain_temp_name(offset: u32) -> String {
 /// [`desugar_chain_assign`] expands into one single-target
 /// assignment per piece, each lowered through [`lower_stmt`](super::lower_stmt), and a `del`
 /// statement (#1244), which [`lower_delete`](super::del::lower_delete) expands into one
-/// `HirStmt::Delete` per deleted name and one `HirStmt::DeleteSlice` per slice target
-/// (Part 2c of #1371). Every caller that lowers a statement list goes through
+/// `HirStmt::Delete` per deleted name, one `HirStmt::DeleteSlice` per slice target
+/// (Part 2c of #1371) and one `HirStmt::DeleteAttr` per attribute target (#1457). Every caller that lowers a statement list goes through
 /// here; [`lower_stmt`](super::lower_stmt) itself never sees a multi-target `Stmt::Assign` or a
 /// `Stmt::Delete`.
 #[allow(clippy::too_many_arguments)]

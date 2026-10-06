@@ -1198,7 +1198,7 @@ pub enum HirStmt {
     /// [`HirStmt::DeleteSlice`] it unbinds no name: it *reads* `base` and at
     /// run time asks it to delete `attr`. `pycc_hir` cannot see types, so
     /// every attribute target lowers here; `pycc_types` admits only a
-    /// CPython-object base (`PyObject_DelAttr`, `foreign::attr_del`) and
+    /// CPython-object base (`PyObject_DelAttr`, `foreign::attr_store`) and
     /// refuses every other base with this node's `span` -- the attribute
     /// target's own range. `docs/TYPE_SYSTEM.md`'s "`del` statement" section
     /// is the canonical statement of the rule.
