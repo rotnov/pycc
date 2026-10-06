@@ -2,7 +2,8 @@
 //! (#1442): one per carriable instance-attribute slot and one per carriable
 //! `@property`, so `instance.field` reads the compiled value on the CPython
 //! side, and (Part 1 of #1443) a slot's `instance.field = v` and
-//! `del instance.field` store into it.
+//! `del instance.field` store into it, while (#1458) a property's
+//! `instance.prop = v` runs its compiled setter.
 //!
 //! **Why the host needs them.** D-258 makes an unannotated or `Any`/`object`
 //! operand the opaque CPython object, and compiled code reads an attribute
@@ -17,12 +18,22 @@
 //! **Slot stores (Part 1 of #1443).** A slot descriptor has a setter
 //! ([`setter`]): a store converts the value by the slot type's parameter row
 //! and releases the replaced word as a compiled store does; a `del`
-//! un-assigns the slot. Two kinds of descriptor stay read-only and keep
-//! CPython's own `AttributeError` for a getset without a setter: a property
-//! (a compiled property setter is #1458), and every slot of a class whose
-//! MRO defines a compiled `__setattr__` or `__delattr__`, because the
-//! extension does not route a store through that method (#1459) and a raw
-//! slot store would silently bypass it.
+//! un-assigns the slot. Every descriptor of a class whose MRO defines a
+//! compiled `__setattr__` or `__delattr__` stays read-only and keeps
+//! CPython's own `AttributeError` for a getset without a setter, because
+//! the extension does not route a store through that method (#1459) and a
+//! raw slot store -- or a direct call of a property setter -- would
+//! silently bypass it.
+//!
+//! **Property stores (#1458).** A property with a compiled setter routes a
+//! store through the setter's `METH_FASTCALL` wrapper, the way the getter
+//! is routed, so the value is converted by the setter parameter's row of
+//! the boundary table ([`PropertySetter::Compiled`]). A getter-only
+//! property answers CPython's own `property '<p>' of '<C>' object has no
+//! setter`, and every property answers `del` with `... has no deleter`
+//! (pycc has no `@<p>.deleter`). A setter whose value or return type the
+//! boundary does not carry leaves the descriptor read-only, the same
+//! silently-partial policy as an uncarried getter.
 //!
 //! **Instance-typed fields (#1453).** A slot or property declared as a
 //! regular class compiled in the same module -- lark's
@@ -90,7 +101,30 @@ pub(crate) enum ExtGetset {
         /// excludes a getter as representation), so the wrapper is emitted
         /// here and nowhere else.
         getter: ExtExport,
+        /// What a host store or `del` runs (#1458).
+        setter: PropertySetter,
     },
+}
+
+/// What a property descriptor's setter slot does (#1458).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PropertySetter {
+    /// The property has a compiled setter whose value and return types the
+    /// boundary carries: a store calls it through its `METH_FASTCALL`
+    /// wrapper, rendered from this one-argument instance export. Like the
+    /// getter's, the export is never in the export set
+    /// ([`super::collect_exports`] refuses a `.setter` spelling), so its
+    /// wrapper is emitted only by [`getset_c`]. Boxed, so a `Refuse` or
+    /// `ReadOnly` descriptor does not carry an export's footprint.
+    Compiled(Box<ExtExport>),
+    /// A getter-only property: a store raises CPython's `property '<p>' of
+    /// '<C>' object has no setter`.
+    Refuse,
+    /// No setter at all (`NULL` in the table), so CPython's generic
+    /// `attribute '<p>' of '<mod>.<C>' objects is not writable`: a class
+    /// whose MRO defines a compiled `__setattr__` or `__delattr__` (#1459),
+    /// or a compiled setter whose value or return type is not carried.
+    ReadOnly,
 }
 
 impl ExtGetset {
@@ -152,9 +186,26 @@ pub(crate) fn collect_getsets(
             let getter = inherited::receiver_exact_member(module, class, &prop.name, &prop.getter);
             if let Some(export) = getter_export(module, class, &prop.name, getter, &carrier_classes)
             {
+                // #1459 wins over a getter-only refusal: CPython would run
+                // the compiled `__setattr__` first, so neither answer is
+                // the right one to give in its place.
+                let setter = match (&prop.setter, writable) {
+                    (_, false) => PropertySetter::ReadOnly,
+                    (None, true) => PropertySetter::Refuse,
+                    (Some(mangled), true) => {
+                        let member = format!("{}.setter", prop.name);
+                        let setter =
+                            inherited::receiver_exact_member(module, class, &member, mangled);
+                        setter_export(module, class, &prop.name, setter, &carrier_classes)
+                            .map_or(PropertySetter::ReadOnly, |export| {
+                                PropertySetter::Compiled(Box::new(export))
+                            })
+                    }
+                };
                 out.push(ExtGetset::Property {
                     name: prop.name.clone(),
                     getter: export,
+                    setter,
                 });
             }
         }
@@ -203,6 +254,47 @@ fn getter_export(
     })
 }
 
+/// The one-argument instance export for the compiled setter `setter`, or
+/// `None` when the boundary cannot carry its value parameter or its return
+/// type (#1458). The value is converted by that parameter's row, as an
+/// argument of the same type is; a non-`None` return is packed by the
+/// wrapper and discarded by the descriptor. As for the getter, the last
+/// definition of the name is the one `fnptr_<name>` is bound to.
+fn setter_export(
+    module: &HirModule,
+    class: &str,
+    prop: &str,
+    setter: &str,
+    carrier_classes: &BTreeSet<String>,
+) -> Option<ExtExport> {
+    let (params, return_ty) = module.items.iter().rev().find_map(|item| match item {
+        HirItem::Function {
+            name,
+            params,
+            return_ty,
+            ..
+        } if name == setter => Some((params, return_ty)),
+        _ => None,
+    })?;
+    // The frontend refuses a setter that is not exactly `(self, value)`
+    // (`C0001`), so the value is the second parameter.
+    let (_, value_ty) = params.get(1)?;
+    (carried(value_ty, carrier_classes)
+        && (*return_ty == Ty::None || carried(return_ty, carrier_classes)))
+    .then(|| ExtExport {
+        name: setter.to_string(),
+        class: Some(class.to_string()),
+        method: Some(prop.to_string()),
+        returns_buffer_slice: false,
+        receiver: ExtReceiver::SelfInstance,
+        params: vec![value_ty.clone()],
+        param_writable: vec![false],
+        defaults: Vec::new(),
+        return_ty: return_ty.clone(),
+        keyword_names: None,
+    })
+}
+
 /// The C getter function name for `class`'s attribute `name`. Each part is
 /// length-prefixed, so class `A_b` attribute `c` and class `A` attribute
 /// `b_c` cannot collide.
@@ -243,13 +335,13 @@ fn pack_slot_word(class: &str, name: &str, ty: &Ty) -> String {
 
 /// The C text for one constructible class's descriptors: each property's
 /// getter wrapper, each descriptor's getter function, each writable slot's
-/// setter function and the
+/// and each property's setter function (#1458) and the
 /// `pycc_ext_type_getset_<Class>` table [`super::method_types_c`] installs
 /// as `Py_tp_getset`. Empty when the class has no descriptor, in which case
 /// no slot is installed and the class's generated C is unchanged.
 ///
-/// `emitted` holds the compiled getters whose wrapper an earlier class
-/// already rendered: a `Derived` that inherits `Base`'s `@property` with no
+/// `emitted` holds the compiled getters and setters whose wrapper an
+/// earlier class already rendered: a `Derived` that inherits `Base`'s `@property` with no
 /// receiver-exact copy resolves to the same `Base.<name>` item, and a
 /// second `pycc_ext_wrap_` definition of one symbol is a C redefinition
 /// error, so each wrapper is rendered once per artifact.
@@ -294,10 +386,16 @@ pub(crate) fn getset_c(ctor: &ExtCtor, emitted: &mut Vec<String>) -> String {
                     out.push_str(&setter::slot_setter_c(class, name, *index, ty));
                 }
             }
-            ExtGetset::Property { getter, .. } => {
+            ExtGetset::Property { getter, setter, .. } => {
                 if !emitted.contains(&getter.name) {
                     emitted.push(getter.name.clone());
                     out.push_str(&wrapper_for(getter));
+                }
+                if let PropertySetter::Compiled(export) = setter
+                    && !emitted.contains(&export.name)
+                {
+                    emitted.push(export.name.clone());
+                    out.push_str(&wrapper_for(export));
                 }
                 // The NULL-`inst` guard answers `AttributeError` before the
                 // wrapper's own `TypeError` guard is reached, so `hasattr`
@@ -312,6 +410,15 @@ pub(crate) fn getset_c(ctor: &ExtCtor, emitted: &mut Vec<String>) -> String {
                      return pycc_ext_wrap_{wrapped}(self, NULL, 0);\n}}\n\n",
                     wrapped = pycc_codegen::mangle_ext_name(&getter.name)
                 ));
+                match setter {
+                    PropertySetter::Compiled(export) => {
+                        out.push_str(&setter::property_setter_c(class, name, Some(export)));
+                    }
+                    PropertySetter::Refuse => {
+                        out.push_str(&setter::property_setter_c(class, name, None));
+                    }
+                    PropertySetter::ReadOnly => {}
+                }
             }
         }
     }
@@ -321,7 +428,11 @@ pub(crate) fn getset_c(ctor: &ExtCtor, emitted: &mut Vec<String>) -> String {
     for getset in &ctor.getsets {
         let name = getset.name();
         let setter = match getset {
-            ExtGetset::Slot { writable: true, .. } => setter::setter_symbol(class, name),
+            ExtGetset::Slot { writable: true, .. }
+            | ExtGetset::Property {
+                setter: PropertySetter::Compiled(_) | PropertySetter::Refuse,
+                ..
+            } => setter::setter_symbol(class, name),
             _ => "NULL".to_string(),
         };
         out.push_str(&format!(

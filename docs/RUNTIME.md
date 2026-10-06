@@ -530,9 +530,10 @@ and discards it, passing the same null receiver every native
 `Class.method(...)` call site already passes. A `@property` getter or setter,
 and any method of a private class or of a user exception class, are **not**
 exported and are not `C0003`: they are excluded as representation, not as a
-capability gap. (Since #1442 a constructible class's getter is reachable as a
-read-only attribute descriptor instead -- "Reading a field through the
-published type" below -- never as a callable method.) A public `@staticmethod` or `@classmethod` of a public class
+capability gap. (Since #1442 a constructible class's getter is reachable as an
+attribute descriptor instead -- "Reading a field through the published type"
+below -- and since #1458 its setter through that descriptor's store --
+"Storing a field through the published type" -- never as a callable method.) A public `@staticmethod` or `@classmethod` of a public class
 whose signature the boundary cannot carry *is* a `C0003`, where it was
 previously skipped in silence.
 
@@ -592,8 +593,8 @@ the published class, and the walk never falls through to a base that exports
 the same name.
 
 So a `Derived` that binds `value` as a `@property` publishes no callable
-`value` at all (only, when `Derived` is constructible, the property's read-only
-descriptor, #1442), exactly as Python's own attribute lookup gives the derived
+`value` at all (only, when `Derived` is constructible, the property's
+descriptor, #1442, writable through a compiled setter since #1458), exactly as Python's own attribute lookup gives the derived
 property rather than `Base.value`; a derived ordinary method shadows a base
 `@property` in the same way; a derived `@staticmethod` shadows a base instance
 method, published under its own receiver kind; a base's `value: int = 2`
@@ -732,22 +733,41 @@ and a second `del` raise `AttributeError: '<Class>' object has no attribute
 '<name>'`, as in CPython. A carrier whose `__init__` never ran has no compiled
 instance to store into: a store raises `AttributeError: cannot set '<name>' on
 a '<Class>' object whose __init__ never ran`, and a `del` raises the
-unassigned-slot message. Three kinds of attribute stay unwritable and keep
-CPython's own `AttributeError`. A property descriptor has no setter (a
-compiled property setter is [#1458](https://github.com/rotnov/pycc/issues/1458)).
-A name with no descriptor -- a slot of a type the getter does not carry, or a
-new name -- has nowhere to go (`... has no attribute 'xs' and no __dict__ for
-setting new attributes`). And every slot of a class whose MRO defines a
-compiled `__setattr__` or `__delattr__` keeps a read-only descriptor, because
-the extension does not run that method on a host store and a raw slot store
-would bypass it silently
+unassigned-slot message. A property descriptor
+([#1458](https://github.com/rotnov/pycc/issues/1458)) with a compiled
+`@<name>.setter` routes a store through the setter's `METH_FASTCALL` wrapper,
+so the value is converted by the setter parameter's row exactly as an
+argument of that type is (refused with that row's error, named
+`<Class>.<name>() argument 1`, where CPython would run the setter), the
+setter body runs on the compiled instance (an exception it raises reaches
+the host), and a non-`None` return is discarded. An inherited setter whose
+body depends on the receiver runs the subclass's receiver-exact copy
+(D-254), as the getter does. A getter-only property raises CPython's
+`AttributeError: property '<name>' of '<Class>' object has no setter`, and a
+`del` of any compiled property raises `... has no deleter`, since pycc
+compiles no `@<name>.deleter`; both answer before the instance is
+consulted, as CPython's do, while a store into a setter-bearing property of
+a carrier whose `__init__` never ran raises the slot's `cannot set` message.
+A setter whose value type (or return type) the boundary does not carry --
+a `list[int]` parameter, say -- leaves the property read-only, the same
+silent partiality as a getter it cannot carry. Two kinds of attribute stay
+unwritable and keep CPython's own `AttributeError`. A name with no
+descriptor -- a slot of a type the getter does not carry, or a new name --
+has nowhere to go (`... has no attribute 'xs' and no __dict__ for setting
+new attributes`). And every descriptor -- slot and property alike, a
+getter-only property included -- of a class whose MRO defines a compiled
+`__setattr__` or `__delattr__` is read-only (`attribute '<name>' of
+'<mod>.<Class>' objects is not writable`), because the extension does not
+run that method on a host store and a raw slot store or a direct setter
+call would bypass it silently
 ([#1459](https://github.com/rotnov/pycc/issues/1459)). Since
 [#1457](https://github.com/rotnov/pycc/issues/1457), compiled code storing
 into or deleting a field through an object-typed name (`other.x = v` and
 `del other.x` on an `Any`) goes through `PyObject_SetAttr` and
 `PyObject_DelAttr`, and so reaches these same descriptors (see "An attribute
 store or deletion produces nothing" below).
-`tests/issue_1443_field_setter.rs` pins each line against CPython.
+`tests/issue_1443_field_setter.rs` and, for properties,
+`tests/issue_1458_property_setter.rs` pin each line against CPython.
 
 *Copying an instance through `copy.copy`*
 ([#1455](https://github.com/rotnov/pycc/issues/1455)). Every carrier type --
@@ -1765,9 +1785,10 @@ above. Four rules fix what that carrier is.
 - *Deviations from CPython, pinned by
   `tests/issue_1435_instance_argument.rs`.* A carrier of a constructible
   published class reads its fields through that type's descriptors (#1442,
-  "Reading a field through the published type" above) and stores into its
-  slots through their setters (Part 1 of #1443, "Storing a field through the
-  published type" above), as CPython does. Any other carrier -- a non-constructible published type's, or an
+  "Reading a field through the published type" above), stores into its
+  slots through their setters (Part 1 of #1443) and runs a property's
+  compiled setter on a store (#1458), with the boundary refusals "Storing a
+  field through the published type" above lists. Any other carrier -- a non-constructible published type's, or an
   on-demand carrier type's -- exposes exactly its type's exported methods and
   the shared `__copy__` (#1455, "Copying an instance through `copy.copy`"
   above): no attribute is readable, so `hasattr(x, 'n')` is `False` where CPython says
