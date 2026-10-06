@@ -271,6 +271,7 @@ const EXT_ONLY_CPYTHON_OUT: &str = "ok\n\
     ok\n\
     ok\n\
     1180591620717411303424 1 1 3 1\n\
+    ok\n\
     -1\n\
     -1\n";
 
