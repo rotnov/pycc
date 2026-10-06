@@ -9,7 +9,7 @@
 //! the export predicate's per-method witness check
 //! (`super::instance_method_reachable`, through [`namespace_owner`]).
 
-use super::{ExtExport, class_publishable, inherited};
+use super::{ExtExport, class_constructible, class_publishable, inherited};
 use pycc_hir::{HirClassDef, HirModule, ProtocolMember};
 
 /// One published class: the host-visible type object's name and the exact
@@ -74,8 +74,19 @@ pub(crate) struct ExtPublishedClass {
 /// instance addresses the same attributes, and this path inherits that
 /// invariant rather than restating it.
 ///
+/// **Which classes get a type object.** A publishable class (below) is
+/// published when its MRO-resolved set is non-empty *or* it is
+/// constructible ([`class_constructible`], D-244 #1145 clause (b)), so an
+/// `__init__`-only class -- lark's `ParseConf` (#1450) -- and a class with
+/// only the implicit `object.__init__` (`class Empty: pass`, a fields-only
+/// dataclass) are published with an empty method table: the host can name
+/// them, construct them, and pass the instance to a compiled function. A
+/// publishable class that resolves nothing and is not constructible --
+/// an `__init__` with an uncarriable parameter, an enum, a Protocol -- still
+/// gets no type object, since there is nothing the host could do with one.
+///
 /// The class list is the export set's classes in first-export order, then
-/// every remaining class that resolves something, in `HirModule::class_defs`
+/// every remaining published class, in `HirModule::class_defs`
 /// order: a class with no export of its own has no first-export position,
 /// and appending is the only deterministic slot for it. Deterministic is the
 /// requirement -- the generated `.inc` must be byte-identical across runs,
@@ -93,6 +104,7 @@ pub(crate) struct ExtPublishedClass {
 /// ([`instance_method_reachable`]).
 ///
 /// [`resolved_init`]: super::resolved_init
+/// [`class_constructible`]: super::class_constructible
 /// [`collect_exports`]: super::collect_exports
 /// [`is_public_name`]: pycc_hir::is_public_name
 /// [`register_class_c`]: super::register_class_c
@@ -145,7 +157,10 @@ pub(crate) fn collect_class_publications(
                 }
             }
         }
-        if !methods.is_empty() {
+        // #1450: a constructible class is published even when it resolves
+        // no method -- lark's `__init__`-only `ParseConf` -- so a host can
+        // name it, build it and hand the result to a compiled function.
+        if !methods.is_empty() || class_constructible(module, class) {
             published.push(ExtPublishedClass {
                 class: class.to_string(),
                 methods,

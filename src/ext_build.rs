@@ -882,13 +882,14 @@ pub(crate) fn resolved_init<'a>(module: &'a HirModule, class: &str) -> Option<Re
 /// canonical statement of D-244's #1145 amendment clause (b), and the
 /// predicate every instance-method exclusion cites.
 ///
-/// *Publication* is decided elsewhere, by [`collect_class_publications`]: a
-/// class gets a type object exactly when its MRO-resolved method set is
-/// non-empty, which since #1145's inheritance fix includes a class that
-/// declares no exportable member of its own. A class with an empty resolved
-/// set gets no type object at all and is not constructible however this
-/// answers. What this function adds is which *published* class gets a
-/// `Py_tp_init`.
+/// *Publication* is decided by [`collect_class_publications`], and this
+/// predicate is one of its two disjuncts: a [`class_publishable`] class gets
+/// a type object when its MRO-resolved method set is non-empty *or* this
+/// answers `true` (#1450), so a constructible class is always published --
+/// an `__init__`-only class with an empty method table included. What this
+/// function adds on top is which published class gets a `Py_tp_init`: a
+/// class published only for its methods and not constructible gets a type
+/// object the host cannot instantiate.
 ///
 /// The four conditions, each a HIR fact rather than a name pattern:
 ///
@@ -950,12 +951,11 @@ fn instance_shape_admissible(class_def: &HirClassDef, class: &str) -> bool {
 /// of restating them (`AGENTS.md`'s canonical-statement rule).
 ///
 /// Publication's third condition -- that the class's MRO-resolved method
-/// set is non-empty -- is deliberately *not* here, and a witness does not
-/// need it: a class that satisfies this predicate and is
-/// [`class_constructible`] carries, in its own MRO, the very method whose
-/// export it is asked to justify, so its resolved set is non-empty by
-/// construction. Stating it here would also be circular, since the
-/// resolved set is built out of the export set this predicate helps
+/// set is non-empty *or* the class is [`class_constructible`] (#1450) -- is
+/// deliberately *not* here, and a witness does not need it: a witness is
+/// required to be [`class_constructible`], which satisfies that condition
+/// on its own. Stating the method half here would also be circular, since
+/// the resolved set is built out of the export set this predicate helps
 /// decide.
 /// Where each conjunct bites: the name half is what a *witness* needs --
 /// a privately named subclass is constructible and unpublished -- and the
@@ -968,9 +968,10 @@ fn instance_shape_admissible(class_def: &HirClassDef, class: &str) -> bool {
 ///
 /// [`instance_shape_admissible`]'s third exclusion, `is_builtin_exception_class`,
 /// is deliberately absent: the synthetic builtin classes `pycc_hir` seeds carry no
-/// public method of their own, so [`collect_class_publications`]'s non-empty
-/// resolved-method-set condition already removes every one of them before this
-/// predicate's answer could matter.
+/// public method of their own and [`class_constructible`] refuses them through
+/// [`instance_shape_admissible`], so neither disjunct of
+/// [`collect_class_publications`]' third condition holds for any of them before
+/// this predicate's answer could matter.
 fn class_publishable(class_def: &HirClassDef, class: &str) -> bool {
     is_public_name(class) && class_def.exception_type_tag.is_none()
 }

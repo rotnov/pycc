@@ -57,13 +57,14 @@ pub(crate) const UNPUBLISHED_CLASS_ISINSTANCE: &str = "pycc_ext_unpublished_clas
 ///
 /// **The class list and each table's rows are resolved upstream.**
 /// `publications` is [`collect_class_publications`]' output: one entry per
-/// class that resolves at least one exported member through its MRO, each
-/// carrying that MRO-resolved method set with a derived override already
-/// shadowing its base's definition. A class that resolves nothing -- one
-/// with a perfectly carriable `__init__` but no public method anywhere in
-/// its MRO -- gets no type object at all and so cannot be constructed. This
-/// function renders that decision and never re-derives it, so the MRO walk
-/// exists once (`AGENTS.md`'s canonical-statement rule).
+/// class that resolves at least one exported member through its MRO or is
+/// constructible, each carrying that MRO-resolved method set with a derived
+/// override already shadowing its base's definition. A constructible class
+/// that resolves nothing -- one with a perfectly carriable `__init__` but no
+/// public method anywhere in its MRO, lark's `ParseConf` (#1450) -- gets a
+/// type object whose method table holds only the sentinel. This function
+/// renders that decision and never re-derives it, so the MRO walk exists
+/// once (`AGENTS.md`'s canonical-statement rule).
 ///
 /// [`collect_class_publications`]: super::collect_class_publications
 ///
@@ -240,7 +241,8 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
 /// class whose pycc MRO contains `C`, in publication order, returning the
 /// first non-zero `PyObject_IsInstance` answer -- `1`, or `-1` with the
 /// exception set (a raising `__class__`, say). A name with no published
-/// descendant -- a private class, one exporting no method, every class of
+/// descendant -- a private class, one exporting no method that the host
+/// cannot construct either, every class of
 /// an embedded build, which publishes nothing -- has no type object to test
 /// against, and falls through to [`UNPUBLISHED_CLASS_ISINSTANCE`], which
 /// answers `0` once it has looked up `__class__` as CPython would.
@@ -332,7 +334,7 @@ pub(crate) fn collect_carrier_classes(module: &HirModule) -> Vec<ExtCarrierClass
 /// which is not NUL-terminated -- has `name` in its MRO.
 ///
 /// A carrier's CPython type says nothing about the pycc hierarchy: a class
-/// that publishes no method gets a base-less type created on demand, and a
+/// that gets no published type object gets a base-less type created on demand, and a
 /// published type has no CPython bases either. The pycc MRO is the answer
 /// CPython gives for the same source, where `type(x)` is the class itself.
 /// `object` gets no test, since `isinstance(o, object)` is never a compiled
