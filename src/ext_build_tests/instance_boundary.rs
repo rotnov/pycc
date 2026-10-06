@@ -138,18 +138,18 @@ fn an_instance_is_admitted_only_for_a_regular_class_of_the_module() {
         );
         let gaps = collect_exports(&at_param).expect_err(label);
         assert_eq!(gaps[0].code, EXT_CAPABILITY_CODE, "{label}");
+        let message = &gaps[0].message;
         assert!(
-            gaps[0].message.contains("parameter `c: Conf`"),
-            "{label}: {}",
-            gaps[0].message
+            message.contains("parameter `c: Conf`"),
+            "{label}: {message}"
         );
 
         let at_return = module_with_classes(vec![func("give", &[], conf())], class_defs);
         let gaps = collect_exports(&at_return).expect_err(label);
+        let message = &gaps[0].message;
         assert!(
-            gaps[0].message.contains("return type `-> Conf`"),
-            "{label}: {}",
-            gaps[0].message
+            message.contains("return type `-> Conf`"),
+            "{label}: {message}"
         );
     }
 }
@@ -176,11 +176,8 @@ fn a_tuple_or_optional_of_instances_stays_a_capability_gap() {
             let gaps = collect_exports(&hir).expect_err(label);
             assert_eq!(gaps.len(), 1, "{label}");
             assert_eq!(gaps[0].code, EXT_CAPABILITY_CODE, "{label}");
-            assert!(
-                gaps[0].message.contains(position),
-                "{label}: {}",
-                gaps[0].message
-            );
+            let message = &gaps[0].message;
+            assert!(message.contains(position), "{label}: {message}");
         }
     }
 }
