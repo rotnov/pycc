@@ -22,6 +22,9 @@
 //!
 //! **`isinstance`** is `PyObject_IsInstance` behind
 //! [`EXT_OBJ_ISINSTANCE_SYMBOL`], whose `-1` takes the same failure edge.
+//! A class compiled in this module (Part 7 of #1371) goes through
+//! [`EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL`] instead, with the class name as a
+//! private global C string, and shares that edge.
 //!
 //! **Membership** (`in`/`not in`) is `PySequence_Contains` behind
 //! [`EXT_OBJ_CONTAINS_SYMBOL`]. The item is always packed -- an object item
@@ -33,7 +36,7 @@
 use super::*;
 use crate::foreign_attr::expect_object_pointer;
 use crate::foreign_fail::{ForeignFailEdge, route_negative, route_null};
-use crate::foreign_pack::{emit_pack, shim_fn};
+use crate::foreign_pack::{emit_pack, none_pointer, shim_fn};
 use inkwell::builder::Builder;
 use inkwell::values::PointerValue;
 use pycc_mir::CmpOpKind;
@@ -56,22 +59,6 @@ fn rich_compare_selector(op: CmpOpKind) -> Option<u64> {
              pycc_mir lowers it to `ObjContains`"
         ),
     }
-}
-
-/// A borrowed pointer to CPython's `None`.
-fn none_pointer<'ctx>(
-    context: &'ctx Context,
-    builder: &Builder<'ctx>,
-    module: &inkwell::module::Module<'ctx>,
-) -> PointerValue<'ctx> {
-    let ptr = context.ptr_type(inkwell::AddressSpace::default());
-    let none_fn = shim_fn(module, EXT_OBJ_NONE_SYMBOL, ptr.fn_type(&[], false));
-    builder
-        .build_call(none_fn, &[], "foreign_none")
-        .expect("build_call should not fail for pycc_ext_obj_none")
-        .try_as_basic_value()
-        .expect_basic("pycc_ext_obj_none returns PyObject *")
-        .into_pointer_value()
 }
 
 /// The `PyObject *` for one operand, and whether a packer produced it (and
@@ -220,6 +207,8 @@ pub(super) enum IsInstanceClass<'ctx> {
     Builtin(u64),
     /// An evaluated object-typed class expression.
     Object(Scalar<'ctx>),
+    /// A class compiled in this module, by name (Part 7 of #1371).
+    Compiled(String),
 }
 
 /// Emits `isinstance(value, class)` once both operands are evaluated.
@@ -238,6 +227,28 @@ pub(super) fn emit_isinstance<'ctx>(
     let (class_ptr, builtin) = match class {
         IsInstanceClass::Builtin(selector) => (ptr.const_null(), selector),
         IsInstanceClass::Object(class) => (expect_object_pointer(class), 0),
+        IsInstanceClass::Compiled(name) => {
+            let name_ptr = builder
+                .build_global_string_ptr(&name, &format!("pycc_isinstance_class_{name}"))
+                .expect("build_global_string_ptr should not fail")
+                .as_pointer_value();
+            let compiled = shim_fn(
+                module,
+                EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL,
+                i32_type.fn_type(&[ptr.into(), ptr.into()], false),
+            );
+            let status = builder
+                .build_call(
+                    compiled,
+                    &[value_ptr.into(), name_ptr.into()],
+                    "foreign_isinstance",
+                )
+                .expect("build_call should not fail for pycc_ext_obj_isinstance_compiled")
+                .try_as_basic_value()
+                .expect_basic("pycc_ext_obj_isinstance_compiled returns int")
+                .into_int_value();
+            return finish_isinstance(context, builder, module, rt, edge, status);
+        }
     };
     let isinstance = shim_fn(
         module,
@@ -258,6 +269,19 @@ pub(super) fn emit_isinstance<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_ext_obj_isinstance returns int")
         .into_int_value();
+    finish_isinstance(context, builder, module, rt, edge, status)
+}
+
+/// Routes an `isinstance` helper's `-1` to the operation's failure edge and
+/// narrows its `1`/`0` to the `bool` result.
+fn finish_isinstance<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    edge: ForeignFailEdge<'ctx>,
+    status: inkwell::values::IntValue<'ctx>,
+) -> Scalar<'ctx> {
     route_negative(
         context,
         builder,

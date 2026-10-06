@@ -79,11 +79,7 @@ fn a_non_packable_argument_is_refused() {
         "I0404",
         "passing a `list[int]` argument to a CPython object's call",
     );
-    refused(
-        "product['a'](None)\n",
-        "I0404",
-        "argument to a CPython object's call",
-    );
+    // Part 8 of #1371 admits a `None` argument (`keyword_call_tests.rs`).
 }
 
 /// The callee is checked before the arguments (CPython's evaluation order):

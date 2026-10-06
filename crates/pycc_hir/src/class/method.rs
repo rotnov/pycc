@@ -202,6 +202,7 @@ pub(super) fn lower_method(
     if defaults.iter().all(Option::is_none) {
         defaults.clear();
     }
+    let params = equality_operand_as_object(params, method_name, kind, &defaults, aliases);
     let return_ty = crate::lower_return_annotation(
         def.returns.as_deref(),
         is_public,
@@ -297,6 +298,43 @@ pub(super) fn lower_method(
         params,
         (mangled_name, defaults),
     ))
+}
+
+/// #1387: in an `--ext` module, the unannotated operand of `__eq__` or
+/// `__ne__` is the opaque CPython `object` (D-258) instead of an inference
+/// variable.
+///
+/// Python's data model fixes that operand's type: `x == y` hands the method
+/// whatever `y` is, which is why typeshed spells `object.__eq__`'s operand
+/// `object`, and why an unannotated operand -- lark's `ParserState.__eq__`
+/// writes `def __eq__(self, other) -> bool` -- has no call site the solver
+/// could infer it from. Left as `Ty::Infer` it is `T0021` ("cannot infer
+/// type of parameter").
+///
+/// The rule is deliberately narrow: a regular method (not a static method,
+/// class method or property, none of which the data model calls with an
+/// operand), named exactly `__eq__` or `__ne__`, with exactly one parameter
+/// after the receiver, which carries neither an annotation nor a default.
+/// An annotated operand keeps its annotation, a defaulted one keeps #1409's
+/// default-derived type, and a `native` module keeps `T0021`, since `object`
+/// is not spellable in a `native` annotation (`docs/TYPE_SYSTEM.md`).
+fn equality_operand_as_object(
+    mut params: Vec<(String, Ty)>,
+    method_name: &str,
+    kind: &MethodKind,
+    defaults: &[Option<HirExpr>],
+    aliases: &[(String, Ty)],
+) -> Vec<(String, Ty)> {
+    let applies = matches!(kind, MethodKind::Regular { .. })
+        && matches!(method_name, "__eq__" | "__ne__")
+        && crate::func::is_ext_module(aliases)
+        && params.len() == 2
+        && params[1].1 == Ty::Infer
+        && defaults.get(1).is_none_or(Option::is_none);
+    if applies {
+        params[1].1 = Ty::Object;
+    }
+    params
 }
 
 /// What [`lower_method`] produces: the lowered item, the method's full

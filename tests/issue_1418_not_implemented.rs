@@ -122,6 +122,71 @@ fn not_implemented_from_a_comparison_method_behaves_like_cpython_in_the_host() {
     assert_eq!(stdout_of(&compiled), REPORT_OUT);
 }
 
+/// The subject's whole `ParserState.__eq__` (lines 51-54): an unannotated
+/// operand, an `isinstance` guard against the pycc class itself, and a final
+/// `return` that is an `and` of a native `bool` with an object comparison.
+/// That last `return` stayed `T0022` (an object into the `-> bool` slot)
+/// until the `return NotImplemented` widened the method's return to the
+/// object.
+const SUBJECT_SOURCE: &str = "from typing import Any\n\
+    \n\
+    \n\
+    class ParserState:\n\
+    \x20   def __init__(self, stack: Any) -> None:\n\
+    \x20       self.state_stack = stack\n\
+    \n\
+    \x20   @property\n\
+    \x20   def position(self) -> Any:\n\
+    \x20       return self.state_stack[-1]\n\
+    \n\
+    \x20   def __eq__(self, other) -> bool:\n\
+    \x20       if not isinstance(other, ParserState):\n\
+    \x20           return NotImplemented\n\
+    \x20       return len(self.state_stack) == len(other.state_stack) \
+    and self.position == other.position\n\
+    \n\
+    \x20   def eq(self, o: Any) -> Any:\n\
+    \x20       return self.__eq__(o)\n";
+
+/// Prints what the subject's `__eq__` returns for operands it does not
+/// handle. A handled operand (another `ParserState`) is left out: the
+/// method then reads `other.state_stack` through the object, and a compiled
+/// instance does not publish its fields to CPython attribute lookup yet.
+fn subject_report(load: &str) -> String {
+    format!(
+        "{load}\n\
+         s = ns['ParserState']([1, 2])\n\
+         for arg in (3, 'x', None):\n\
+         \x20   r = s.eq(arg)\n\
+         \x20   print(type(r).__name__, r is NotImplemented)\n"
+    )
+}
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn the_subjects_whole_eq_builds_and_refuses_an_unhandled_operand_like_cpython() {
+    let dir = ScratchDir::new("not_implemented_subject").expect("scratch");
+    let built = build(&dir, "pycc_not_implemented_subject", SUBJECT_SOURCE);
+    assert!(built.status.success(), "{}", stderr_of(&built));
+    let compiled = python(
+        &dir,
+        &subject_report(
+            "import pycc_not_implemented_subject\nns = vars(pycc_not_implemented_subject)",
+        ),
+    );
+    assert_ok(&compiled);
+    let oracle = python(
+        &dir,
+        &subject_report("import runpy\nns = runpy.run_path('m.py')"),
+    );
+    assert_ok(&oracle);
+    assert_eq!(stdout_of(&compiled), stdout_of(&oracle));
+    assert_eq!(
+        stdout_of(&compiled),
+        "NotImplementedType True\nNotImplementedType True\nNotImplementedType True\n"
+    );
+}
+
 #[test]
 fn not_implemented_elsewhere_in_an_ext_module_is_refused() {
     let dir = ScratchDir::new("not_implemented_refused").expect("scratch");

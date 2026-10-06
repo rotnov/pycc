@@ -1184,6 +1184,10 @@ pub(crate) struct ExtPublishedClass {
     /// row names a `pycc_ext_wrap_` that [`generate_exports_inc`] really
     /// emits.
     pub(crate) methods: Vec<ExtExport>,
+    /// The class's MRO, most derived first (`HirClassDef::mro`): the
+    /// classes an object `isinstance` against which this class's type
+    /// object answers (Part 7 of #1371, `compiled_class_isinstance_c`).
+    pub(crate) mro: Vec<String>,
 }
 
 /// The published classes and, for each, its MRO-resolved method set.
@@ -1295,6 +1299,7 @@ pub(crate) fn collect_class_publications(
             published.push(ExtPublishedClass {
                 class: class.to_string(),
                 methods,
+                mro: class_def.mro.clone(),
             });
         }
     }

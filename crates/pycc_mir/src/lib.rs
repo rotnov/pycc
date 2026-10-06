@@ -472,6 +472,14 @@ pub enum MirExpr {
         callee: Box<MirExpr>,
         args: Vec<MirExpr>,
     },
+    /// Part 8 of #1371: a call of a CPython object that passes keyword
+    /// arguments -- `o.method(x, key=v)`, `f(a, b=c)` with `f` a foreign
+    /// function, `Cls(arg, flag=True)` with `Cls` a foreign class -- lowered
+    /// from `pycc_hir`'s `HirExpr::KeywordCall` once `pycc_types` admitted
+    /// its callee as an object. Boxed so the enum does not grow (see
+    /// [`ObjKeywordCall`]); [`MirExpr::ty`] answers [`Ty::Object`] for it,
+    /// as for the positional call it wraps.
+    ObjKeywordCall(Box<ObjKeywordCall>),
     /// `len(base)` where `base` is a foreign CPython object (D-244, Part 3
     /// of #1026, PR 3a of #1082). The result is always [`Ty::Int`], so the
     /// variant carries no `ty` field -- the same size argument
@@ -581,6 +589,18 @@ pub enum MirExpr {
         stop: Option<Box<MirExpr>>,
         step: Option<Box<MirExpr>>,
     },
+    /// A list display `[e1, e2, ...]` bound to a CPython object slot (Part
+    /// 2d of #1371, D-258 rule 4): a fresh CPython `list` built by
+    /// `PyList_New`, each element boxed through a `pycc_ext_obj_pack_*`
+    /// helper and evaluated left to right. A node of its own rather than a
+    /// [`MirExpr::ListLiteral`], whose `ty()` answers a native `list[T]`;
+    /// [`MirExpr::ty`] answers [`Ty::Object`]. It can raise (a failed
+    /// element box or allocation), so
+    /// `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for it.
+    ObjList {
+        elements: Vec<MirExpr>,
+    },
     /// `isinstance(value, class)` where `value` is a CPython object (Part 1
     /// of #1371): a run-time `PyObject_IsInstance`, which can raise (a
     /// class argument that is not a class, or a raising
@@ -588,6 +608,20 @@ pub enum MirExpr {
     ObjIsInstance {
         value: Box<MirExpr>,
         class: ObjIsInstanceClass,
+    },
+    /// The value of a tuple-unpacking assignment `t1, ..., tn = value`
+    /// whose `value` is a CPython object (Part 1 of #891): CPython's own
+    /// unpack protocol -- iterate `value`, take exactly `arity` items --
+    /// collecting the items into a fresh `tuple`. [`MirExpr::ty`] answers
+    /// [`Ty::Object`]; each target is then bound by an ordinary
+    /// [`MirExpr::ObjSubscript`] of that tuple. It can raise (a
+    /// non-iterable, a wrong item count, a raising `__iter__`/`__next__`),
+    /// so `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for it. A native tuple value never reaches this node: its
+    /// arity is checked statically, and the value passes through unchanged.
+    ObjUnpack {
+        value: Box<MirExpr>,
+        arity: usize,
     },
     /// `b[i]` where `b` is a `pycc build --ext` export's `memoryview`
     /// parameter (Part 2 of #1027): a bounds-checked native `float` element
@@ -829,8 +863,14 @@ pub enum MirCompElt {
 
 impl MirComprehension {
     /// The produced container type, derived from the element types exactly
-    /// as the statement form's binding of `target` is.
+    /// as the statement form's binding of `target` is. A comprehension over
+    /// a CPython object ([`CompSource::Object`], Part 1 of #1255) produces a
+    /// CPython `list` or `set`, which is the opaque [`Ty::Object`] whatever
+    /// its elements are.
     pub fn ty(&self) -> Ty {
+        if let CompSource::Object(_) = self.source {
+            return Ty::Object;
+        }
         match &self.elt {
             MirCompElt::List(elt) => Ty::List(Box::new(elt.ty())),
             MirCompElt::Set(elt, _) => Ty::Set(Box::new(elt.ty())),
@@ -847,6 +887,25 @@ pub enum InstanceHashVia {
     /// A user `__hash__`: the operand is the call to it, whose `int` or
     /// `bool` result becomes the hash as CPython's `slot_tp_hash` does.
     Method,
+}
+
+/// The payload of [`MirExpr::ObjKeywordCall`] (Part 8 of #1371).
+///
+/// `call` is the positional half of the call, exactly the node the same
+/// call without its keywords lowers to: a [`MirExpr::ObjMethodCall`] or a
+/// [`MirExpr::ObjCall`]. `names` and `values` are the keyword arguments in
+/// source order, one name per value; `pycc_parser` already refuses a
+/// repeated name (`L0001`), so the names are distinct. Codegen evaluates the
+/// callee (and, for a method call, looks the method up), then the
+/// positional arguments, then the keyword values, which is CPython's order,
+/// and marshals the values after the positional arguments in one vectorcall
+/// argument array with the names as its `kwnames` tuple. The values follow
+/// the positional argument rule (`pycc_types`' `check_object_call_args`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjKeywordCall {
+    pub call: MirExpr,
+    pub names: Vec<String>,
+    pub values: Vec<MirExpr>,
 }
 
 /// `MirExpr::Instantiate`'s payload, boxed (not inlined into that variant
@@ -1011,7 +1070,9 @@ impl MirExpr {
             // opaque by construction (see the variant's own documentation,
             // which also records why it carries no field where `ObjAttrGet`
             // does).
-            MirExpr::ObjMethodCall { .. } | MirExpr::ObjCall { .. } => Ty::Object,
+            MirExpr::ObjMethodCall { .. }
+            | MirExpr::ObjCall { .. }
+            | MirExpr::ObjKeywordCall(_) => Ty::Object,
             // Likewise hardcoded: `len` is an `int` for every operand the
             // shim can answer for. See the variant's own documentation.
             MirExpr::ObjLen { .. } => Ty::Int,
@@ -1031,7 +1092,7 @@ impl MirExpr {
             }
             MirExpr::ObjIsInstance { .. } | MirExpr::ObjContains { .. } => Ty::Bool,
             // Part 2b of #1371: CPython's own slice result, opaque.
-            MirExpr::ObjSlice { .. } => Ty::Object,
+            MirExpr::ObjSlice { .. } | MirExpr::ObjList { .. } => Ty::Object,
             // Hardcoded for `ObjLen`'s reason, not `ObjSubscript`'s: the
             // element type is known, it is just not recoverable from the
             // base. A `memoryview` parameter is one-dimensional and `"d"`-
@@ -1065,6 +1126,7 @@ impl MirExpr {
             MirExpr::ObjUnpackFloatTuple { arity, .. } => {
                 Ty::Tuple(Box::new(vec![Ty::Float; *arity]))
             }
+            MirExpr::ObjUnpack { .. } => Ty::Object,
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
             MirExpr::ExceptionTypeTest { .. } => Ty::Bool,
@@ -1153,6 +1215,7 @@ impl MirExpr {
                 }
             }
             MirExpr::ListLiteral(elements)
+            | MirExpr::ObjList { elements }
             | MirExpr::SetLiteral { elements, .. }
             | MirExpr::TupleLiteral(elements) => {
                 for element in elements {
@@ -1229,7 +1292,9 @@ impl MirExpr {
             // PR 4c of #1083: the base is the node's only child -- `arity`
             // is a `usize`, not an expression -- so a walrus can hide only
             // there (`x: tuple[float, float] = (o := numpy).pair`).
-            | MirExpr::ObjUnpackFloatTuple { base, .. } => base.collect_named_expr_bindings(out),
+            | MirExpr::ObjUnpackFloatTuple { base, .. }
+            // Part 1 of #891: the unpacked value is the only child.
+            | MirExpr::ObjUnpack { value: base, .. } => base.collect_named_expr_bindings(out),
             // Both sides, unlike `ObjAttrGet` directly above: a walrus can
             // hide in an argument (`numpy.seed((n := 1))`) just as easily as
             // in the base, and a binding missed here is a name codegen never
@@ -1242,6 +1307,14 @@ impl MirExpr {
                 base.collect_named_expr_bindings(out);
                 for arg in args {
                     arg.collect_named_expr_bindings(out);
+                }
+            }
+            // Part 8 of #1371: the positional half, then every keyword
+            // value (`o.m(k=(n := 1))`).
+            MirExpr::ObjKeywordCall(call) => {
+                call.call.collect_named_expr_bindings(out);
+                for value in &call.values {
+                    value.collect_named_expr_bindings(out);
                 }
             }
             // Both sides too, for the identical reason: a walrus can hide in
@@ -1615,6 +1688,13 @@ pub enum CompSource {
     List(String),
     Dict(String),
     Set(String),
+    /// A CPython object iterated through the iterator protocol (Part 1 of
+    /// #1255): the iterable expression, evaluated once in the enclosing
+    /// scope. Its loop variable is a CPython object, and the comprehension
+    /// produces a CPython `list` or `set` ([`MirComprehension::ty`]). Only
+    /// the expression form carries it: `pycc_hir` lowers the statement form
+    /// of such a comprehension to a plain assignment.
+    Object(MirExpr),
 }
 
 #[derive(Debug, PartialEq)]
@@ -2304,6 +2384,15 @@ pub(crate) fn resolve_comp_source(
                 other.name()
             ),
         },
+        // Part 1 of #1255: `pycc_types` proved the iterable a CPython
+        // object, so the loop variable is one too. The iterable is lowered
+        // before `var` is bound, so it reads only the enclosing bindings.
+        CompIter::Iterable(iterable) => {
+            let iterable = lower_expr(iterable, scopes, classes, current_class);
+            bind_variable(scopes, var.to_string(), Ty::Object);
+            kill_narrowing(scopes, var);
+            (CompSource::Object(iterable), Ty::Object)
+        }
     }
 }
 
