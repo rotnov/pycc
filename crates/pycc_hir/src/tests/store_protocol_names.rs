@@ -111,6 +111,13 @@ fn a_setattr_property_setter_without_a_getter_keeps_its_own_message() {
     let diagnostic = lower_checked(&module).unwrap_err();
     assert_eq!(diagnostic.code, "C0001");
     assert!(
+        diagnostic
+            .message
+            .contains("a `@__setattr__.setter` decorator requires a preceding"),
+        "{}",
+        diagnostic.message
+    );
+    assert!(
         !diagnostic.message.contains("#1459"),
         "{}",
         diagnostic.message

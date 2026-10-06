@@ -135,9 +135,12 @@
 //!   the two names `DATACLASS_IMPLICIT_DUNDERS` omits (`__new__`,
 //!   `__init_subclass__`) on the dataclass path, without disturbing the six
 //!   messages that set already owns: `super::body` runs its own check first.
-//! * The three checks inside [`reject_reserved_class_attr_name`] run in a
+//! * The four checks inside [`reject_reserved_class_attr_name`] run in a
 //!   **fixed order**: `__slots__`, then the instantiation-protocol names,
-//!   then #979's `_EnumDict` shapes. `__slots__`, `__init__`, `__new__` and
+//!   then #979's `_EnumDict` shapes, then #1459's attribute-store protocol
+//!   names, which sit last for the same reason: on the `Enum` route the
+//!   shape check answers `__setattr__ = 1` first and keeps #979's message.
+//!   `__slots__`, `__init__`, `__new__` and
 //!   `__init_subclass__` are all dunder-shaped, so putting the shape check
 //!   first would silently repoint every one of their pinned messages on the
 //!   `Enum` route -- including the one asserted by
