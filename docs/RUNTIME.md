@@ -623,15 +623,16 @@ at HIR lowering with `C0001`, every multiple-inheritance shape whose ancestor
 layout is not a name-wise prefix of the derived one -- see that function's own
 documentation for why that is the condition.
 
-*Which classes are constructible.* A published class is **constructible**
+*Which classes are constructible.* A class is **constructible**
 exactly when it is not abstract, not a `Protocol` and not an enum; it is not a
 user or builtin exception class; its MRO-resolved `__init__` returns `None`;
 and every parameter of that `__init__` after `self` is carriable by the table
-below and is not a `tuple`. A constructible class's type object drops
+below and is not a `tuple`. A published class that is constructible gets a
+type object that drops
 `Py_TPFLAGS_DISALLOW_INSTANTIATION`, gains a `tp_init`, and the host writes
 `mod.Class(...).method(...)`; a class that is not constructible keeps the
 non-instantiable shape above, so `mod.Class()` raises `TypeError`. A class
-published only for what it inherits is constructible on these same terms, so
+that declares no member of its own is constructible on these same terms, so
 `mod.Derived(21)` works while `mod.Base(...)` may refuse.
 
 An instance method is exported when its **declaring** class is not abstract,

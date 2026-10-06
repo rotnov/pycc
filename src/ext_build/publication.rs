@@ -77,9 +77,10 @@ pub(crate) struct ExtPublishedClass {
 /// **Which classes get a type object.** A publishable class (below) is
 /// published when its MRO-resolved set is non-empty *or* it is
 /// constructible ([`class_constructible`], D-244 #1145 clause (b)), so an
-/// `__init__`-only class -- lark's `ParseConf` (#1450) -- and a class with
-/// only the implicit `object.__init__` (`class Empty: pass`, a fields-only
-/// dataclass) are published with an empty method table: the host can name
+/// `__init__`-only class -- lark's `ParseConf` (#1450), or a fields-only
+/// dataclass, whose generated `__init__` is its only member -- and
+/// a class with only the implicit `object.__init__` (`class Empty: pass`)
+/// are published with an empty method table: the host can name
 /// them, construct them, and pass the instance to a compiled function. A
 /// publishable class that resolves nothing and is not constructible --
 /// an `__init__` with an uncarriable parameter, an enum, a Protocol -- still
