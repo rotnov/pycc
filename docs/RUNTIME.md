@@ -1648,6 +1648,37 @@ until [#1040](https://github.com/rotnov/pycc/issues/1040) -- takes the node's
 foreign failure edge. The hosted test runs the object-operand shapes 200 times
 inside a function and pins `sys.getrefcount` of each object operand unchanged.
 
+**A raised object is CPython's own `raise`.** Part 9 of
+[#1371](https://github.com/rotnov/pycc/issues/1371) lowers `raise o`, for an
+object `o`, to `MirStmt::ObjRaise` and to one call of
+`pycc_ext_obj_raise(o)`, which returns `void`. The helper mirrors CPython's
+`raise`. An exception instance is raised as it is. An exception class is
+called with no arguments: a constructor that fails raises its own exception,
+and one that returns a non-exception raises CPython's `TypeError` ("calling
+... should have returned an instance of BaseException"). Any other value
+raises `TypeError: exceptions must derive from BaseException`. A `NULL`
+operand raises `SystemError` as a defence. The instance is set with
+`PyErr_SetObject`, as CPython's `raise` does. That keeps its identity, and
+sets its implicit `__context__` from the exception CPython is handling, such
+as the host's own `except` around the call. A pycc `except` handler is not a
+CPython handler, so an object raised inside one gets no `__context__` from
+the pycc exception it handles. Every path ends in
+`pycc_ext_obj_error_bridge()`, so the raise always becomes the pending pycc
+exception through the same tag map as a failed object operation, and the
+original object is kept for `pycc_ext_raise_pending` to restore. An uncaught
+`raise o` therefore reaches the host as the identical object, not as a
+copy. The operand is borrowed (an operand produced by a call is leaked on
+the same terms as any object call result). The statement ends its block
+exactly like a native `raise`, with `unreachable` that the body emitter
+replaces with a branch to the innermost exception target. It does not take
+the module-exec failure edge, so a module-level `try` still catches it
+(`crates/pycc_codegen/src/foreign_raise.rs`). Two shapes are refused at
+check time: `raise ... from ...` with an object as the exception or the
+cause (`C0001`), and an `except` clause naming a foreign class (`T0021`).
+`except Exception` and the builtin classes catch an object raise through
+the tag map. The hosted tests compare the caught, uncaught and embedded
+(D-248) results with CPython 3.14.7 (`tests/issue_1371_object_raise.rs`).
+
 `len`, a truth test, Part 4's four conversions and Part 4's tuple unpack are
 the operations that add nothing to that leaked set. `pycc_ext_obj_len` answers a `Py_ssize_t` and
 `pycc_ext_obj_truthy` answers a C `int`; neither creates a reference and neither

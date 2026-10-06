@@ -21,6 +21,8 @@ pub(crate) fn block_always_terminates(body: &[MirStmt]) -> bool {
             | MirStmt::ReturnBufferSlice { .. }
             | MirStmt::Raise { .. }
             | MirStmt::RaiseFrom { .. }
+            // Part 9 of #1371: `raise o` always raises, whatever `o` is.
+            | MirStmt::ObjRaise { .. }
             | MirStmt::Reraise
             | MirStmt::Unreachable => true,
             MirStmt::If { body, orelse, .. } => {

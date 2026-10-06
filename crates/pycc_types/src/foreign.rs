@@ -530,6 +530,8 @@ mod in_function_tests;
 #[cfg(test)]
 mod keyword_call_tests;
 #[cfg(test)]
+mod raise_tests;
+#[cfg(test)]
 mod subscript_call_tests;
 #[cfg(test)]
 mod tests;

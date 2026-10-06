@@ -333,6 +333,17 @@ pub const EXT_OBJ_BUILD_LIST_SYMBOL: &str = "pycc_ext_obj_build_list";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_DELSLICE_SYMBOL: &str = "pycc_ext_obj_delslice";
 
+/// The fixed C shim's `raise o` helper (Part 9 of #1371): `void
+/// pycc_ext_obj_raise(PyObject *o)` with `o` borrowed. It decides what is
+/// raised the way CPython's own `raise` does -- an exception class is
+/// instantiated, an instance is raised as it is, and anything else raises
+/// `TypeError` -- then always bridges the CPython exception into a pending
+/// pycc exception, so the caller ends the block exactly like a native
+/// `raise`.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_RAISE_SYMBOL: &str = "pycc_ext_obj_raise";
+
 /// The fixed C shim's `None` accessor (Part 1 of #1371): a *borrowed*
 /// pointer to CPython's immortal `None`, the right-hand side of `o is None`
 /// and, since Part 8 of #1371, the value a `None` call argument is packed
@@ -870,6 +881,7 @@ pub fn body_returns_buffer_slice(body: &[pycc_mir::MirStmt]) -> bool {
         | MirStmt::Return(_)
         | MirStmt::AttrSet { .. }
         | MirStmt::ObjDelSlice { .. }
+        | MirStmt::ObjRaise { .. }
         | MirStmt::Raise { .. }
         | MirStmt::RaiseFrom { .. }
         | MirStmt::ForeignImport { .. }

@@ -2333,6 +2333,64 @@ int pycc_ext_obj_delslice(PyObject *o, PyObject *start, PyObject *stop, PyObject
 }
 
 /*
+ * Part 9 of #1371: `raise o` with a CPython object `o`
+ * (`EXT_OBJ_RAISE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * Decides what is raised in the order CPython's own `raise` does:
+ *
+ *  - an exception class is called with no arguments, and its result must
+ *    be an exception instance: a raising constructor's own exception is the
+ *    one raised, and any other result raises `TypeError` with CPython's
+ *    own message;
+ *  - an exception instance is raised as it is;
+ *  - anything else raises `TypeError: exceptions must derive from
+ *    BaseException`.
+ *
+ * The instance is set with `PyErr_SetObject`, as CPython's `raise` does,
+ * not `PyErr_SetRaisedException`: it keeps the instance's identity and also
+ * sets its implicit `__context__` from the exception CPython is handling,
+ * such as the host's own `except` block around the call. A pycc `except`
+ * handler is not a CPython handler, so an object raised inside one gets no
+ * `__context__` from the pycc exception it handles.
+ *
+ * It then hands the CPython exception to `pycc_ext_obj_error_bridge`, which
+ * makes it a pending pycc exception and keeps the original in the bridge
+ * table. The caller branches to its innermost exception target, so an
+ * enclosing `try` runs in a function body and in the module body alike,
+ * and an exception that escapes reaches the host as the original object.
+ *
+ * `o` is borrowed. Total: on return a pycc exception is always pending and
+ * CPython's error indicator is clear. A NULL `o` is the same defence in
+ * depth `pycc_ext_obj_get_iter` documents, and bridges a `SystemError`.
+ */
+void pycc_ext_obj_raise(PyObject *o)
+{
+    PyObject *instance;
+
+    if (o == NULL) {
+        PyErr_SetString(PyExc_SystemError, "pycc: raise of a missing CPython object");
+    } else if (PyExceptionClass_Check(o)) {
+        instance = PyObject_CallNoArgs(o);
+        if (instance == NULL) {
+            /* The constructor's own exception is the one raised. */
+        } else if (!PyExceptionInstance_Check(instance)) {
+            PyErr_Format(PyExc_TypeError,
+                         "calling %R should have returned an instance of BaseException, not %R",
+                         o, (PyObject *)Py_TYPE(instance));
+            Py_DECREF(instance);
+        } else {
+            PyErr_SetObject((PyObject *)Py_TYPE(instance), instance);
+            Py_DECREF(instance);
+        }
+    } else if (PyExceptionInstance_Check(o)) {
+        PyErr_SetObject((PyObject *)Py_TYPE(o), o);
+    } else {
+        PyErr_SetString(PyExc_TypeError, "exceptions must derive from BaseException");
+    }
+    (void)pycc_ext_obj_error_bridge();
+}
+
+/*
  * Part 3 of #1026 (PR 3c of #1082): `iter(o)` for a `for x in <object>:`
  * loop (`EXT_OBJ_GET_ITER_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *
