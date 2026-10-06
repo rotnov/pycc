@@ -21,12 +21,18 @@
 //! abstract class still answers its instance here, so the check phase's
 //! precise `C0001` is what the program is refused with, rather than a
 //! misleading "cannot infer return type". A protocol class answers nothing:
-//! its instance would let `method_return` type `P().f()` against a class
-//! whose stub methods are not callable members, and that term's `T0044`
-//! would displace the check phase's "cannot instantiate protocol class"
-//! (`crate::module::merge_solver_first`), so the helper keeps its prior
-//! `T0021`. An enum class never reaches the solver: HIR lowering refuses
-//! `E(...)` itself (`pycc_hir::enum_class_call_message`). The arguments
+//! with `_mk` inferred as `P`, the check phase's own `resolve_method_call`
+//! would refuse a top-level `_mk().f()` with `T0044` (a protocol's stub
+//! methods are `protocol_members`, not callable `methods`), and that
+//! pass-2 error is reported alone, masking the pass-3 "cannot instantiate
+//! protocol class" of `_mk`'s body (`crate::module`'s pass ordering). So
+//! the helper keeps its prior `T0021`. An enum call is refused by HIR
+//! lowering itself (`pycc_hir::enum_class_call_message`) in all but the
+//! order-dependent shapes `class::binding` documents; there the check
+//! phase's `C0001` stays the refusal, though a top-level use of the
+//! helper's result may report its own error first. The guard is
+//! deliberately protocol-only: the protocol case is the one pinned shape
+//! where the instance answer replaced a refusal with a misleading one. The arguments
 //! are collected by the `Call` arm for their own constraints but
 //! deliberately not unified with `__init__`'s parameters, on
 //! `method_return`'s reasoning for a method call: a method parameter is never

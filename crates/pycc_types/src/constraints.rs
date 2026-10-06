@@ -237,7 +237,7 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     ///
     /// The check phase needs no equivalent -- `env.lookup_class` and
     /// `env.lookup_generic` already run ahead of its interception -- but
-    /// this seam does not consult `ConstraintEnvironment`'s class table
+    /// this buffer-producer seam does not consult `ConstraintEnvironment`'s class table
     /// (`class_defs`, keyed by the canonical class name), and `signatures`
     /// covers only `def`s. Seeded once per module in
     /// `constraints::signatures` from the HIR's own class table, per
@@ -271,9 +271,10 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// whose answer displaces the check phase's.
     pub(crate) finals: HashSet<String>,
     /// #1420: the module's class table (`HirModule::class_defs`), read
-    /// only by the `MethodCall` arm to resolve `recv.m(...)` on a
-    /// user-class instance to the method's return term
-    /// (`method_return::method_call_on_instance`). Shared by every
+    /// by the `MethodCall` arm to resolve `recv.m(...)` on a user-class
+    /// instance to the method's return term
+    /// (`method_return::method_call_on_instance`) and, since #1342, by the
+    /// `Call` arm's constructor term (`constructor_call`). Shared by every
     /// environment of one module; empty in a unit-test environment.
     pub(crate) class_defs: &'hir [(String, pycc_hir::HirClassDef)],
 }
@@ -1584,8 +1585,9 @@ pub(crate) fn collect_expr_constraints(
                 // classification as the final validation pass, rather than
                 // deferring with `Ok(None)` -- the builtin genuinely exists
                 // in Python 3.14, so it is a capability gap, not an
-                // unresolved callee. A genuinely unknown name still returns
-                // `Ok(None)` and defers to final validation's `T0021`.
+                // unresolved callee. A name that is neither a signature, a known
+                // builtin, nor a user class still returns `Ok(None)` and
+                // defers to final validation's `T0021`.
                 //
                 // Part 1 of #1319: the solver half of `crate::expr`'s
                 // `frozenset(...)` arm. `signatures` has already missed, so a

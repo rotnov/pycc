@@ -123,9 +123,11 @@ fn an_abstract_class_keeps_the_check_phases_precise_refusal() {
 
 #[test]
 fn a_protocol_class_answers_nothing_and_keeps_the_prior_t0021() {
-    // An instance answer would let #1420's method term report a `T0044`
-    // over the protocol's stub `f`, displacing the check phase's refusal;
-    // answering nothing keeps the base tree's diagnostic.
+    // An instance answer would make the check phase's method resolution
+    // refuse the top-level `_mk().f()` with `T0044` (the protocol's stub `f`
+    // is not a callable member), and that pass-2 error masks the pass-3
+    // "cannot instantiate protocol class"; answering nothing keeps the base
+    // tree's diagnostic.
     let source = "from typing import Protocol\n\nclass P(Protocol):\n    \
         def f(self) -> int: ...\n\ndef _mk():\n    return P()\n\nprint(_mk().f())\n";
     refused(
