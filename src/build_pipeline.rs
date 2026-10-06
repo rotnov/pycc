@@ -342,7 +342,7 @@ fn plan_ext(
         eprintln!("error: {}", e.message());
         ExitCode::from(2)
     })?;
-    let exports = ext_build::collect_exports(typed_hir).map_err(|gaps| {
+    let mut exports = ext_build::collect_exports(typed_hir).map_err(|gaps| {
         // Span-less `C0003`s (a lowered `HirItem::Function` carries no
         // source range), so the empty source text below is never read:
         // `pycc_diag::render_human` renders a span-less diagnostic as
@@ -388,8 +388,16 @@ fn plan_ext(
     // `scripts/check_diff_coverage.py` then reports as an uncovered
     // changed line (D-242 rule 1).
     let classes = ext_build::collect_user_exception_classes(typed_hir);
+    // #1461: which exports a host call may name keywords for is read from
+    // the entry source itself (see `ext_build::keywords`), and bound before
+    // `collect_class_publications` copies the method exports.
+    let signatures = ext_build::SourceSignatures::from_source(
+        &std::fs::read_to_string(source_path).unwrap_or_default(),
+    );
+    ext_build::bind_keyword_names(typed_hir, &signatures, &mut exports);
     let publications = ext_build::collect_class_publications(typed_hir, &exports);
-    let ctors = ext_build::collect_constructors(typed_hir, &publications);
+    let mut ctors = ext_build::collect_constructors(typed_hir, &publications);
+    ext_build::bind_ctor_keyword_names(typed_hir, &signatures, &mut ctors);
     let carriers = ext_build::collect_carrier_classes(typed_hir);
     let inc_body = ext_build::generate_exports_inc(
         &output.module_name,

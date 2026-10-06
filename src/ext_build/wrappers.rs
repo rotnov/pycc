@@ -14,7 +14,7 @@ use pycc_types::Ty;
 use super::carrier::{
     BUFFER_VIEW_C_TYPE, BoundaryCarrier, SlotCleanup, boundary_carrier, return_c_type,
 };
-use super::{ExtExport, ExtReceiver, defaults, source_level_name};
+use super::{ExtExport, ExtReceiver, defaults, keywords, source_level_name};
 
 /// One export's or constructor's slot vector, with Part 1 of #1142's
 /// writability applied.
@@ -54,10 +54,13 @@ pub(crate) fn slot_carriers(params: &[Ty], param_writable: &[bool]) -> Vec<Bound
 ///
 /// `METH_FASTCALL` rather than `METH_VARARGS` for two reasons. It is the
 /// only limited-API calling convention that receives the argument count
-/// directly, so arity and type checking cost no tuple; and CPython itself
-/// raises the keyword `TypeError` before the wrapper is entered, which is
-/// exactly D-244 rule 7's closed boundary for free -- a `METH_VARARGS`
-/// wrapper would silently accept `f(x=1)` at the C level.
+/// directly, so arity and type checking cost no tuple; and without
+/// `METH_KEYWORDS` CPython itself raises the keyword `TypeError` before the
+/// wrapper is entered, which is D-244 rule 7's closed boundary for free --
+/// a `METH_VARARGS` wrapper would silently accept `f(x=1)` at the C level.
+/// An export whose keywords the driver can bind as CPython does (#1461,
+/// [`ExtExport::keyword_names`]) adds `METH_KEYWORDS` and takes `kwnames`,
+/// binding through `keywords::fastcall_prologue` before the arity check.
 ///
 /// A scalar-only signature's call goes through `fnptr_<name>`, the
 /// module-level function-pointer global codegen emits for each `def`'s
@@ -142,8 +145,9 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
     // that is *not* a C identifier: the host reads it, so it renders the
     // source-level spelling. Left alone it would say
     // `Grid.scale.static() takes exactly 1 argument` next to CPython's own
-    // `Grid.scale() takes no keyword arguments` on the same object. The
-    // unpack helpers below take the same spelling for the same reason.
+    // `Grid.scale() takes no keyword arguments` on the same object (or the
+    // keyword binder's messages, #1461). The unpack helpers below take the
+    // same spelling for the same reason.
     let source_name = source_level_name(name);
     // A `@classmethod`'s compiled signature leads with `cls` and an
     // instance method's with `self` (`ExtExport::receiver`); neither is a
@@ -180,9 +184,23 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
     } else {
         out.push_str(&format!("extern void *fnptr_{symbol};\n"));
     }
+    // #1461: a keyword-enabled export takes `METH_KEYWORDS`' fourth
+    // argument and binds through its name table; every other wrapper keeps
+    // the three-argument signature byte for byte. The flag side of the same
+    // predicate is `keywords::method_flags`.
+    let prologue = export.keyword_names.as_deref().map(|names| {
+        keywords::fastcall_prologue(&default_prefix, source_name, names, &export.defaults)
+    });
+    let kwnames_param = match &prologue {
+        Some(prologue) => {
+            out.push_str(&prologue.before);
+            ", PyObject *kwnames"
+        }
+        None => "",
+    };
     out.push_str(&format!(
         "static PyObject *pycc_ext_wrap_{symbol}(PyObject *self, PyObject *const *args, \
-         Py_ssize_t nargs)\n{{\n"
+         Py_ssize_t nargs{kwnames_param})\n{{\n"
     ));
     // A `METH_STATIC` wrapper is handed `NULL` in `self` and a `METH_CLASS`
     // one the *type object*; both discard it, exactly as
@@ -270,6 +288,9 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
         );
     }
     out.push_str(&arg_slot_locals(&slots));
+    if let Some(prologue) = &prologue {
+        out.push_str(&prologue.body);
+    }
     if export.defaults.is_empty() {
         out.push_str(&format!(
             "    if (nargs != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \

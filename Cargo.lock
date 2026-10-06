@@ -783,6 +783,7 @@ dependencies = [
  "clap",
  "criterion",
  "libc",
+ "pycc_ast",
  "pycc_codegen",
  "pycc_diag",
  "pycc_hir",

@@ -656,9 +656,12 @@ boundary like any other export, so an uncarriable signature there is a
 `C0003`.
 
 Two further consequences are deliberate. `tp_init` is not a `METH_FASTCALL`
-entry point, so it enforces D-244 rule 7's keyword boundary itself --
-`mod.Class(3, 4, extra=1)` raises `TypeError` because the generated `tp_init`
-refuses a non-empty `kwds`, not because CPython refused it first. And the
+entry point, so it handles D-244 rule 7's keyword boundary itself: a
+keyword-enabled constructor (*Keyword arguments at the host boundary* below)
+binds a non-empty `kwds` -- `mod.Class(w=3, h=4)` -- and raises CPython's own
+`TypeError` for `mod.Class(3, 4, extra=1)`, and any other constructor refuses
+a non-empty `kwds` with `takes no keyword arguments`, in neither case because
+CPython refused it first. And the
 instance a constructor allocates is never freed: D-107's arena model, narrowed
 by D-154, gives `pycc_rt` no ownership model, so the leak a `native` program
 bounds at process exit becomes linear in the host's call count.
@@ -806,7 +809,10 @@ lowered (Part 2 of #884,
 [#1189](https://github.com/rotnov/pycc/issues/1189)), so it never reaches the
 generated wrapper: that wrapper's arity check counts every declared parameter, a
 defaulted one included, so a host call that omits a defaulted argument raises
-the wrapper's arity-mismatch `TypeError`.
+the wrapper's arity-mismatch `TypeError`, and a host call that names any of
+the parameters of such a function (one that declares a default) by keyword is refused with `takes no keyword arguments` (the
+keyword binder below would otherwise report the defaulted parameter as
+missing).
 [#1194](https://github.com/rotnov/pycc/issues/1194) tracks widening the host
 boundary to serve those defaults.
 
@@ -826,8 +832,8 @@ indistinguishable). An omitted argument therefore converts exactly as the same
 literal passed explicitly by the host would -- including the `int` row's
 `OverflowError` outside the inline range, and a `bool` default at an `int`
 parameter reading back as the `bool` itself, as in CPython. A receiver-exact inherited copy (#1337, D-254)
-serves its origin's defaults. Keywords stay refused (D-244 rule 7), and an
-export with no default keeps the exact check and byte-identical C. An
+serves its origin's defaults. A keyword call reaches the same default objects
+(next paragraph), and an export with no default keeps the exact check. An
 **unannotated** defaulted parameter of an `--ext` module
 ([#1409](https://github.com/rotnov/pycc/issues/1409); `docs/TYPE_SYSTEM.md`,
 "Call surface") is carried as the parameter its default implies -- `state_stack=None`
@@ -837,6 +843,39 @@ annotated twin, so it is unpacked by the table's row for that type below: a
 `bool`, `int`, `float` or `str` default's parameter refuses exactly the host
 values that row refuses (an `int` parameter still accepts a `bool`) with the
 row's `TypeError`, where CPython would accept them.
+
+*Keyword arguments at the host boundary*
+([#1461](https://github.com/rotnov/pycc/issues/1461), part of
+[#884](https://github.com/rotnov/pycc/issues/884); D-244's 2026-10-06
+amendment). A host call may name a positional-or-keyword parameter of a
+published function, static, class or instance method, or constructor --
+lark's `parser_state.copy(deepcopy_values=False)`. The method row carries
+`METH_FASTCALL | METH_KEYWORDS` and the wrapper takes CPython's `kwnames`;
+`Py_tp_init` reads its `kwds`. A call with keywords is bound by the shim's
+`pycc_ext_kw_bind_fastcall`/`pycc_ext_kw_bind_dict` into a full-arity array
+of borrowed references: positional arguments fill the leading slots, each
+keyword fills the slot it names, and every defaulted slot left unfilled gets
+the default object above. The array then goes through the unchanged arity
+check and unpack helpers, so a keyword argument is admitted, converted
+(argument numbers count positions, `P.add() argument 4: ...` for the fourth
+parameter named by keyword) and released exactly as the same object passed
+positionally. The binder raises CPython's own `TypeError` wording, under the
+same source-level name as the arity message: `P.add() got an unexpected
+keyword argument 'zz'`, `P.add() got multiple values for argument 'a'`, and
+`P.four() missing 3 required positional arguments: 'a', 'b', and 'c'`. A
+keyword-free call is not touched by the binding block. Which exports are
+keyword-enabled is decided from the entry module's source, not from HIR,
+which drops a `/`: the `def` must be a top-level function or a method
+directly in a top-level class body, defined once, with no positional-only
+parameter, `*args`, keyword-only parameter or `**kwargs`, and must declare
+exactly the parameters and defaults the export carries
+(`src/ext_build/keywords.rs`). Every other export keeps `METH_FASTCALL`
+alone, where CPython raises `takes no keyword arguments` -- in particular a
+module-level function with a default (#1194, above) and a `def` with a `/`.
+Recorded deviations: no `Did you mean` suggestion on an unexpected keyword,
+and the receiver's own name (`obj.m(self=...)`) is an unexpected keyword
+rather than CPython's `multiple values for argument 'self'`.
+`tests/issue_1461_ext_host_keywords.rs` runs every shape against CPython.
 
 | Annotation | As a parameter | As a return type |
 |---|---|---|

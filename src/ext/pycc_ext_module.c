@@ -3187,6 +3187,138 @@ static PyObject *pycc_ext_pack_instance(void *result);
  */
 static PyObject *pycc_ext_instance_copy(PyObject *self, PyObject *unused);
 
+/*
+ * #1461: keyword arguments at the host boundary, bound by name as CPython
+ * binds a Python function's positional-or-keyword parameters
+ * (`initialize_locals`): the positional arguments fill the leading slots,
+ * then each keyword, in call order, fills the slot it names -- an unknown
+ * name and an already filled slot are the `TypeError`s CPython words the
+ * same way -- and finally every required slot must be filled. There is no
+ * "too many positional arguments" step: with more positional arguments than
+ * slots every slot is already filled, so the first keyword raises "multiple
+ * values" or "unexpected", which is also what CPython reports.
+ *
+ * Only a generated wrapper or `Py_tp_init` whose export the driver made
+ * keyword-enabled calls these, and only when the host passed at least one
+ * keyword; a keyword-free call never enters them. `slots` receives borrowed
+ * references only -- the caller's arguments and keyword values -- and a slot
+ * left NULL is a defaulted parameter the generated caller fills from its
+ * own default object. `names` holds the `arity` parameter names as UTF-8.
+ */
+static int pycc_ext_kw_place(const char *fn_name, const char *const *names, Py_ssize_t arity,
+                             PyObject **slots, PyObject *key, PyObject *value)
+{
+    Py_ssize_t i;
+    if (!PyUnicode_Check(key)) {
+        PyErr_Format(PyExc_TypeError, "%s() keywords must be strings", fn_name);
+        return -1;
+    }
+    for (i = 0; i < arity; i++) {
+        if (PyUnicode_EqualToUTF8(key, names[i])) {
+            if (slots[i] != NULL) {
+                PyErr_Format(PyExc_TypeError, "%s() got multiple values for argument '%s'",
+                             fn_name, names[i]);
+                return -1;
+            }
+            slots[i] = value;
+            return 0;
+        }
+    }
+    PyErr_Format(PyExc_TypeError, "%s() got an unexpected keyword argument '%U'", fn_name, key);
+    return -1;
+}
+
+/*
+ * The required-argument check, worded as CPython's `format_missing`:
+ * `'a'`, `'a' and 'b'`, `'a', 'b', and 'c'`.
+ */
+static int pycc_ext_kw_finish(const char *fn_name, const char *const *names,
+                              Py_ssize_t required, PyObject **slots)
+{
+    Py_ssize_t i;
+    Py_ssize_t missing = 0;
+    Py_ssize_t listed = 0;
+    PyObject *list;
+    for (i = 0; i < required; i++) {
+        if (slots[i] == NULL) {
+            missing++;
+        }
+    }
+    if (missing == 0) {
+        return 0;
+    }
+    list = PyUnicode_FromString("");
+    for (i = 0; i < required && list != NULL; i++) {
+        PyObject *longer;
+        const char *separator;
+        if (slots[i] != NULL) {
+            continue;
+        }
+        if (listed == 0) {
+            separator = "";
+        } else if (missing == 2) {
+            separator = " and ";
+        } else if (listed == missing - 1) {
+            separator = ", and ";
+        } else {
+            separator = ", ";
+        }
+        longer = PyUnicode_FromFormat("%U%s'%s'", list, separator, names[i]);
+        Py_DECREF(list);
+        list = longer;
+        listed++;
+    }
+    if (list == NULL) {
+        return -1;
+    }
+    PyErr_Format(PyExc_TypeError, "%s() missing %zd required positional argument%s: %U",
+                 fn_name, missing, missing == 1 ? "" : "s", list);
+    Py_DECREF(list);
+    return -1;
+}
+
+/* The `METH_FASTCALL | METH_KEYWORDS` form: keyword values follow the
+ * `nargs` positional ones in `args`, named by the `kwnames` tuple. */
+static int pycc_ext_kw_bind_fastcall(const char *fn_name, const char *const *names,
+                                     Py_ssize_t arity, Py_ssize_t required, PyObject **slots,
+                                     PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
+{
+    Py_ssize_t i;
+    Py_ssize_t count = PyTuple_Size(kwnames);
+    for (i = 0; i < arity; i++) {
+        slots[i] = i < nargs ? args[i] : NULL;
+    }
+    for (i = 0; i < count; i++) {
+        if (pycc_ext_kw_place(fn_name, names, arity, slots, PyTuple_GetItem(kwnames, i),
+                              args[nargs + i]) < 0) {
+            return -1;
+        }
+    }
+    return pycc_ext_kw_finish(fn_name, names, required, slots);
+}
+
+/* The `Py_tp_init` form: a positional tuple and a keyword dict, whose
+ * iteration order is the call's keyword order. */
+static int pycc_ext_kw_bind_dict(const char *fn_name, const char *const *names, Py_ssize_t arity,
+                                 Py_ssize_t required, PyObject **slots, PyObject *args,
+                                 PyObject *kwds)
+{
+    Py_ssize_t i;
+    Py_ssize_t nargs = PyTuple_Size(args);
+    Py_ssize_t position = 0;
+    PyObject *key;
+    PyObject *value;
+    for (i = 0; i < arity; i++) {
+        slots[i] = i < nargs ? PyTuple_GetItem(args, i) : NULL;
+    }
+    while (PyDict_Next(kwds, &position, &key, &value)) {
+        if (pycc_ext_kw_place(fn_name, names, arity, slots, key, value) < 0) {
+            return -1;
+        }
+    }
+    return pycc_ext_kw_finish(fn_name, names, required, slots);
+}
+
 #include "pycc_ext_exports.inc"
 
 /*

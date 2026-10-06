@@ -359,6 +359,7 @@ fn a_property_is_described_where_it_wins_the_namespace_walk() {
                 param_writable: Vec::new(),
                 defaults: Vec::new(),
                 return_ty: Ty::Object,
+                keyword_names: None,
             },
         }
     );

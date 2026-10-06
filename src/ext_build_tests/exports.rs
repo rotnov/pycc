@@ -33,6 +33,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 params: vec![Ty::Int],
                 param_writable: vec![false; 1],
                 return_ty: Ty::Int,
+                keyword_names: None,
             },
             ExtExport {
                 defaults: Vec::new(),
@@ -44,6 +45,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 params: Vec::new(),
                 param_writable: Vec::new(),
                 return_ty: Ty::Int,
+                keyword_names: None,
             },
             ExtExport {
                 defaults: Vec::new(),
@@ -55,6 +57,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 params: vec![Ty::Int, Ty::Int],
                 param_writable: vec![false; 2],
                 return_ty: Ty::Int,
+                keyword_names: None,
             },
             ExtExport {
                 defaults: Vec::new(),
@@ -66,6 +69,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 params: vec![Ty::Float],
                 param_writable: vec![false; 1],
                 return_ty: Ty::Float,
+                keyword_names: None,
             },
             ExtExport {
                 defaults: Vec::new(),
@@ -77,6 +81,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 params: vec![Ty::Bool],
                 param_writable: vec![false; 1],
                 return_ty: Ty::Bool,
+                keyword_names: None,
             },
             ExtExport {
                 defaults: Vec::new(),
@@ -88,6 +93,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 params: vec![Ty::Int],
                 param_writable: vec![false; 1],
                 return_ty: Ty::None,
+                keyword_names: None,
             },
         ]
     );
@@ -126,6 +132,7 @@ fn a_private_name_a_method_and_a_monomorphized_specialization_are_not_exports() 
             params: Vec::new(),
             param_writable: Vec::new(),
             return_ty: Ty::Int,
+            keyword_names: None,
         }]
     );
 }
@@ -155,6 +162,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 params: Vec::new(),
                 param_writable: Vec::new(),
                 return_ty: Ty::Int,
+                keyword_names: None,
             },
             // Definition order, last definition's signature: the entry keeps
             // the position the name first claimed.
@@ -168,6 +176,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 params: vec![Ty::Int, Ty::Int],
                 param_writable: vec![false; 2],
                 return_ty: Ty::Int,
+                keyword_names: None,
             },
             ExtExport {
                 defaults: Vec::new(),
@@ -179,6 +188,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 params: Vec::new(),
                 param_writable: Vec::new(),
                 return_ty: Ty::Int,
+                keyword_names: None,
             },
         ]
     );
@@ -261,6 +271,7 @@ fn a_bool_signature_is_carried_rather_than_gapped_and_keeps_its_own_slot() {
             params: vec![Ty::Bool],
             param_writable: vec![false; 1],
             return_ty: Ty::Bool,
+            keyword_names: None,
         }]
     );
 }
@@ -285,6 +296,7 @@ fn a_str_signature_is_carried_rather_than_gapped_in_either_position() {
             params: vec![Ty::Str],
             param_writable: vec![false; 1],
             return_ty: Ty::Str,
+            keyword_names: None,
         }]
     );
 }
@@ -314,6 +326,7 @@ fn a_tuple_signature_is_carried_rather_than_gapped_in_either_position() {
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float]))],
             param_writable: vec![false; 1],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Float, Ty::Bool])),
+            keyword_names: None,
         }]
     );
 }
@@ -548,6 +561,7 @@ fn a_public_static_and_class_method_of_a_public_class_are_exported() {
                 params: vec![Ty::Int],
                 param_writable: vec![false; 1],
                 return_ty: Ty::Int,
+                keyword_names: None,
             },
             ExtExport {
                 defaults: Vec::new(),
@@ -559,6 +573,7 @@ fn a_public_static_and_class_method_of_a_public_class_are_exported() {
                 params: vec![Ty::Int],
                 param_writable: vec![false; 1],
                 return_ty: Ty::Int,
+                keyword_names: None,
             },
         ]
     );
@@ -931,6 +946,7 @@ fn a_constructible_class_yields_one_constructor_descriptor_with_the_carried_tail
             // #1442: both `int` slots are carriable, so both are descriptors,
             // indexed in slot order (writable since Part 1 of #1443).
             getsets: grid_slot_getsets(),
+            keyword_names: None,
         }]
     );
 }
@@ -1123,6 +1139,7 @@ fn an_implicit_object_init_is_still_resolved_when_it_is_the_only_one() {
             // #1442: both `int` slots are carriable, so both are descriptors,
             // indexed in slot order (writable since Part 1 of #1443).
             getsets: grid_slot_getsets(),
+            keyword_names: None,
         }]
     );
 }

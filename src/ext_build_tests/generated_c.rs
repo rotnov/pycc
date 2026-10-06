@@ -104,6 +104,7 @@ fn a_nullary_export_declares_a_void_parameter_list_and_checks_its_arity() {
             params: Vec::new(),
             param_writable: Vec::new(),
             return_ty: Ty::Int,
+            keyword_names: None,
         }],
     );
     assert!(inc.contains("extern void *fnptr_answer;"), "{inc}");
@@ -135,6 +136,7 @@ fn a_unary_export_uses_the_singular_arity_message_and_unpacks_one_argument() {
             params: vec![Ty::Int],
             param_writable: vec![false; 1],
             return_ty: Ty::Int,
+            keyword_names: None,
         }],
     );
     assert!(
@@ -169,6 +171,7 @@ fn a_binary_export_unpacks_each_argument_at_its_own_index() {
             params: vec![Ty::Int, Ty::Int],
             param_writable: vec![false; 2],
             return_ty: Ty::Int,
+            keyword_names: None,
         }],
     );
     assert!(
@@ -206,6 +209,7 @@ fn every_wrapper_checks_the_runtime_exception_flag_before_packing_a_result() {
             params: vec![Ty::Int],
             param_writable: vec![false; 1],
             return_ty: Ty::Int,
+            keyword_names: None,
         }],
     );
     let check = inc
@@ -234,6 +238,7 @@ fn a_float_export_carries_a_double_through_every_slot_of_the_wrapper() {
             params: vec![Ty::Float],
             param_writable: vec![false; 1],
             return_ty: Ty::Float,
+            keyword_names: None,
         }],
     );
     assert!(inc.contains("    double result;"), "{inc}");
@@ -268,6 +273,7 @@ fn a_bool_export_uses_a_one_byte_c_type_to_match_the_compiled_i8_slot() {
             params: vec![Ty::Bool],
             param_writable: vec![false; 1],
             return_ty: Ty::Bool,
+            keyword_names: None,
         }],
     );
     assert!(inc.contains("    char result;"), "{inc}");
@@ -301,6 +307,7 @@ fn a_none_returning_export_casts_to_void_and_declares_no_result_at_all() {
             params: vec![Ty::Int],
             param_writable: vec![false; 1],
             return_ty: Ty::None,
+            keyword_names: None,
         }],
     );
     // LLVM emits a `None` return as `void`, so there is nothing to hold and
@@ -328,6 +335,7 @@ fn a_mixed_signature_gives_each_slot_its_own_c_type_and_unpack_helper() {
             params: vec![Ty::Int, Ty::Float, Ty::Bool],
             param_writable: vec![false; 3],
             return_ty: Ty::Float,
+            keyword_names: None,
         }],
     );
     assert!(
@@ -369,6 +377,7 @@ fn a_none_returning_wrapper_checks_the_exception_flag_before_returning_none() {
             params: vec![Ty::Int],
             param_writable: vec![false; 1],
             return_ty: Ty::None,
+            keyword_names: None,
         }],
     );
     let check = inc
@@ -402,6 +411,7 @@ fn a_str_export_carries_an_opaque_pointer_in_both_positions() {
             params: vec![Ty::Str],
             param_writable: vec![false; 1],
             return_ty: Ty::Str,
+            keyword_names: None,
         }],
     );
     assert!(inc.contains("    void * result;\n"), "{inc}");
@@ -437,6 +447,7 @@ fn a_str_unpack_failure_releases_every_str_argument_already_taken() {
             params: vec![Ty::Str, Ty::Str],
             param_writable: vec![false; 2],
             return_ty: Ty::Str,
+            keyword_names: None,
         }],
     );
     // The first argument's own failure branch owes nothing -- nothing has
@@ -725,6 +736,7 @@ fn a_tuple_parameter_is_checked_once_then_unpacked_element_by_element() {
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float]))],
             param_writable: vec![false; 1],
             return_ty: Ty::Int,
+            keyword_names: None,
         }],
     );
     // One `tuple` argument, so the arity message still says one: the
@@ -782,6 +794,7 @@ fn a_tuple_return_arrives_through_out_pointers_and_is_packed_afterwards() {
             params: vec![Ty::Int],
             param_writable: vec![false; 1],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])),
+            keyword_names: None,
         }],
     );
     assert!(
@@ -856,6 +869,7 @@ fn a_tuple_return_retains_each_int_element_before_packing_it() {
             params: vec![],
             param_writable: vec![],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool, Ty::Float])),
+            keyword_names: None,
         }],
     );
     assert!(
@@ -891,6 +905,7 @@ fn a_one_element_tuple_keeps_its_tuple_shape_in_both_directions() {
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int]))],
             param_writable: vec![false; 1],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int])),
+            keyword_names: None,
         }],
     );
     assert!(
@@ -921,6 +936,7 @@ fn several_tuple_parameters_keep_one_local_namespace_each() {
             ],
             param_writable: vec![false; 2],
             return_ty: Ty::Float,
+            keyword_names: None,
         }],
     );
     // `a{argument}_{element}` and never a single running counter: the second
@@ -970,6 +986,7 @@ fn an_earlier_str_argument_is_released_when_a_later_tuple_is_refused() {
             params: vec![Ty::Str, Ty::Tuple(Box::new(vec![Ty::Int]))],
             param_writable: vec![false; 2],
             return_ty: Ty::Str,
+            keyword_names: None,
         }],
     );
     assert!(
@@ -1006,6 +1023,7 @@ fn a_nullary_export_returning_a_tuple_declares_only_its_out_pointers() {
             params: Vec::new(),
             param_writable: Vec::new(),
             return_ty: Ty::Tuple(Box::new(vec![Ty::Float, Ty::Float])),
+            keyword_names: None,
         }],
     );
     // The combined list is non-empty even though the export takes nothing,
@@ -1053,6 +1071,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int]))],
             param_writable: vec![false; 1],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
+            keyword_names: None,
         }],
     );
     assert!(
@@ -1083,6 +1102,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
             params: vec![Ty::Int],
             param_writable: vec![false; 1],
             return_ty: Ty::Int,
+            keyword_names: None,
         }],
     );
     assert!(scalar.contains("extern void *fnptr_square;"), "{scalar}");
@@ -1107,6 +1127,7 @@ fn a_tuple_carrying_export_returning_none_assigns_nothing_and_fabricates_none() 
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool]))],
             param_writable: vec![false; 1],
             return_ty: Ty::None,
+            keyword_names: None,
         }],
     );
     assert!(
@@ -1391,6 +1412,7 @@ fn memoryview_inc(name: &str, count: usize, return_ty: Ty) -> String {
             params: vec![Ty::MemoryView; count],
             param_writable: vec![false; count],
             return_ty,
+            keyword_names: None,
         }],
     )
 }
@@ -1418,6 +1440,7 @@ fn only_a_buffer_parameter_its_body_stores_into_is_acquired_writable() {
             params: vec![Ty::MemoryView, Ty::MemoryView],
             param_writable: vec![false, true],
             return_ty: Ty::None,
+            keyword_names: None,
         }],
     );
     assert!(
@@ -1450,6 +1473,7 @@ fn a_constructor_buffer_parameter_its_body_stores_into_is_acquired_writable() {
             param_writable: vec![true],
             slot_names: vec!["w".to_string()],
             getsets: Vec::new(),
+            keyword_names: None,
         }],
         &[],
     );
@@ -1581,6 +1605,7 @@ fn a_mixed_str_and_memoryview_signature_owes_each_slot_its_own_cleanup() {
             params: vec![Ty::Str, Ty::MemoryView, Ty::Int],
             param_writable: vec![false; 3],
             return_ty: Ty::Int,
+            keyword_names: None,
         }],
     );
     assert!(
@@ -1623,6 +1648,7 @@ fn an_export_with_no_memoryview_parameter_emits_no_release_at_all() {
             params: vec![Ty::Str],
             param_writable: vec![false; 1],
             return_ty: Ty::Str,
+            keyword_names: None,
         }],
     );
     assert!(!inc.contains("PyBuffer_Release"), "{inc}");
@@ -1655,6 +1681,7 @@ pub(super) fn static_export(
         param_writable: vec![false; params.len()],
         params,
         return_ty,
+        keyword_names: None,
     }
 }
 
@@ -1671,6 +1698,7 @@ fn class_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> Ex
         param_writable: vec![false; params.len()],
         params,
         return_ty,
+        keyword_names: None,
     }
 }
 
@@ -1776,6 +1804,7 @@ fn an_exported_method_is_never_a_flat_module_level_entry() {
                 params: vec![Ty::Int],
                 param_writable: vec![false; 1],
                 return_ty: Ty::Int,
+                keyword_names: None,
             },
             static_export("Grid", "scale", vec![Ty::Int], Ty::Int),
         ],
@@ -1963,6 +1992,7 @@ fn instance_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) ->
         param_writable: vec![false; params.len()],
         params,
         return_ty,
+        keyword_names: None,
     }
 }
 
@@ -1975,6 +2005,7 @@ fn grid_ctor(params: Vec<Ty>, slot_names: &[&str]) -> ExtCtor {
         params,
         slot_names: slot_names.iter().map(ToString::to_string).collect(),
         getsets: Vec::new(),
+        keyword_names: None,
     }
 }
 
@@ -2028,10 +2059,12 @@ fn a_constructible_class_gets_a_tp_init_three_slots_and_a_carrier_sized_spec() {
         ),
         "{inc}"
     );
-    // D-244 rule 7's keyword boundary, written out by hand because a
-    // `tp_init` is not a `METH_FASTCALL` entry point and CPython refuses
-    // nothing on its behalf. Without this, a correct positional count plus a
-    // keyword would silently ignore the keyword.
+    // D-244 rule 7's keyword boundary for a constructor that is not
+    // keyword-enabled (#1461; this fixture's `keyword_names` is `None`),
+    // written out by hand because a `tp_init` is not a `METH_FASTCALL`
+    // entry point and CPython refuses nothing on its behalf. Without this, a
+    // correct positional count plus a keyword would silently ignore the
+    // keyword.
     assert!(
         inc.contains(
             "    if (kwds != NULL && PyDict_Size(kwds) != 0) {\n        \
@@ -2515,6 +2548,7 @@ fn a_caller_owned_buffer_returning_method_uses_the_declared_parameter_index() {
             params: vec![Ty::MemoryView],
             param_writable: vec![false],
             return_ty: Ty::MemoryView,
+            keyword_names: None,
         }],
     );
     assert!(
@@ -2550,6 +2584,7 @@ fn a_buffer_returning_method_packs_through_the_same_arm() {
             params: vec![],
             param_writable: vec![],
             return_ty: Ty::MemoryView,
+            keyword_names: None,
         }],
     );
     assert!(
@@ -2577,6 +2612,7 @@ fn memoryview_slice_inc(name: &str, count: usize) -> String {
             params: vec![Ty::MemoryView; count],
             param_writable: vec![false; count],
             return_ty: Ty::MemoryView,
+            keyword_names: None,
         }],
     )
 }

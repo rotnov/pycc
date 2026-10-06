@@ -169,9 +169,10 @@ pub(crate) fn classify_export_name(name: &str) -> Option<ExportName> {
 ///
 /// `Grid.scale.static` renders `Grid.scale`; `f` renders `f`. Two messages
 /// need it and must not diverge: the `C0003` subject
-/// ([`capability_gap`]) and the generated wrapper's arity `TypeError`,
-/// which sits on the same object CPython itself describes as
-/// `Grid.scale() takes no keyword arguments`.
+/// ([`capability_gap`]) and the generated wrapper's arity and keyword
+/// `TypeError`s (#1461), which sit on the same object CPython itself
+/// describes as `Grid.scale() takes no keyword arguments` when the export
+/// is not keyword-enabled.
 ///
 /// This repeats only the *first* step of `pycc_mir`'s `source_frame_name`
 /// (its `without_suffix` local), which is the canonical decomposition of a

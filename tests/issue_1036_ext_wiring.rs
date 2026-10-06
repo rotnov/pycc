@@ -285,8 +285,9 @@ fn a_built_ext_module_imports_and_answers_through_the_int_boundary() {
                   else:\n    raise AssertionError('str must not be accepted')\n\
                   try:\n    m.twice(1, 2)\nexcept TypeError:\n    pass\n\
                   else:\n    raise AssertionError('arity must be checked')\n\
-                  try:\n    m.twice(x=1)\nexcept TypeError:\n    pass\n\
-                  else:\n    raise AssertionError('keywords must be refused')\n\
+                  assert m.twice(x=4) == 8\n\
+                  try:\n    m.twice(y=1)\nexcept TypeError:\n    pass\n\
+                  else:\n    raise AssertionError('an unknown keyword must be refused')\n\
                   print('ok')\n";
     let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
         .arg("-c")

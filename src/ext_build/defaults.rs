@@ -23,8 +23,13 @@
 //! create-once rule produce indistinguishable values, and an `int`,
 //! `float` or `str` object is immutable.
 //!
+//! A host call that names a defaulted parameter by keyword (#1461) reaches
+//! the same cached objects through [`keyword_default_fills`].
+//!
 //! A module-level export's defaults are not recorded anywhere this module
-//! can read, so it keeps the exact arity check; #1194 tracks that half.
+//! can read, so it keeps the exact arity check -- and, since its source
+//! `def` then declares defaults the export does not carry, keyword calls
+//! stay refused (`super::keywords`); #1194 tracks that half.
 
 use pycc_hir::{HirExpr, HirModule};
 
@@ -116,6 +121,40 @@ pub(crate) fn arg_expr(defaults: &[Option<HirExpr>], index: usize, item: String)
         Some(Some(_)) => format!("v{index}"),
         _ => item,
     }
+}
+
+/// The keyword binder's default fills (#1461): one statement per defaulted
+/// parameter that stores the parameter's default object into a `kw_slots`
+/// entry the host left unfilled.
+///
+/// The same objects [`range_arity_check`] substitutes for an omitted
+/// trailing argument, under the same `prefix`, so a default reached through
+/// a keyword call and one reached through a short positional call are the
+/// one cached object. After these fills every slot is set, which is what
+/// lets the caller treat the bound array as a full-arity positional call.
+/// The text is indented for the binding block it sits in; `fail` is the
+/// entry point's bail statement at the usual one-block indentation.
+pub(crate) fn keyword_default_fills(
+    prefix: &str,
+    defaults: &[Option<HirExpr>],
+    fail: &str,
+) -> String {
+    let mut out = String::new();
+    for (index, default) in defaults.iter().enumerate() {
+        let Some(default) = default else { continue };
+        let object = default_object(prefix, index, default);
+        out.push_str(&format!(
+            "        if (kw_slots[{index}] == NULL) {{\n            kw_slots[{index}] = {};\n",
+            object.expr
+        ));
+        if object.definition.is_some() {
+            out.push_str(&format!(
+                "            if (kw_slots[{index}] == NULL) {{\n        {fail}            }}\n"
+            ));
+        }
+        out.push_str("        }\n");
+    }
+    out
 }
 
 /// The file-static helper functions that create the cached default objects

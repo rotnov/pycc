@@ -11,7 +11,7 @@ use super::export_name::ExtReceiver;
 use super::getset::getset_c;
 use super::instance_copy::{CarrierCopy, carrier_copy};
 use super::{
-    ExtCtor, ExtPublishedClass, arg_slot_locals, buffer_releases, c_param_list, defaults,
+    ExtCtor, ExtPublishedClass, arg_slot_locals, buffer_releases, c_param_list, defaults, keywords,
     source_level_name, unpack_args,
 };
 use pycc_hir::HirModule;
@@ -128,17 +128,19 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
             // `METH_STATIC` delivers `self == NULL`; `METH_CLASS` delivers
             // the type object, which the wrapper discards; plain
             // `METH_FASTCALL` delivers the instance, which an instance
-            // method's wrapper unwraps (#1145). All three keep
-            // `METH_FASTCALL`, so CPython still raises the keyword
-            // `TypeError` before the wrapper is entered -- D-244 rule 7's
-            // closed boundary, which the generated `tp_init` has to
-            // reimplement by hand precisely because it is *not* a
-            // `METH_FASTCALL` entry point.
-            let flags = match export.receiver {
-                ExtReceiver::None => "METH_FASTCALL | METH_STATIC",
-                ExtReceiver::NullCls => "METH_FASTCALL | METH_CLASS",
-                ExtReceiver::SelfInstance => "METH_FASTCALL",
-            };
+            // method's wrapper unwraps (#1145). Without `METH_KEYWORDS`
+            // CPython still raises the keyword `TypeError` before the
+            // wrapper is entered -- D-244 rule 7's closed boundary; a
+            // keyword-enabled export (#1461) adds it, the same predicate
+            // that gives its wrapper the `kwnames` parameter.
+            let flags = keywords::method_flags(
+                match export.receiver {
+                    ExtReceiver::None => "METH_FASTCALL | METH_STATIC",
+                    ExtReceiver::NullCls => "METH_FASTCALL | METH_CLASS",
+                    ExtReceiver::SelfInstance => "METH_FASTCALL",
+                },
+                export,
+            );
             out.push_str(&format!(
                 "    {{\"{method}\", (PyCFunction)(void (*)(void))pycc_ext_wrap_{symbol}, \
                  {flags}, NULL}},\n",
@@ -389,12 +391,15 @@ pub(crate) fn carrier_class_isinstance_c(classes: &[ExtCarrierClass]) -> String 
 /// This is `wrapper_for`'s ingress half rewritten for a slot that is not a
 /// `METH_FASTCALL` entry point, and every difference is forced by that:
 ///
-/// * **Keywords.** `METH_FASTCALL` gives every other export D-244 rule 7's
-///   closed keyword boundary for free, because CPython refuses a keyword
-///   before the wrapper is entered. `tp_init` is handed `kwds` and is the
-///   only thing that will ever look at it, so the same refusal is written
-///   out by hand. Without it `mod.Grid(3, 4, nope=1)` would silently
-///   *ignore* the keyword.
+/// * **Keywords.** `METH_FASTCALL` without `METH_KEYWORDS` gives a method
+///   export D-244 rule 7's closed keyword boundary for free, because
+///   CPython refuses a keyword before the wrapper is entered. `tp_init` is
+///   handed `kwds` and is the only thing that will ever look at it, so a
+///   constructor that is not keyword-enabled writes the same refusal out
+///   by hand -- without it `mod.Grid(3, 4, nope=1)` would silently *ignore*
+///   the keyword. A keyword-enabled one (#1461) binds `kwds` through
+///   `keywords::tp_init_prologue` instead, and its count and items are read
+///   from the bound array when a keyword was given.
 /// * **Arity.** `nargs` becomes `PyTuple_Size(args)`, with `wrapper_for`'s
 ///   message shape and spelling. CPython names the same subject for a
 ///   Python class -- `Grid.__init__() takes ...` -- which is exactly what
@@ -452,22 +457,40 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
     // classes that inherit one `__init__` each get their own `Py_tp_init`.
     let default_prefix = format!("init_{class}");
     let mut out = defaults::default_object_helpers(&default_prefix, &ctor.defaults);
+    // #1461: a keyword-enabled constructor binds `kwds` as CPython binds the
+    // same call to the uncompiled `__init__`; every other constructor keeps
+    // the hand-written refusal below byte for byte.
+    let prologue = ctor.keyword_names.as_deref().map(|names| {
+        keywords::tp_init_prologue(&default_prefix, source_name, names, &ctor.defaults)
+    });
+    let (count, item): (String, &dyn Fn(usize) -> String) = match &prologue {
+        Some(prologue) => {
+            out.push_str(&prologue.before);
+            (keywords::tp_init_count(arity), &keywords::tp_init_item)
+        }
+        None => ("PyTuple_Size(args)".to_string(), &|index| {
+            format!("PyTuple_GetItem(args, {index})")
+        }),
+    };
     out.push_str(&format!("extern void *fnptr_{symbol};\n"));
     out.push_str(&format!(
         "static int pycc_ext_tp_init_{class}(PyObject *self, PyObject *args, PyObject *kwds)\n\
          {{\n    void *inst;\n"
     ));
     out.push_str(&arg_slot_locals(&slots));
-    out.push_str(&format!(
-        "    if (kwds != NULL && PyDict_Size(kwds) != 0) {{\n        \
-         PyErr_SetString(PyExc_TypeError, \"{source_name}() takes no keyword arguments\");\n        \
-         return -1;\n    }}\n"
-    ));
+    match &prologue {
+        Some(prologue) => out.push_str(&prologue.body),
+        None => out.push_str(&format!(
+            "    if (kwds != NULL && PyDict_Size(kwds) != 0) {{\n        \
+             PyErr_SetString(PyExc_TypeError, \"{source_name}() takes no keyword arguments\");\n        \
+             return -1;\n    }}\n"
+        )),
+    }
     if ctor.defaults.is_empty() {
         out.push_str(&format!(
-            "    if (PyTuple_Size(args) != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \
+            "    if ({count} != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \
              \"{source_name}() takes exactly {arity} argument{plural} (%zd given)\", \
-             PyTuple_Size(args));\n        return -1;\n    }}\n",
+             {count});\n        return -1;\n    }}\n",
             plural = if arity == 1 { "" } else { "s" },
         ));
     } else {
@@ -476,8 +499,8 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
             &default_prefix,
             &ctor.defaults,
             &defaults::ArgSource {
-                count: "PyTuple_Size(args)",
-                item: &|index| format!("PyTuple_GetItem(args, {index})"),
+                count: &count,
+                item,
                 fail: "        return -1;\n",
             },
         ));
@@ -485,13 +508,7 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
     out.push_str(&unpack_args(
         &slots,
         source_name,
-        &|index| {
-            defaults::arg_expr(
-                &ctor.defaults,
-                index,
-                format!("PyTuple_GetItem(args, {index})"),
-            )
-        },
+        &|index| defaults::arg_expr(&ctor.defaults, index, item(index)),
         "        return -1;\n",
     ));
     out.push_str(&format!(
