@@ -22,8 +22,12 @@
 //! amendment): no `Did you mean` suggestion; the receiver's own name is an
 //! unexpected keyword rather than a duplicate; a module-level function
 //! with a default (#1194) and a function with a positional-only parameter
-//! keep the `takes no keyword arguments` refusal; and a keyword argument is
-//! converted by the parameter's declared type exactly as a positional one.
+//! keep the `takes no keyword arguments` refusal; a keyword argument is
+//! converted by the parameter's declared type exactly as a positional one,
+//! a `memoryview` passed by keyword included, whose buffer is released on
+//! the success path (shared driver) and on a later argument's refusal (the
+//! `bytearray` resizes afterwards); and a keyword-free call keeps pycc's
+//! own arity wording (#1025).
 //!
 //! The hosted test is `#[ignore]`d and contributes no line coverage; the
 //! Tier-1 `native-build-test` leg runs it with
@@ -134,6 +138,10 @@ def pad(a: int, b: int = 2) -> int:
 
 def only(a: int, /, b: int) -> int:
     return a - b
+
+
+def view_n(v: memoryview, n: int) -> int:
+    return n
 "#;
 
 /// The host script both sides run. Every line is compared with CPython.
@@ -189,6 +197,12 @@ attempt(lambda: m.Exact(1, j=2).total())
 attempt(lambda: m.Exact(j=2))
 attempt(lambda: m.State(5).copy(deepcopy_values=False))
 attempt(lambda: m.State(k=6).copy(deepcopy_values=True))
+ba = bytearray(16)
+mv = memoryview(ba).cast("d")
+attempt(lambda: m.view_n(n=4, v=mv))
+mv.release()
+ba.append(0)
+print(len(ba))
 o = object()
 before = sys.getrefcount(o)
 for _ in range(10):
@@ -240,6 +254,8 @@ const DRIVER_OUT: &str = "3\n\
     TypeError Exact.__init__() missing 1 required positional argument: 'k'\n\
     -5\n\
     6\n\
+    4\n\
+    17\n\
     0\n";
 
 /// The host script whose output differs from CPython's, by design.
@@ -260,6 +276,17 @@ attempt(lambda: m.pad(a=1))
 attempt(lambda: m.only(1, b=2))
 attempt(lambda: m.only(a=1, b=2))
 attempt(lambda: p.add(1, label=7))
+attempt(lambda: p.add(1, label="ok"))
+ba = bytearray(16)
+mv = memoryview(ba).cast("d")
+attempt(lambda: m.view_n(v=mv, n="x"))
+mv.release()
+ba.append(0)
+print(len(ba))
+attempt(lambda: m.P())
+attempt(lambda: m.P(1, 2, 3))
+attempt(lambda: p.add(1, 2, 3, "x", 5))
+attempt(lambda: m.rep(2))
 "#;
 
 const EXT_ONLY_OUT: &str = "TypeError P.copy() got an unexpected keyword argument 'deepcopy_value'\n\
@@ -267,7 +294,14 @@ const EXT_ONLY_OUT: &str = "TypeError P.copy() got an unexpected keyword argumen
     TypeError pycc_kw_mod.pad() takes no keyword arguments\n\
     TypeError pycc_kw_mod.only() takes no keyword arguments\n\
     TypeError pycc_kw_mod.only() takes no keyword arguments\n\
-    TypeError P.add() argument 4: 'int' object cannot be interpreted as a str\n";
+    TypeError P.add() argument 4: 'int' object cannot be interpreted as a str\n\
+    ok114\n\
+    TypeError view_n() argument 2: 'str' object cannot be interpreted as an integer\n\
+    17\n\
+    TypeError P.__init__() takes from 1 to 2 arguments (0 given)\n\
+    TypeError P.__init__() takes from 1 to 2 arguments (3 given)\n\
+    TypeError P.add() takes from 1 to 4 arguments (5 given)\n\
+    TypeError rep() takes exactly 2 arguments (1 given)\n";
 
 /// What CPython answers for [`EXT_ONLY_DRIVER`], so the divergence is
 /// stated, not inferred.
@@ -276,7 +310,14 @@ const EXT_ONLY_CPYTHON_OUT: &str = "TypeError P.copy() got an unexpected keyword
     3\n\
     -1\n\
     TypeError only() got some positional-only arguments passed as keyword arguments: 'a'\n\
-    7114\n";
+    7114\n\
+    ok114\n\
+    x\n\
+    17\n\
+    TypeError P.__init__() missing 1 required positional argument: 'n'\n\
+    TypeError P.__init__() takes from 2 to 3 positional arguments but 4 were given\n\
+    TypeError P.add() takes from 2 to 5 positional arguments but 6 were given\n\
+    TypeError rep() missing 1 required positional argument: 'b'\n";
 
 fn run(script: &str, path_entry: &Path, cwd: &Path) -> Output {
     host_python()
