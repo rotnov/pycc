@@ -259,6 +259,11 @@ def zap_all(other: Any) -> None:
     del other.f, other.s
 
 
+def zap_rest(other: Any) -> None:
+    del other.b
+    del other.leaf
+
+
 def tag(other: Any, log: Any, label: str) -> Any:
     log.append(label)
     return other
@@ -380,6 +385,23 @@ except AttributeError as e:
     print("AttributeError", e)
 m.poke(c, 8, 0.5, True, "back")
 print(c.n_c(), c.s_c())
+m.zap_all(c)
+m.zap_o(c)
+m.zap_rest(c)
+print([hasattr(c, k) for k in ("n", "f", "b", "s", "o", "leaf")])
+for reader in (c.f_c, c.b_c, c.s_c, c.o_c, c.leaf_k):
+    try:
+        reader()
+    except AttributeError as e:
+        print("AttributeError", e)
+try:
+    m.zap_o(c)
+except AttributeError as e:
+    print("AttributeError", e)
+m.poke(c, 9, 4.5, False, "again")
+m.poke_obj(c, o2)
+m.poke_leaf(c, m.Leaf(2))
+print(c.f_c(), c.b_c(), c.s_c(), c.o_c() is o2, c.leaf_k())
 "#;
 
 /// What [`DRIVER`] prints under CPython.
@@ -408,7 +430,15 @@ True True\n\
 False\n\
 AttributeError 'Conf' object has no attribute 'n'\n\
 AttributeError 'Conf' object has no attribute 'n'\n\
-8 back\n";
+8 back\n\
+[True, False, False, False, False, False]\n\
+AttributeError 'Conf' object has no attribute 'f'\n\
+AttributeError 'Conf' object has no attribute 'b'\n\
+AttributeError 'Conf' object has no attribute 's'\n\
+AttributeError 'Conf' object has no attribute 'o'\n\
+AttributeError 'Conf' object has no attribute 'leaf'\n\
+AttributeError 'Conf' object has no attribute 'o'\n\
+4.5 False again True 2\n";
 
 /// The documented differences from CPython, run against the extension
 /// only. A store into a compiled instance's typed slot is converted by the

@@ -125,8 +125,10 @@ fn a_delete_is_one_delattr_call() {
     );
 }
 
-/// In a function body both statements bridge their failure, and an `int`
-/// temporary value is protected across the base and released afterwards.
+/// In a function body both statements call their shim entry and bridge
+/// their failure; the store's value here is an `int` expression, so the
+/// temporary-protection path in `foreign_store.rs` runs, though this test
+/// asserts only the calls and the bridge, not the release itself.
 #[test]
 fn a_function_body_store_or_delete_bridges_its_failure() {
     compile_ext_items_checking_ir(

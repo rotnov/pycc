@@ -354,7 +354,9 @@ pub(crate) fn is_packable_operand(ty: &Ty) -> bool {
 /// direct call of an `object`-typed name (`product(args)`, #1313, `what` =
 /// `"call"`) and a call of an `object`-typed subscript result
 /// (`table[k](args)`, Part 2a of #1371, also `"call"`), each with positional
-/// or, since Part 8 of #1371, keyword arguments; `args` are the argument
+/// or, since Part 8 of #1371, keyword arguments -- and the value of an
+/// attribute store through an object-typed name (`o.x = v`, #1457, `what` =
+/// `"attribute store"`), checked as a single argument; `args` are the argument
 /// expressions whose types are `arg_tys`, the keyword values for a keyword
 /// call. `None` is admitted since Part 8 too, as an argument only: codegen
 /// passes CPython's own `Py_None` for it. Subscript keys and comparison
