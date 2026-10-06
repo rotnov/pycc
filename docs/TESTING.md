@@ -844,10 +844,10 @@ two errors (row 4), while the whole-package copy reports 14 (the `lark/utils.py`
 table below; the skeleton tree was not re-measured). #1394 then clears row 4: the
 same build of the subject copied alone (release build of the #1394 branch,
 based on `main` `496a64f9`) reports one error, row 5's `C0001` "type annotation `tuple` is not supported
-yet" at line 20. #1397 then clears that error: the same build on the #1397 branch merged with `main` `91e3fca7` also reports one error, row 5's `__init__` `C0001` at 25:28 (#1388). #1435 moves no count: the same `--ext --foreign-relative-imports` build of the unannotated subject at the pinned digest, copied alone (debug build of the #1435 branch merged with `main` `1e7de627`), reports one error, `T0021` "cannot infer return type of private helper `ParserState.__copy__`" (#1420, reported at 1:1); the #1435 row below records what a probe past it shows. Everything under them was measured by probes. A probe is a copy with the
+yet" at line 20. #1397 then clears that error: the same build on the #1397 branch merged with `main` `91e3fca7` also reports one error, row 5's `__init__` `C0001` at 25:28 (#1388). #1435 moves no count: the same `--ext --foreign-relative-imports` build of the unannotated subject at the pinned digest, copied alone (debug build of the #1435 branch merged with `main` `1e7de627`), reports one error, `T0021` "cannot infer return type of private helper `ParserState.__copy__`" (#1420, reported at 1:1); the #1435 row below records what a probe past it shows. #1421 then clears the last error: the same build of the unmodified subject (debug build of the #1421 branch merged with `main` `245984a9`) reports none (build only; see the lines 43-44 paragraph below). Everything under them was measured by probes. A probe is a copy with the
 reported lines replaced (for example, the sibling imports pointed at undotted
 stand-in modules), or a minimal module holding one construct inside a method
-body. Probes are never the workload. The subject module was never compiled
+body. Probes are never the workload. Until #1421 the subject module was never compiled
 whole past the first layer, so this list is a **lower bound**.
 
 | Blocker in the subject module (line) | Diagnostic | Issue |
@@ -968,13 +968,14 @@ compiled again. Since [#1421](https://github.com/rotnov/pycc/issues/1421)
 that `T0034` is cleared: a display in a value position of an object slot,
 an `or` operand stored into an object attribute included, builds a CPython
 `list` (`tests/issue_1421_object_slot_list_display.rs` runs the
-`ParserState.__init__` shape and matches CPython). A probe-grade
-`--ext --foreign-relative-imports` build of the subject copied alone, with
-other rows' constructs patched out (the line-80 keyword arguments,
-`__eq__`'s body, `__copy__`'s annotation), reports no diagnostic on lines
-43-44 with a debug build of the #1421 branch (based on `main` `a28ef867`).
-The same probe built from that `main` also reports the `T0034`. This is a
-build-only probe, so the row is still not re-measured as cleared.
+`ParserState.__init__` shape and matches CPython). The unmodified pinned
+subject (`419d76a7...`) copied alone, built with
+`--ext --foreign-relative-imports` by a debug build of the #1421 branch
+merged with `main` `245984a9`, reports no diagnostic and writes the
+extension; the same build from that `main` reports one error, this
+`T0034` (reported at 1:1). This is a build-only measurement: the extension
+was not imported, since its relative sibling imports need the `lark`
+package around it.
 
 **State on 2026-09-24 (import-closure reading, rescoped 2026-09-30 by D-257).** On 2026-09-24 the repository owner directed
 that the row (b) outcome below is a chicken-and-egg result and that the missing
