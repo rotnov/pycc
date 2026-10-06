@@ -114,8 +114,9 @@ pub(crate) enum PropertySetter {
     /// wrapper, rendered from this one-argument instance export. Like the
     /// getter's, the export is never in the export set
     /// ([`super::collect_exports`] refuses a `.setter` spelling), so its
-    /// wrapper is emitted only by [`getset_c`].
-    Compiled(ExtExport),
+    /// wrapper is emitted only by [`getset_c`]. Boxed, so a `Refuse` or
+    /// `ReadOnly` descriptor does not carry an export's footprint.
+    Compiled(Box<ExtExport>),
     /// A getter-only property: a store raises CPython's `property '<p>' of
     /// '<C>' object has no setter`.
     Refuse,
@@ -196,7 +197,9 @@ pub(crate) fn collect_getsets(
                         let setter =
                             inherited::receiver_exact_member(module, class, &member, mangled);
                         setter_export(module, class, &prop.name, setter, &carrier_classes)
-                            .map_or(PropertySetter::ReadOnly, PropertySetter::Compiled)
+                            .map_or(PropertySetter::ReadOnly, |export| {
+                                PropertySetter::Compiled(Box::new(export))
+                            })
                     }
                 };
                 out.push(ExtGetset::Property {

@@ -321,8 +321,8 @@ fn setter_of(ctors: &[ExtCtor], class: &str, prop: &str) -> PropertySetter {
         .unwrap_or_else(|| panic!("`{class}.{prop}` is a property descriptor"))
 }
 
-fn compiled_setter(name: &str, class: &str, prop: &str, ty: Ty) -> PropertySetter {
-    PropertySetter::Compiled(ExtExport {
+fn compiled_setter(name: &str, class: &str, prop: &str, ty: Ty, ret: Ty) -> PropertySetter {
+    PropertySetter::Compiled(Box::new(ExtExport {
         name: name.to_string(),
         class: Some(class.to_string()),
         method: Some(prop.to_string()),
@@ -331,9 +331,9 @@ fn compiled_setter(name: &str, class: &str, prop: &str, ty: Ty) -> PropertySette
         params: vec![ty],
         param_writable: vec![false],
         defaults: Vec::new(),
-        return_ty: Ty::None,
+        return_ty: ret,
         keyword_names: None,
-    })
+    }))
 }
 
 /// A property with a compiled setter whose value type the boundary carries
@@ -353,17 +353,14 @@ fn a_property_setter_routes_to_the_receiver_exact_compiled_setter() {
     ] {
         assert_eq!(
             setter_of(&ctors, class, prop),
-            compiled_setter(setter, class, prop, ty),
+            compiled_setter(setter, class, prop, ty, Ty::None),
             "{class}.{prop}"
         );
     }
     // A carried non-`None` return is packed by the wrapper and dropped.
-    let PropertySetter::Compiled(ret) = setter_of(&ctors, "Base", "ret") else {
-        panic!("`ret` has a compiled setter");
-    };
     assert_eq!(
-        (ret.name.as_str(), &ret.return_ty),
-        ("Base.ret.setter", &Ty::Int)
+        setter_of(&ctors, "Base", "ret"),
+        compiled_setter("Base.ret.setter", "Base", "ret", Ty::Int, Ty::Int)
     );
     for prop in ["count", "pair"] {
         assert_eq!(
