@@ -654,7 +654,7 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             }
             infer_expr_in(env, local_names, expr)
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             // `let _ =` rather than `?`, for the same reason the
             // `isinstance` arm above uses it: only the rewriting side
             // effect matters here, and the `infer_expr_in` call on the
@@ -829,6 +829,30 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             }
             infer_expr_in(env, local_names, expr)
         }
+        // Part 8 of #1371: rewrite every operand of the positional half
+        // and every keyword value, but infer the *whole* node -- inferring
+        // the positional half alone would check a pycc callee's arity
+        // before the node's own keyword refusal.
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            let (callee, args) = match call.as_mut() {
+                HirExpr::Call { args, .. } => (None, args),
+                HirExpr::MethodCall { base, args, .. } => {
+                    let base = (!is_class_name_base(env, local_names, base.as_ref()))
+                        .then_some(base.as_mut());
+                    (base, args)
+                }
+                HirExpr::ExprCall { callee, args } => (Some(callee.as_mut()), args),
+                other => unreachable!("a keyword call never wraps {other:?}"),
+            };
+            for part in callee
+                .into_iter()
+                .chain(args.iter_mut())
+                .chain(keywords.iter_mut().map(|(_, value)| value))
+            {
+                rewrite_generic_calls_in_expr(env, local_names, part, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
         // Issue #1188: rewrite inside the wrapped method call exactly as the
         // `MethodCall` arm does, but infer the *whole* node, so the result
         // follows the receiver's reading -- inferring `call` alone would
@@ -920,6 +944,7 @@ pub(crate) fn rewrite_generic_calls_in_expr(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => infer_expr_in(env, local_names, expr),
     }
@@ -1316,7 +1341,7 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
                 collect_generic_class_instantiations_from_expr(arg, out);
             }
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             collect_generic_class_instantiations_from_expr(operand, out);
         }
         HirExpr::CompareChain { first, links } => {
@@ -1416,6 +1441,12 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             collect_generic_class_instantiations_from_expr(call, out);
         }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            collect_generic_class_instantiations_from_expr(call, out);
+            for (_, value) in keywords {
+                collect_generic_class_instantiations_from_expr(value, out);
+            }
+        }
         // PEP 572 (#774): `target := value` — recurse into `value` only,
         // mirroring `AttrGet`'s own single-sub-expression shape just above.
         HirExpr::NamedExpr { name: _, value } => {
@@ -1433,6 +1464,7 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => {}
     }
@@ -1440,8 +1472,9 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
 
 /// PEP 695 (#387): Traverses a `CompIter` for `GenericClassInstantiate`
 /// expressions. `CompIter::Range` carries three `HirExpr`s (`start`, `stop`,
-/// `step`) that can each contain a GCI (e.g. `range(C[int](0), 10)`).
-/// `CompIter::Name` holds only a bare `String`, so it cannot contain one.
+/// `step`) that can each contain a GCI (e.g. `range(C[int](0), 10)`), and
+/// `CompIter::Iterable` (Part 1 of #1255) carries one. `CompIter::Name`
+/// holds only a bare `String`, so it cannot contain one.
 pub(crate) fn collect_generic_class_instantiations_from_comp_iter(
     iter: &CompIter,
     out: &mut Vec<(String, Ty)>,
@@ -1451,6 +1484,9 @@ pub(crate) fn collect_generic_class_instantiations_from_comp_iter(
             for sub in [start, stop, step] {
                 collect_generic_class_instantiations_from_expr(sub, out);
             }
+        }
+        CompIter::Iterable(iterable) => {
+            collect_generic_class_instantiations_from_expr(iterable, out)
         }
         CompIter::Name(_) => {}
     }
@@ -2783,7 +2819,7 @@ fn rewrite_protocol_calls_in_expr(
                 seen,
             );
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             rewrite_protocol_calls_in_expr(
                 operand,
                 protocol_funcs,
@@ -2849,6 +2885,21 @@ fn rewrite_protocol_calls_in_expr(
         // arguments of `table[k](args)` unspecialized.
         HirExpr::ExprCall { callee, args } => {
             for part in std::iter::once(callee.as_mut()).chain(args.iter_mut()) {
+                rewrite_protocol_calls_in_expr(
+                    part,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
+            }
+        }
+        // Part 8 of #1371: the positional half and every keyword value.
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            for part in
+                std::iter::once(call.as_mut()).chain(keywords.iter_mut().map(|(_, value)| value))
+            {
                 rewrite_protocol_calls_in_expr(
                     part,
                     protocol_funcs,
@@ -2996,17 +3047,20 @@ fn rewrite_protocol_calls_in_comprehension(
     specializations: &mut Vec<HirItem>,
     seen: &mut HashSet<String>,
 ) {
-    if let CompIter::Range { start, stop, step } = iter {
-        for operand in [start, stop, step] {
-            rewrite_protocol_calls_in_expr(
-                operand,
-                protocol_funcs,
-                env,
-                local_names,
-                specializations,
-                seen,
-            );
-        }
+    let operands: Vec<&mut HirExpr> = match iter {
+        CompIter::Range { start, stop, step } => vec![start, stop, step],
+        CompIter::Iterable(iterable) => vec![iterable.as_mut()],
+        CompIter::Name(_) => vec![],
+    };
+    for operand in operands {
+        rewrite_protocol_calls_in_expr(
+            operand,
+            protocol_funcs,
+            env,
+            local_names,
+            specializations,
+            seen,
+        );
     }
     let mut scoped = env.clone();
     if let Ok(var_ty) = crate::comprehension::resolve_comp_iter(env, local_names, iter) {

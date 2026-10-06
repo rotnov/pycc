@@ -385,7 +385,10 @@ pub(super) fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<Stri
             }
         }
         // #382: raise/raise-from/reraise introduce no new bindings.
-        MirStmt::Raise { .. } | MirStmt::RaiseFrom { .. } | MirStmt::Reraise => {}
+        MirStmt::Raise { .. }
+        | MirStmt::RaiseFrom { .. }
+        | MirStmt::ObjRaise { .. }
+        | MirStmt::Reraise => {}
         // #1291: a foreign import nested in a module-level block binds each
         // name to a module global holding the imported CPython object.
         MirStmt::ForeignImport { bindings: imports } => {

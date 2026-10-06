@@ -19,6 +19,8 @@ mod inherited_copies;
 mod module;
 mod monomorphize;
 mod narrow;
+mod not_implemented;
+mod object_none;
 mod redeclaration;
 mod return_coverage;
 mod set_element;
@@ -28,6 +30,7 @@ mod string_conversion;
 #[cfg(test)]
 mod tests;
 mod unop;
+mod unpack;
 
 use return_coverage::block_always_returns;
 
@@ -591,6 +594,7 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => {}
         HirExpr::ListPop { list } => {
@@ -622,7 +626,9 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
                 collect_named_expr_names_in_expr(part, names);
             }
         }
-        HirExpr::UnaryOp { operand, .. } => collect_named_expr_names_in_expr(operand, names),
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
+            collect_named_expr_names_in_expr(operand, names)
+        }
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(inner) = part {
@@ -682,6 +688,12 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
         }
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             collect_named_expr_names_in_expr(call, names)
+        }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            collect_named_expr_names_in_expr(call, names);
+            for (_, value) in keywords {
+                collect_named_expr_names_in_expr(value, names);
+            }
         }
         HirExpr::GenericClassInstantiate { args, .. } => {
             for arg in args {
@@ -1103,7 +1115,7 @@ pub(crate) fn annotation_initializer_mismatch(
             annotation.name()
         ),
         Span::new(0, 0),
-    ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name()))
+    ).with_help(foreign::object_into_scalar_help(inferred, annotation).unwrap_or_else(|| format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name())))
 }
 
 /// The canonical PEP 591 `T0045`: a second assignment to a `Final` name.
@@ -1324,6 +1336,7 @@ fn collect_named_expr_bindings(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => Ok(()),
         HirExpr::ListPop { list } => match list.attr_expr() {
@@ -1357,7 +1370,9 @@ fn collect_named_expr_bindings(
             }
             Ok(())
         }
-        HirExpr::UnaryOp { operand, .. } => collect_named_expr_bindings(env, local_names, operand),
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
+            collect_named_expr_bindings(env, local_names, operand)
+        }
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(inner) = part {
@@ -1422,6 +1437,13 @@ fn collect_named_expr_bindings(
         }
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             collect_named_expr_bindings(env, local_names, call)
+        }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            collect_named_expr_bindings(env, local_names, call)?;
+            for (_, value) in keywords {
+                collect_named_expr_bindings(env, local_names, value)?;
+            }
+            Ok(())
         }
         HirExpr::GenericClassInstantiate { args, .. } => {
             for arg in args {
@@ -2840,7 +2862,7 @@ fn check_stmt_in_function(
 ) -> Result<(), Diagnostic> {
     match stmt {
         HirStmt::Return(None) => {
-            if return_ty != Ty::None {
+            if return_ty != Ty::None && !object_none::admits_none_return(&return_ty, None) {
                 return Err(Diagnostic::error(
                     "T0022",
                     format!(
@@ -2851,6 +2873,10 @@ fn check_stmt_in_function(
                 )
                 .with_help(format!("return a `{}` value", return_ty.name())));
             }
+            Ok(())
+        }
+        HirStmt::Return(Some(expr)) if object_none::admits_none_return(&return_ty, Some(expr)) => {
+            // #1387: `return None` into an `object` slot; see `object_none`.
             Ok(())
         }
         HirStmt::Return(Some(expr)) => {
@@ -2984,21 +3010,25 @@ fn check_stmt_in_function(
                 }
                 // #380 (PR-20): if the mismatch involves a protocol,
                 // produce a detailed T0046 conformance error.
-                let diag =
-                    if matches!(return_ty, Ty::Protocol(_)) || matches!(actual, Ty::Protocol(_)) {
-                        class::assignable_error(env, &actual, &return_ty)
-                    } else {
-                        Diagnostic::error(
-                            "T0022",
-                            format!(
-                                "expected return type `{}`, got `{}`",
-                                return_ty.name(),
-                                actual.name()
-                            ),
-                            Span::new(0, 0),
-                        )
-                        .with_help(format!("return a `{}` value", return_ty.name()))
-                    };
+                let diag = if matches!(return_ty, Ty::Protocol(_))
+                    || matches!(actual, Ty::Protocol(_))
+                {
+                    class::assignable_error(env, &actual, &return_ty)
+                } else {
+                    Diagnostic::error(
+                        "T0022",
+                        format!(
+                            "expected return type `{}`, got `{}`",
+                            return_ty.name(),
+                            actual.name()
+                        ),
+                        Span::new(0, 0),
+                    )
+                    .with_help(
+                        foreign::object_into_scalar_help(&actual, &return_ty)
+                            .unwrap_or_else(|| format!("return a `{}` value", return_ty.name())),
+                    )
+                };
                 return Err(diag);
             }
             // PEP 695 (#387): `is_assignable`'s `from == Ty::Param` clause
@@ -3640,7 +3670,8 @@ fn reject_generic_calls_in_block(
 }
 
 /// Pushes every expression position a comprehension's iterable can hold
-/// (`CompIter::Range`'s three bounds; `CompIter::Name` holds none).
+/// (`CompIter::Range`'s three bounds, `CompIter::Iterable`'s expression;
+/// `CompIter::Name` holds none).
 fn comp_iter_exprs<'a>(iter: &'a CompIter, exprs: &mut Vec<&'a HirExpr>) {
     match iter {
         CompIter::Range { start, stop, step } => {
@@ -3648,6 +3679,7 @@ fn comp_iter_exprs<'a>(iter: &'a CompIter, exprs: &mut Vec<&'a HirExpr>) {
             exprs.push(stop);
             exprs.push(step);
         }
+        CompIter::Iterable(iterable) => exprs.push(iterable),
         CompIter::Name(_) => {}
     }
 }
@@ -3790,7 +3822,7 @@ fn reject_generic_calls_in_expr(
             }
             Ok(())
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             reject_generic_calls_in_expr(module_env, own_name, operand)
         }
         HirExpr::CompareChain { first, links } => {
@@ -3876,6 +3908,13 @@ fn reject_generic_calls_in_expr(
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             reject_generic_calls_in_expr(module_env, own_name, call)
         }
+        HirExpr::KeywordCall { call, keywords, .. } => {
+            reject_generic_calls_in_expr(module_env, own_name, call)?;
+            for (_, value) in keywords {
+                reject_generic_calls_in_expr(module_env, own_name, value)?;
+            }
+            Ok(())
+        }
         // PEP 695 (#387): `C[type_arg](args)` — recurse into args only.
         // `class` is a bare name (not an expression), and `type_arg` is a
         // compile-time `Ty`, so neither needs generic-call rejection.
@@ -3912,6 +3951,7 @@ fn reject_generic_calls_in_expr(
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented
         | HirExpr::Name(_)
         | HirExpr::Super => Ok(()),
         HirExpr::ListPop { list } => match list.attr_expr() {

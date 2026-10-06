@@ -124,18 +124,57 @@ fn an_instance_of_a_class_without_a_truth_dunder_is_admitted() {
     );
 }
 
+/// Part 6 of #1371: an object joins an object or a boxable scalar to
+/// `object`, in either order and under either operator.
 #[test]
-fn a_cpython_object_operand_is_refused_with_i0404() {
-    let err = value_ty(BoolOpKind::Or, Ty::Object, Ty::Int).unwrap_err();
+fn a_cpython_object_operand_joins_to_object() {
+    for op in [BoolOpKind::And, BoolOpKind::Or] {
+        for other in [Ty::Object, Ty::Bool, Ty::Int, Ty::Float, Ty::Str] {
+            assert_eq!(value_ty(op, Ty::Object, other.clone()).unwrap(), Ty::Object);
+            assert_eq!(value_ty(op, other, Ty::Object).unwrap(), Ty::Object);
+        }
+    }
+}
+
+/// An object paired with a value pycc cannot box is `I0404` naming the
+/// other operand's type, whichever side the object is on.
+#[test]
+fn a_cpython_object_with_an_unboxable_operand_is_refused_with_i0404() {
+    let instance = Ty::Instance(Box::new("C".to_string()));
+    let err = value_ty(BoolOpKind::Or, Ty::Object, instance).unwrap_err();
     assert_eq!(err.code, "I0404");
     assert!(
         err.message
-            .contains("using a CPython object as an `or` operand"),
+            .contains("joining a CPython object with a `C` value in an `or`"),
         "{}",
         err.message
     );
-    let err = value_ty(BoolOpKind::And, Ty::Int, Ty::Object).unwrap_err();
+    let optional = Ty::Optional(Box::new(Ty::Int));
+    let expected = format!(
+        "joining a CPython object with a `{}` value in an `and`",
+        optional.name()
+    );
+    let err = value_ty(BoolOpKind::And, optional, Ty::Object).unwrap_err();
     assert_eq!(err.code, "I0404");
+    assert!(err.message.contains(&expected), "{}", err.message);
+}
+
+/// In truth context an object operand is admitted next to any
+/// truth-testable operand, the node typed `bool`.
+#[test]
+fn a_cpython_object_operand_is_admitted_in_truth_context() {
+    let mut env = Environment::new();
+    env.bind("a".to_string(), Ty::Bool);
+    env.bind("o".to_string(), Ty::Object);
+    for (left, right) in [("a", "o"), ("o", "a"), ("o", "o")] {
+        let truth = HirExpr::BoolOp {
+            op: BoolOpKind::And,
+            left: Box::new(HirExpr::Name(left.to_string())),
+            right: Box::new(HirExpr::Name(right.to_string())),
+            truth_only: true,
+        };
+        assert_eq!(infer_expr(&env, &truth).unwrap(), Ty::Bool);
+    }
 }
 
 #[test]

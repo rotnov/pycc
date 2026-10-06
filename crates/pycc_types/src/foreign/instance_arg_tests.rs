@@ -145,6 +145,45 @@ fn the_unsupported_message_names_instance_arguments() {
     refused(
         "product([1])\n",
         "I0404",
-        "positional scalar-, object- or class-instance-argument method calls",
+        "scalar-, `None`-, object- or class-instance-argument method calls",
     );
+}
+
+/// An instance is a keyword value too (Part 8 of #1371's keyword calls), in
+/// all three call shapes and beside positional arguments -- lark's
+/// `UnexpectedToken(token, expected, state=self, ...)`.
+#[test]
+fn an_instance_keyword_value_is_admitted_in_every_call_shape() {
+    admitted("product(k=Q(1))\n");
+    admitted("product.attr(1, k=Q(1), j=None)\n");
+    admitted("product['k'](Q(1), state=Q(2))\n");
+    admitted(
+        "class P:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\n    \
+         def go(self) -> None:\n        print(str(product(1, state=self)))\n",
+    );
+}
+
+/// A keyword value keeps the positional refusals: an enum member, and a
+/// class method's `cls` named in the message.
+#[test]
+fn a_refused_keyword_value_is_refused() {
+    refused(
+        "from enum import Enum\n\n\nclass Color(Enum):\n    RED = 1\n\n\nproduct(k=Color.RED)\n",
+        "I0404",
+        "passing a `Color` argument to a CPython object's call",
+    );
+    for call in [
+        "product(k=cls)",
+        "product.m(1, k=cls)",
+        "product['k'](k=cls)",
+    ] {
+        refused(
+            &format!(
+                "class K:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\n    \
+                 @classmethod\n    def make(cls) -> None:\n        {call}\n"
+            ),
+            "I0404",
+            "passing a class method's `cls` argument to a CPython object's",
+        );
+    }
 }

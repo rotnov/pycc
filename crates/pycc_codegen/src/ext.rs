@@ -194,6 +194,29 @@ pub const EXT_OBJ_CALL_SYMBOL: &str = "pycc_ext_obj_call";
 /// Spelled once here for exactly the reason [`EXT_OBJ_IMPORT_SYMBOL`] is.
 pub const EXT_OBJ_CALL_BORROWED_SYMBOL: &str = "pycc_ext_obj_call_borrowed";
 
+/// The fixed C shim's keyword-call helper (Part 8 of #1371):
+/// `o.method(x, key=v)`, `f(a, b=c)` or `Cls(arg, flag=True)` on a CPython
+/// object. It takes the callable, an array of `nargs + nkw` *owned*
+/// argument references -- the positional arguments, then the keyword values
+/// -- the positional count `nargs`, an array of `nkw` NUL-terminated keyword
+/// names and `nkw` itself. It builds the `kwnames` tuple and calls
+/// `PyObject_Vectorcall`, which is CPython's own keyword-call protocol and
+/// observably equivalent to `PyObject_Call` with a `kwargs` dict.
+///
+/// Like [`EXT_OBJ_CALL_SYMBOL`] it **consumes** the callable (a bound
+/// method or another freshly produced reference) and every argument
+/// reference on every path. Returns a new reference or `NULL` with the
+/// CPython exception set. Spelled once here for exactly the reason
+/// [`EXT_OBJ_IMPORT_SYMBOL`] is.
+pub const EXT_OBJ_CALL_KW_SYMBOL: &str = "pycc_ext_obj_call_kw";
+
+/// [`EXT_OBJ_CALL_KW_SYMBOL`] with a *borrowed* callable (Part 8 of #1371),
+/// the keyword counterpart of [`EXT_OBJ_CALL_BORROWED_SYMBOL`]: the helper
+/// takes its own reference to the callable before delegating, so a module
+/// global such as a foreign class keeps its reference. The argument
+/// references are consumed exactly as for the consuming helper.
+pub const EXT_OBJ_CALL_KW_BORROWED_SYMBOL: &str = "pycc_ext_obj_call_kw_borrowed";
+
 /// The shim's `int` argument packer: a D-141 encoded int word in, a new
 /// `PyObject *` reference out, or `NULL` with an `OverflowError` set for a
 /// bigint (#1040). Borrows its argument -- see the C side's own comment.
@@ -318,11 +341,35 @@ pub const EXT_OBJ_BUILD_LIST_SYMBOL: &str = "pycc_ext_obj_build_list";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_DELSLICE_SYMBOL: &str = "pycc_ext_obj_delslice";
 
+/// The fixed C shim's `raise o` helper (Part 9 of #1371): `void
+/// pycc_ext_obj_raise(PyObject *o)` with `o` borrowed. It decides what is
+/// raised the way CPython's own `raise` does -- an exception class is
+/// instantiated, an instance is raised as it is, and anything else raises
+/// `TypeError` -- then always bridges the CPython exception into a pending
+/// pycc exception, so the caller ends the block exactly like a native
+/// `raise`.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_RAISE_SYMBOL: &str = "pycc_ext_obj_raise";
+
 /// The fixed C shim's `None` accessor (Part 1 of #1371): a *borrowed*
-/// pointer to CPython's immortal `None`, the right-hand side of `o is None`.
+/// pointer to CPython's immortal `None`, the right-hand side of `o is None`
+/// and, since Part 8 of #1371, the value a `None` call argument is packed
+/// from (`foreign_pack::none_pointer`).
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_NONE_SYMBOL: &str = "pycc_ext_obj_none";
+
+/// The fixed C shim's `NotImplemented` accessor (#1418): a *borrowed*
+/// pointer to CPython's `NotImplemented` singleton, the value of an
+/// admitted `return NotImplemented` in a comparison method
+/// (`MirExpr::NotImplemented`). A compiled return hands the borrowed
+/// singleton back as is (it is immortal on CPython 3.13+); when the result
+/// crosses the export boundary, the C shim's `pycc_ext_pack_object` takes
+/// the strong reference the host caller owns.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_NOT_IMPLEMENTED_SYMBOL: &str = "pycc_ext_obj_not_implemented";
 
 /// The fixed C shim's `isinstance` helper (Part 1 of #1371): it takes a
 /// borrowed object, a borrowed class (or `NULL`, which selects a builtin
@@ -332,6 +379,17 @@ pub const EXT_OBJ_NONE_SYMBOL: &str = "pycc_ext_obj_none";
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_ISINSTANCE_SYMBOL: &str = "pycc_ext_obj_isinstance";
+
+/// The fixed C shim's compiled-class `isinstance` helper (Part 7 of #1371):
+/// it takes a borrowed object and the NUL-terminated name of a class
+/// compiled in this module, and returns `1`/`0`, or `-1` with the CPython
+/// exception already set. The shim forwards to the artifact's generated
+/// `pycc_ext_compiled_class_isinstance`, which tests the object against the
+/// host type object of every published class whose MRO contains the named
+/// one and answers `0` when no published class does.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL: &str = "pycc_ext_obj_isinstance_compiled";
 
 /// The fixed C shim's iterator-acquisition helper (Part 3 of #1026, PR 3c
 /// of #1082): it takes a borrowed `PyObject *` and returns a *new*
@@ -367,6 +425,52 @@ pub const EXT_OBJ_GET_ITER_SYMBOL: &str = "pycc_ext_obj_get_iter";
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_ITER_NEXT_SYMBOL: &str = "pycc_ext_obj_iter_next";
+
+/// The fixed C shim's collection constructor (Part 1 of #1255): given a
+/// [`ObjCollectionKind`] code it returns a *new* reference to an empty
+/// CPython `list` (`0`) or `set` (`1`), or `NULL` with the CPython
+/// exception already set. A list or set comprehension over a CPython object
+/// builds its result in it; the reference is the comprehension's value and
+/// is deliberately never released (#1092).
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_NEW_COLLECTION_SYMBOL: &str = "pycc_ext_obj_new_collection";
+
+/// The fixed C shim's collection insert (Part 1 of #1255): given a borrowed
+/// collection from [`EXT_OBJ_NEW_COLLECTION_SYMBOL`], the same kind code and
+/// a *packed* item, it appends the item to the list or adds it to the set
+/// and returns `0`, or returns `-1` with the CPython exception already set
+/// (an unhashable set item raises `TypeError` there).
+///
+/// **Ownership.** The item is a new reference a `pycc_ext_obj_pack_*`
+/// helper produced, and it is consumed on every path, exactly as
+/// `pycc_ext_obj_call` consumes its arguments: a `NULL` item is a packer
+/// that already set the exception, and is reported as a failure.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_COLLECT_SYMBOL: &str = "pycc_ext_obj_collect";
+
+/// Which CPython collection a comprehension over an object builds (Part 1
+/// of #1255): the code [`EXT_OBJ_NEW_COLLECTION_SYMBOL`] and
+/// [`EXT_OBJ_COLLECT_SYMBOL`] take. Spelled once here so the two helpers'
+/// shared numbering cannot drift between their callers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjCollectionKind {
+    /// A `list`, from `[elt for x in <object>]`.
+    List,
+    /// A `set`, from `{elt for x in <object>}`.
+    Set,
+}
+
+impl ObjCollectionKind {
+    /// The kind code the shim helpers switch on.
+    pub fn shim_code(self) -> u64 {
+        match self {
+            ObjCollectionKind::List => 0,
+            ObjCollectionKind::Set => 1,
+        }
+    }
+}
 
 /// The fixed C shim's `float(o)` conversion helper (Part 4 of #1026, PR 4a
 /// of #1083): it takes a borrowed `PyObject *` and a `double *`
@@ -482,6 +586,17 @@ pub const EXT_OBJ_FORMAT_SYMBOL: &str = "pycc_ext_obj_format";
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL: &str = "pycc_ext_obj_unpack_float_tuple";
+
+/// The fixed C shim's tuple-unpacking helper (Part 1 of #891): it takes a
+/// borrowed `PyObject *` and the target count `n`, and returns a *new*
+/// reference to a `tuple` of exactly `n` items taken from the object by
+/// CPython's own unpack protocol, or `NULL` with CPython's own exception
+/// set -- `TypeError` for a non-iterable, `ValueError` for too many or too
+/// few values. The tuple is bound to the unpacking temporary and leaked on
+/// the #1092 leak-only rule, like every other object result.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_UNPACK_SYMBOL: &str = "pycc_ext_obj_unpack";
 
 /// The C-legal spelling of a possibly-dotted pycc name.
 ///
@@ -774,6 +889,7 @@ pub fn body_returns_buffer_slice(body: &[pycc_mir::MirStmt]) -> bool {
         | MirStmt::Return(_)
         | MirStmt::AttrSet { .. }
         | MirStmt::ObjDelSlice { .. }
+        | MirStmt::ObjRaise { .. }
         | MirStmt::Raise { .. }
         | MirStmt::RaiseFrom { .. }
         | MirStmt::ForeignImport { .. }

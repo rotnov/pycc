@@ -310,8 +310,11 @@ pub(super) fn check_raise_stmt(
     exc: &Option<HirExpr>,
     cause: &Option<HirExpr>,
 ) -> Result<(), Diagnostic> {
+    let mut object_operand = false;
     if let Some(exc) = exc {
-        check_raise_operand(env, local_names, exc, "can only raise exception instances")?;
+        object_operand |=
+            check_raise_operand(env, local_names, exc, "can only raise exception instances")?
+                == RaiseOperand::Object;
     } else if !env.in_except_handler {
         return Err(Diagnostic::error(
             "T0021",
@@ -320,14 +323,35 @@ pub(super) fn check_raise_stmt(
         ));
     }
     if let Some(cause) = cause {
-        check_raise_operand(
+        object_operand |= check_raise_operand(
             env,
             local_names,
             cause,
             "cause must be an exception instance",
-        )?;
+        )? == RaiseOperand::Object;
+        if object_operand {
+            // Part 9 of #1371: `raise o` is admitted, but chaining a cause
+            // onto, or from, a CPython object is not built yet.
+            return Err(Diagnostic::error(
+                "C0001",
+                "`raise ... from ...` with a CPython object as the exception or the cause is not supported yet",
+                Span::new(0, 0),
+            ));
+        }
     }
     Ok(())
+}
+
+/// What a `raise` operand [`check_raise_operand`] admitted is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RaiseOperand {
+    /// A pycc exception: a constructor call or an existing instance.
+    Native,
+    /// A CPython object (`Ty::Object`, Part 9 of #1371). Whether it is an
+    /// exception at all is CPython's to decide at run time, exactly as for
+    /// CPython's own `raise`: an instance is raised, a class is
+    /// instantiated, and anything else raises `TypeError`.
+    Object,
 }
 
 /// Part 3 of #382 (#542, PEP 654, D-202): the narrow, literal-list-only
@@ -478,12 +502,13 @@ fn check_raise_operand(
     local_names: &[&str],
     expr: &HirExpr,
     error_prefix: &str,
-) -> Result<(), Diagnostic> {
+) -> Result<RaiseOperand, Diagnostic> {
     if let HirExpr::Call { callee, args } = expr
         && (callee == "ExceptionGroup" || callee == "BaseExceptionGroup")
         && is_unshadowed_builtin_exception(env, local_names, callee)
     {
-        return check_exception_group_operand(env, local_names, callee, args);
+        return check_exception_group_operand(env, local_names, callee, args)
+            .map(|()| RaiseOperand::Native);
     }
     if let HirExpr::Call { callee, args } = expr
         && is_unshadowed_builtin_exception(env, local_names, callee)
@@ -509,7 +534,7 @@ fn check_raise_operand(
                 Span::new(0, 0),
             ));
         }
-        return Ok(());
+        return Ok(RaiseOperand::Native);
     }
 
     // Part 2 of #541 (D-189): `raise MyError("boom")` for a user-declared class
@@ -599,13 +624,22 @@ fn check_raise_operand(
         // `param_tys[0]` is always `self`, never part of the caller-supplied
         // argument list -- mirrors `resolve_instantiation`'s identical slice.
         super::class::check_call_args(callee, &arg_tys, &param_tys[1..], None)?;
-        return Ok(());
+        return Ok(RaiseOperand::Native);
     }
 
     let ty = infer_expr_in(env, local_names, expr)?;
     if matches!(&ty, Ty::Instance(class_name) if pycc_hir::is_builtin_exception_class(class_name) && !is_user_defined_class(env, class_name))
     {
-        return Ok(());
+        return Ok(RaiseOperand::Native);
+    }
+    // Part 9 of #1371: a CPython object -- a foreign class, a call of one
+    // (`raise UnexpectedToken(token, expected)`), or any other `object`
+    // value. Reached only by a callee the arms above did not claim: a name
+    // a foreign import binds is in `env`'s bindings, so neither
+    // `is_unshadowed_builtin_exception` nor `user_exception_class` accepts
+    // it, even when it spells a builtin exception's name.
+    if ty == Ty::Object {
+        return Ok(RaiseOperand::Object);
     }
     Err(Diagnostic::error(
         "T0021",

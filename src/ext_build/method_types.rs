@@ -27,6 +27,24 @@ use super::{
 pub(crate) const METHOD_TYPE_REGISTER_DECL: &str =
     "static int pycc_ext_register_method_types(PyObject *module)";
 
+/// The exact C declaration of the generated compiled-class `isinstance`
+/// (Part 7 of #1371), which the shim forward-declares because the `.inc` is
+/// included far below its caller `pycc_ext_obj_isinstance_compiled` -- the
+/// same arrangement as [`USER_EXCEPTION_LOOKUP_DECL`]. Both the shim test and
+/// the generated-text test assert this one constant.
+///
+/// [`USER_EXCEPTION_LOOKUP_DECL`]: super::USER_EXCEPTION_LOOKUP_DECL
+pub(crate) const COMPILED_CLASS_ISINSTANCE_DECL: &str =
+    "static int pycc_ext_compiled_class_isinstance(PyObject *o, const char *name)";
+
+/// The shim's own answer for a class name no published type descends from
+/// (`src/ext/pycc_ext_module.c`): it consults the object's `__class__` as
+/// CPython's `isinstance` does before answering False, so a raising
+/// `__class__` raises here too. Defined in the shim above the point the
+/// companion is included at, so it needs no forward declaration; the shim
+/// test asserts the definition against this one spelling.
+pub(crate) const UNPUBLISHED_CLASS_ISINSTANCE: &str = "pycc_ext_unpublished_class_isinstance";
+
 /// One type object per exporting class, plus the registration entry point
 /// `pycc_ext_exec_module` calls.
 ///
@@ -75,9 +93,21 @@ pub(crate) const METHOD_TYPE_REGISTER_DECL: &str =
 /// when nothing exports a method, so every artifact links -- the same
 /// discipline [`exception_classes_c`] follows.
 ///
+/// Each created type is also kept, as a strong reference, in the file
+/// static `pycc_ext_type_object_<Class>` that
+/// [`compiled_class_isinstance_c`] reads (Part 7 of #1371). A re-exec of
+/// the module replaces it, so a type from before a reload is no longer
+/// consulted -- as a reloaded Python module's new class is not the old one.
+///
 /// [`exception_classes_c`]: super::exception_classes_c
 pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCtor]) -> String {
     let mut out = String::new();
+    for published in publications {
+        out.push_str(&format!(
+            "static PyObject *pycc_ext_type_object_{};\n",
+            published.class
+        ));
+    }
     for published in publications {
         let class = &published.class;
         let ctor = ctors.iter().find(|ctor| ctor.class == *class);
@@ -150,6 +180,7 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
              {flags},\n    pycc_ext_type_slots_{class},\n}};\n\n"
         ));
     }
+    out.push_str(&compiled_class_isinstance_c(publications));
     out.push_str(&format!("{METHOD_TYPE_REGISTER_DECL}\n{{\n"));
     if publications.is_empty() {
         out.push_str("    (void)module;\n    return 0;\n}\n");
@@ -158,18 +189,79 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
     out.push_str("    PyObject *type;\n");
     for class in publications.iter().map(|published| &published.class) {
         // `PyModule_AddObjectRef` and the carrier-type cache (#1435) each
-        // take their own reference, so the local one is released on every
-        // arm. Releasing it on a failing arm too is what keeps a failed
-        // registration from leaking the type.
+        // take their own reference, so on a failing arm the local one is
+        // released, which keeps a failed registration from leaking the
+        // type. On success the local reference moves into the class's file
+        // static (Part 7 of #1371), releasing the one a previous exec
+        // stored there.
         out.push_str(&format!(
             "    type = PyType_FromSpec(&pycc_ext_type_spec_{class});\n    \
              if (type == NULL) {{\n        return -1;\n    }}\n    \
              if (pycc_ext_carrier_register(\"{class}\", type) < 0\n        \
              || PyModule_AddObjectRef(module, \"{class}\", type) < 0) {{\n        \
-             Py_DECREF(type);\n        return -1;\n    }}\n    Py_DECREF(type);\n"
+             Py_DECREF(type);\n        return -1;\n    }}\n    \
+             Py_XDECREF(pycc_ext_type_object_{class});\n    \
+             pycc_ext_type_object_{class} = type;\n"
         ));
     }
     out.push_str("    return 0;\n}\n");
+    out
+}
+
+/// The generated `isinstance` against a class compiled in this module
+/// (Part 7 of #1371), declared as [`COMPILED_CLASS_ISINSTANCE_DECL`].
+///
+/// **The answer is the published family.** A compiled instance reaches the
+/// CPython side only as a carrier of a *published* class's type object
+/// (`mod.Class(...)`), and those types are created with no CPython bases and
+/// without `Py_TPFLAGS_BASETYPE` ([`method_types_c`]): `mod.Derived` is not a
+/// CPython subclass of `mod.Base`, and nothing can subclass either. So for a
+/// class name `C` the CPython-visible instances of `C` are exactly the
+/// instances of the published types whose pycc MRO contains `C`, and the
+/// function tests the object against each of those in publication order,
+/// returning the first non-zero `PyObject_IsInstance` answer -- `1`, or
+/// `-1` with the exception set (a raising `__class__`, say). A name with no
+/// published descendant -- a private class, one exporting no method, every
+/// class of an embedded build, which publishes nothing -- has no instance on
+/// the CPython side, and falls through to [`UNPUBLISHED_CLASS_ISINSTANCE`],
+/// which answers `0` once it has looked up `__class__` as CPython would.
+///
+/// Emitted unconditionally, with a body that is only that fall-through when
+/// nothing is published, so the shim's caller always links.
+pub(crate) fn compiled_class_isinstance_c(publications: &[ExtPublishedClass]) -> String {
+    let mut out = format!("{COMPILED_CLASS_ISINSTANCE_DECL}\n{{\n");
+    let mut names: Vec<&str> = Vec::new();
+    // `object` ends every MRO but is never a compiled class argument
+    // (`isinstance(o, object)` is not a `Compiled` test), so it gets no test.
+    for name in publications.iter().flat_map(|published| &published.mro) {
+        if name != "object" && !names.contains(&name.as_str()) {
+            names.push(name);
+        }
+    }
+    if names.is_empty() {
+        out.push_str(&format!(
+            "    (void)name;\n    return {UNPUBLISHED_CLASS_ISINSTANCE}(o);\n}}\n\n"
+        ));
+        return out;
+    }
+    out.push_str("    int found;\n");
+    for name in names {
+        out.push_str(&format!("    if (strcmp(name, \"{name}\") == 0) {{\n"));
+        for published in publications
+            .iter()
+            .filter(|published| published.mro.iter().any(|ancestor| ancestor == name))
+        {
+            out.push_str(&format!(
+                "        found = PyObject_IsInstance(o, pycc_ext_type_object_{});\n        \
+                 if (found != 0) {{\n            return found;\n        }}\n",
+                published.class
+            ));
+        }
+        out.push_str("        return 0;\n    }\n");
+    }
+    out.push_str(&format!(
+        "    return {UNPUBLISHED_CLASS_ISINSTANCE}(o);\n}}\n\n"
+    ));
     out
 }
 

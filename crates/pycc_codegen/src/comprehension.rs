@@ -262,6 +262,17 @@ pub(super) fn emit_comprehension_expr<'ctx>(
         MirCompElt::Set(elt, ops) => CompElts::Set(elt, ops.as_deref()),
         MirCompElt::Dict { key, value } => CompElts::Dict(key, value),
     };
+    // Part 1 of #1255: a CPython iterable builds a CPython list or set, and
+    // its loop variable is a borrowed object pointer with nothing to release.
+    if let CompSource::Object(iterable) = &comp.source {
+        return super::object_comprehension::emit_object_comprehension(
+            &inner,
+            ptr,
+            iterable,
+            comp.cond.as_ref(),
+            elts,
+        );
+    }
     let container = emit_comprehension(
         &inner,
         &comp.var,
@@ -369,6 +380,11 @@ fn open_loop<'ctx>(
 ) -> CompLoop<'ctx> {
     let (context, builder, rt) = (cx.context, cx.builder, cx.rt);
     match source {
+        CompSource::Object(_) => panic!(
+            "pycc_codegen: internal error: a comprehension over a CPython object reached the \
+             native comprehension loop -- `emit_comprehension_expr` routes it to \
+             `object_comprehension`, and pycc_hir never lowers it to a statement form"
+        ),
         CompSource::Range { start, stop, step } => {
             // Mirrors `MirStmt::ForRange`'s own shape exactly.
             let (start_v, stop_v, step_v) = emit_range_operands_with_exception_safety(

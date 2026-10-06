@@ -55,7 +55,8 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         | HirExpr::StringLiteral(_)
         | HirExpr::EmptyList(_)
         | HirExpr::EmptyDict(_)
-        | HirExpr::NoneLiteral => expr,
+        | HirExpr::NoneLiteral
+        | HirExpr::NotImplemented => expr,
         // `callee` (a bare `String`, never an `HirExpr::Name`) is
         // deliberately left untouched even if it equals `from`: this HIR
         // subset has no first-class functions, so `callee` always names a
@@ -69,6 +70,10 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         HirExpr::UnaryOp { op, operand } => HirExpr::UnaryOp {
             op,
             operand: Box::new(recurse(*operand)),
+        },
+        HirExpr::Unpack { value, arity } => HirExpr::Unpack {
+            value: Box::new(recurse(*value)),
+            arity,
         },
         // `truth_only` is carried through: a renamed comprehension filter
         // stays a truth position.
@@ -197,6 +202,18 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         HirExpr::ReceiverClassCall { args } => HirExpr::ReceiverClassCall {
             args: args.into_iter().map(recurse).collect(),
         },
+        HirExpr::KeywordCall {
+            call,
+            keywords,
+            span,
+        } => HirExpr::KeywordCall {
+            call: Box::new(recurse(*call)),
+            keywords: keywords
+                .into_iter()
+                .map(|(name, value)| (name, recurse(value)))
+                .collect(),
+            span,
+        },
         // #433: `Super` carries no names to rename — it is a compile-time
         // marker, not a value with sub-expressions.
         HirExpr::Super => expr,
@@ -242,12 +259,13 @@ fn synthesize_comp_var_name(target_start: u32, source_name: &str) -> String {
 }
 
 /// Resolves a comprehension's `for var in <iter>` clause into a `CompIter`,
-/// reusing `Stmt::For`'s own iterable-shape acceptance verbatim (D-117):
-/// `range(...)` or a bare name (resolved to `Ty::List`/`Ty::Dict`/`Ty::Set`/
-/// `Ty::FrozenSet` downstream by `pycc_types`/`pycc_mir`, exactly like a plain `for` loop).
-/// Any other shape is rejected with the existing generic `C0001` path,
-/// mirroring `Stmt::For`'s own "only `for x in range(...)` or `for x in
-/// <list>` is supported so far" message.
+/// reusing `Stmt::For`'s own iterable-shape acceptance (D-117): `range(...)`
+/// or a bare name (resolved to `Ty::List`/`Ty::Dict`/`Ty::Set`/
+/// `Ty::FrozenSet` downstream by `pycc_types`/`pycc_mir`, exactly like a
+/// plain `for` loop). Any other iterable expression (Part 1 of #1255) lowers
+/// to [`CompIter::Iterable`]; this step has no type information, so whether
+/// it is iterable -- only a CPython object is, so far -- is decided by
+/// `pycc_types`, which refuses every other type with `C0001`.
 fn lower_comprehension_iter(
     iter_expr: &Expr,
     class_name: Option<&str>,
@@ -257,30 +275,18 @@ fn lower_comprehension_iter(
     if let Expr::Name(name) = iter_expr {
         return Ok(CompIter::Name(name.id.as_str().to_string()));
     }
-    let Expr::Call(call) = iter_expr else {
-        return Err(unsupported(
-            format!(
-                "only `range(...)` or a bare-name iterable is supported so far in a comprehension, got {} as the iterable",
-                pycc_ast::expr_kind_name(iter_expr)
-            ),
-            pycc_ast::expr_range(iter_expr),
-        ));
+    let range_call = match iter_expr {
+        Expr::Call(call) if matches!(call.func.as_ref(), Expr::Name(callee) if callee.id.as_str() == "range") => {
+            Some(call)
+        }
+        _ => None,
     };
-    let Expr::Name(callee) = call.func.as_ref() else {
-        return Err(unsupported(
-            "only calling `range(...)` is supported so far in a comprehension",
-            pycc_ast::expr_range(&call.func),
-        ));
+    let Some(call) = range_call else {
+        // Literal `true`, for the same enclosing-scope reason as the
+        // `range(...)` operands below (D-149 correction 6).
+        let iterable = lower_expr(iter_expr, true, class_name, imports, signatures)?;
+        return Ok(CompIter::Iterable(Box::new(iterable)));
     };
-    if callee.id.as_str() != "range" {
-        return Err(unsupported(
-            format!(
-                "only iterating over `range(...)` is supported so far in a comprehension, got `{}`",
-                callee.id
-            ),
-            call.range,
-        ));
-    }
     if !call.arguments.keywords.is_empty() {
         return Err(unsupported(
             "keyword arguments to range() are not supported yet",
@@ -415,6 +421,7 @@ pub(crate) fn comprehension_contains_named_expr(comp: &HirComprehension) -> bool
         CompIter::Range { start, stop, step } => {
             contains_named_expr(start) || contains_named_expr(stop) || contains_named_expr(step)
         }
+        CompIter::Iterable(iterable) => contains_named_expr(iterable),
         CompIter::Name(_) => false,
     };
     iter_has
@@ -426,7 +433,7 @@ pub(crate) fn comprehension_contains_named_expr(comp: &HirComprehension) -> bool
 }
 
 /// Renames `from` to `to` throughout a nested comprehension (#1254): its
-/// range operands, a bare-name iterable, `cond` and the element expressions.
+/// range operands, a bare-name or expression iterable, `cond` and the element expressions.
 /// A nested comprehension's own `var` is digit-led, so it never equals
 /// `from`, and its source-name occurrences were already renamed when it was
 /// lowered. The iterable *is* renamed here, unlike the outermost iterable
@@ -442,6 +449,7 @@ fn rename_in_comprehension(comp: HirComprehension, from: &str, to: &str) -> HirC
             step: recurse(step),
         },
         CompIter::Name(n) => CompIter::Name(if n == from { to.to_string() } else { n }),
+        CompIter::Iterable(iterable) => CompIter::Iterable(Box::new(recurse(*iterable))),
     };
     HirComprehension {
         var: comp.var,
@@ -575,7 +583,19 @@ pub(crate) fn lower_dict_comp(
 /// `target = <comp>` (PR-12, D-117): the statement form keeps its own
 /// `HirStmt` variants -- about twenty statement passes dispatch on them --
 /// and is built from the same lowered node as the expression form.
+///
+/// A comprehension over an iterable expression (Part 1 of #1255) is the
+/// exception: it produces a CPython object, not a native container, so it
+/// lowers to a plain `HirStmt::Assign` of the expression form and binds
+/// `target` exactly as any other object-valued assignment does. None of
+/// the native-container statement passes applies to it.
 pub(crate) fn comp_assign_stmt(target: &str, comp: HirComprehension) -> HirStmt {
+    if let CompIter::Iterable(_) = comp.iter {
+        return HirStmt::Assign {
+            target: target.to_string(),
+            value: HirExpr::Comprehension(Box::new(comp)),
+        };
+    }
     let HirComprehension {
         var,
         iter,

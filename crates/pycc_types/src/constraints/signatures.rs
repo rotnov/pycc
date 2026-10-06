@@ -449,6 +449,9 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             body,
             Some(signature.2.clone()),
         ) {
+            // #1418: a widened comparison method's native return explains
+            // where its `object` return type came from.
+            let diagnostic = crate::not_implemented::widened_return_help(body, diagnostic);
             collected.push((DiagnosticKey::Function(index), diagnostic));
             continue;
         }

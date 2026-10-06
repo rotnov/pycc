@@ -65,11 +65,7 @@ fn a_non_packable_argument_is_refused() {
         "I0404",
         "passing a `list[int]` argument to a CPython object's call",
     );
-    refused(
-        &format!("{FROM_FORM}product(None)\n"),
-        "I0404",
-        "argument to a CPython object's call",
-    );
+    // Part 8 of #1371 admits a `None` argument (`keyword_call_tests.rs`).
 }
 
 /// Part 2a of #1371: a second CPython object is packable
@@ -147,14 +143,11 @@ fn a_call_after_a_block_that_may_skip_the_import_is_t0041() {
     );
 }
 
-/// A call's `object` result is not an exception instance.
+/// Part 9 of #1371: a call's `object` result is raised the way CPython
+/// raises it; `foreign/raise_tests.rs` owns the rest of `raise o`.
 #[test]
-fn raising_a_call_result_is_refused() {
-    refused(
-        &format!("{FROM_FORM}raise product(\"a\")\n"),
-        "T0021",
-        "can only raise exception instances, got `object`",
-    );
+fn raising_a_call_result_is_admitted() {
+    admitted(&format!("{FROM_FORM}raise product(\"a\")\n"));
 }
 
 /// The result has no consumer beyond the ones every object producer has:

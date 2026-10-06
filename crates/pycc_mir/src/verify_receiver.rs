@@ -222,6 +222,7 @@ impl Verifier<'_> {
     fn source(&self, source: &CompSource) {
         match source {
             CompSource::Range { start, stop, step } => self.exprs([start, stop, step]),
+            CompSource::Object(iterable) => self.expr(iterable),
             CompSource::List(_) | CompSource::Dict(_) | CompSource::Set(_) => {}
         }
     }
@@ -241,7 +242,9 @@ impl Verifier<'_> {
 
     fn stmt(&self, stmt: &MirStmt) {
         match stmt {
-            MirStmt::ExprStmt(value) | MirStmt::Assign { value, .. } => self.expr(value),
+            MirStmt::ExprStmt(value)
+            | MirStmt::Assign { value, .. }
+            | MirStmt::ObjRaise { value } => self.expr(value),
             MirStmt::NoOp
             | MirStmt::Unreachable
             | MirStmt::Reraise
@@ -363,6 +366,7 @@ impl Verifier<'_> {
             | MirExpr::BoolLiteral(_)
             | MirExpr::StringLiteral(_)
             | MirExpr::NoneLiteral
+            | MirExpr::NotImplemented
             | MirExpr::Name { .. }
             | MirExpr::EmptyList(_)
             | MirExpr::EmptyDict(_)
@@ -394,6 +398,7 @@ impl Verifier<'_> {
             }
             | MirExpr::InstanceHash { operand: inner, .. }
             | MirExpr::ObjUnpackFloatTuple { base: inner, .. }
+            | MirExpr::ObjUnpack { value: inner, .. }
             | MirExpr::NamedExpr { value: inner, .. } => self.expr(inner),
             MirExpr::SetAdd { value, ops, .. } => {
                 if let Some(ops) = ops {
@@ -504,6 +509,10 @@ impl Verifier<'_> {
             MirExpr::ObjCall { callee, args } => {
                 self.expr(callee);
                 self.exprs(args);
+            }
+            MirExpr::ObjKeywordCall(call) => {
+                self.expr(&call.call);
+                self.exprs(&call.values);
             }
             MirExpr::Comprehension(comp) => {
                 self.source(&comp.source);

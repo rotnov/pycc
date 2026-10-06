@@ -169,9 +169,9 @@ fn the_shapes_outside_part_1_are_refused() {
         ),
         (
             "obj_cmp_isinstance_pycc_class",
-            "class C:\n    pass\n\nprint(isinstance(o, C))\n",
+            "class C(Exception):\n    pass\n\nprint(isinstance(o, C))\n",
             "I0404",
-            "against the pycc class `C`",
+            "against the pycc exception class `C`",
         ),
         (
             "obj_cmp_native_general_identity",
@@ -300,4 +300,79 @@ fn a_raising_comparison_is_caught_in_a_function() {
          print(eq())\nprint(lt())\nprint(inst())\n",
     );
     assert_eq!(out, "-1\n-2\n-3\nno error\n");
+}
+
+/// #1419: a `-> bool` return of an object comparison stays the `T0022`
+/// D-258's #1419 amendment keeps (no implicit `PyObject_IsTrue`), and its
+/// JSON diagnostic carries the `bool(...)` help.
+#[test]
+fn a_bool_return_of_an_object_comparison_is_refused_with_a_bool_help() {
+    let dir = ScratchDir::new("obj_cmp_bool_slot").expect("scratch");
+    let output = pycc()
+        .arg("check")
+        .arg(write(
+            &dir,
+            "m.py",
+            "import json\n\n\ndef same() -> bool:\n    o = json.loads(\"1\")\n    return o == 1\n",
+        ))
+        .arg("--error-format")
+        .arg("json")
+        .output()
+        .expect("pycc should spawn");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = format!("{}{}", stdout_of(&output), stderr_of(&output));
+    assert_eq!(rendered.matches("\"T0022\"").count(), 1, "{rendered}");
+    assert!(
+        rendered.contains("return type mismatch: expected `bool`, found `object`"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("wrap the value in `bool(...)`"),
+        "{rendered}"
+    );
+}
+
+/// The host side of the #1419 workaround: `same` is bound by `load`, and
+/// every result is printed with its type, so a non-`bool` leak would show.
+fn bool_of_comparison_script(load: &str) -> String {
+    format!(
+        "{load}\n\
+         class Yes:\n    def __eq__(self, other):\n        return 'yes'\n\
+         class Zero:\n    def __eq__(self, other):\n        return 0\n\
+         class Bad:\n    def __bool__(self):\n        raise ValueError('no truth')\n\
+         class Raises:\n    def __eq__(self, other):\n        return Bad()\n\
+         nan = float('nan')\n\
+         for a, b in [(1, 1), (1, 2), (Yes(), 1), (Zero(), 1), (nan, nan)]:\n    \
+         r = same(a, b)\n    print(type(r).__name__, r)\n\
+         try:\n    same(Raises(), 1)\nexcept ValueError as e:\n    print('ValueError', e)\n"
+    )
+}
+
+/// The explicit `bool(a == b)` the #1419 help suggests behaves as CPython's
+/// own: a non-`bool` `__eq__` result is truth-tested, and a raising
+/// `__bool__` propagates to the caller.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn bool_of_an_object_comparison_matches_cpython_in_the_host() {
+    let dir = ScratchDir::new("obj_cmp_bool_of").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_obj_cmp_bool_of",
+        "from typing import Any\n\n\ndef same(a: Any, b: Any) -> bool:\n    return bool(a == b)\n",
+    );
+    let compiled = python(
+        &dir,
+        &bool_of_comparison_script("from pycc_obj_cmp_bool_of import same"),
+    );
+    assert_ok(&compiled);
+    let oracle = python(
+        &dir,
+        &bool_of_comparison_script("import runpy\nsame = runpy.run_path('m.py')['same']"),
+    );
+    assert_ok(&oracle);
+    assert_eq!(stdout_of(&compiled), stdout_of(&oracle));
+    assert_eq!(
+        stdout_of(&compiled),
+        "bool True\nbool False\nbool True\nbool False\nbool False\nValueError no truth\n"
+    );
 }
