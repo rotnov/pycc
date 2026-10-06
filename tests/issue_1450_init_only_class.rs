@@ -168,9 +168,10 @@ fn an_init_only_class_is_constructed_and_passed_like_cpython() {
 
 /// Where the artifact still differs from CPython, pinned so a change is
 /// deliberate: a class with no method and no constructor the boundary can
-/// generate (`Pair`'s `tuple` parameter) gets no type object, and a
-/// generated constructor refuses keyword arguments (D-244 rule 7's closed
-/// boundary). CPython answers `True` and `admitted`.
+/// generate (`Pair`'s `tuple` parameter) gets no type object. CPython
+/// answers `True`. The keyword call to the generated constructor was the
+/// second pinned deviation until #1461 bound host keywords; it is kept as
+/// the check that it now matches CPython's `admitted`.
 const DEVIATION_DRIVER: &str = "import {module} as mod\n\
     print(hasattr(mod, 'Pair'))\n\
     try:\n\
@@ -187,7 +188,7 @@ fn a_class_with_neither_method_nor_carriable_constructor_stays_unpublished() {
     build(&dir, module);
     let compiled = python(&dir, &DEVIATION_DRIVER.replace("{module}", module));
     assert_ok(&compiled);
-    assert_eq!(stdout_of(&compiled), "False\nTypeError\n");
+    assert_eq!(stdout_of(&compiled), "False\nadmitted\n");
     let oracle = python(&dir, &DEVIATION_DRIVER.replace("{module}", "m"));
     assert_ok(&oracle);
     assert_eq!(stdout_of(&oracle), "True\nadmitted\n");
