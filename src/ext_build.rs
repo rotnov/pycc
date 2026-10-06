@@ -1189,9 +1189,11 @@ pub(crate) struct ExtCtor {
     /// called with and which, after [`ExtCtor::class`], make up the layout
     /// descriptor it is passed (#1388).
     pub(crate) slot_names: Vec<String>,
-    /// The read-only attributes the class's type object exposes through
+    /// The attributes the class's type object exposes through
     /// `Py_tp_getset` (#1442): its carriable slots and properties, so a
-    /// host-side or compiled object-typed `instance.field` read finds them.
+    /// host-side or compiled object-typed `instance.field` read finds them;
+    /// a slot's descriptor is also writable since Part 1 of #1443 (see
+    /// `ext_build/getset.rs`).
     pub(crate) getsets: Vec<ExtGetset>,
 }
 

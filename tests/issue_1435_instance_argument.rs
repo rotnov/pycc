@@ -263,8 +263,8 @@ const DEVIATION_DRIVER: &str = "import pycc_inst_dev_mod as mod\n\
 
 /// `isinstance` against a base: CPython `True` (published carrier types are
 /// flat); attribute read through `R`'s carrier: CPython `True`, and since
-/// #1442 pycc's too (a constructible class's type carries a read-only
-/// descriptor per field); attribute read through `Same`'s on-demand
+/// #1442 pycc's too (a constructible class's type carries a descriptor
+/// per field, writable for a slot since Part 1 of #1443); attribute read through `Same`'s on-demand
 /// carrier, which carries no descriptor table: CPython `True` (#1448) --
 /// `Same`'s `tuple` constructor parameter keeps it unpublished, since #1450
 /// publishes every constructible class and would give it descriptors;
