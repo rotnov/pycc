@@ -14,7 +14,7 @@
 //! constructor with and without defaults, a `Generic[T]` class (lark's
 //! `ParserState(Generic[StateT])`), and CPython's own wording for an
 //! unexpected keyword, a parameter given twice (including after too many
-//! positional arguments) and one, two or three missing parameters. Its last
+//! positional arguments) and one, two, three or four missing parameters. Its last
 //! line pins that a keyword argument costs no reference a positional one
 //! does not.
 //!
@@ -93,6 +93,9 @@ class P:
 
     def four(self, a: int, b: int, c: int, d: int) -> int:
         return a + b + c + d
+
+    def five(self, a: int, b: int, c: int, d: int, e: int) -> int:
+        return a + b + c + d + e
 
     def size(self) -> int:
         return self.n
@@ -176,6 +179,7 @@ attempt(lambda: p.three(1, c=3))
 attempt(lambda: p.three(c=3))
 attempt(lambda: p.three(b=2, c=3))
 attempt(lambda: p.four(d=1))
+attempt(lambda: p.five(e=1))
 attempt(lambda: p.four(1, d=4, c=3, b=2))
 attempt(lambda: p.size(zz=1))
 attempt(lambda: m.P.mul(y=3, x=2))
@@ -233,6 +237,7 @@ const DRIVER_OUT: &str = "3\n\
     TypeError P.three() missing 2 required positional arguments: 'a' and 'b'\n\
     TypeError P.three() missing 1 required positional argument: 'a'\n\
     TypeError P.four() missing 3 required positional arguments: 'a', 'b', and 'c'\n\
+    TypeError P.five() missing 4 required positional arguments: 'a', 'b', 'c', and 'd'\n\
     10\n\
     TypeError P.size() got an unexpected keyword argument 'zz'\n\
     6\n\

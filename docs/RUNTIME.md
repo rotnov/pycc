@@ -810,7 +810,7 @@ lowered (Part 2 of #884,
 generated wrapper: that wrapper's arity check counts every declared parameter, a
 defaulted one included, so a host call that omits a defaulted argument raises
 the wrapper's arity-mismatch `TypeError`, and a host call that names any of
-its parameters by keyword is refused with `takes no keyword arguments` (the
+the parameters of such a function (one that declares a default) by keyword is refused with `takes no keyword arguments` (the
 keyword binder below would otherwise report the defaulted parameter as
 missing).
 [#1194](https://github.com/rotnov/pycc/issues/1194) tracks widening the host
