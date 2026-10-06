@@ -90,9 +90,12 @@ fn the_widened_method_result_flows_as_the_object() {
     );
     let diagnostic = refusal(&source, true);
     assert_eq!(diagnostic.code, "T0022", "{diagnostic:#?}");
+    // Since #1420 the solver links `eq`'s declared `bool` to the method
+    // call's widened `object` return, so the refusal is the solver's
+    // wording rather than the check phase's.
     assert_eq!(
         diagnostic.message,
-        "expected return type `bool`, got `object`"
+        "return type mismatch: expected `bool`, found `object`"
     );
     // `eq` itself returns no `NotImplemented`, so the help is not its.
     assert_ne!(
