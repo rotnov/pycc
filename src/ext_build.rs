@@ -33,7 +33,7 @@ use pycc_hir::{
     BUILTIN_EXCEPTION_CLASSES, FIRST_USER_EXCEPTION_TYPE_TAG, HirClassDef, HirItem, HirModule,
     ProtocolMember, Ty, flat_attr_layout, is_builtin_exception_class, is_public_name,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
@@ -464,9 +464,13 @@ pub(crate) struct ExtExport {
     ///
     /// The receiver is dropped here and reinstated *textually* in
     /// [`wrapper_for`], because every consumer of this field is
-    /// arity-shaped or carrier-shaped and neither can represent it:
-    /// `boundary_carrier` has no `Ty::Instance` arm, so leaving it in would
-    /// panic. It is reinstated rather than simply dropped because
+    /// arity-shaped or carrier-shaped and neither can represent it. Since
+    /// Part 1 of #1447 (#1449) `boundary_carrier` does map `Ty::Instance`,
+    /// but to an *argument* carrier that unpacks a host object at a
+    /// `METH_FASTCALL` position: `self` is not such a position at all, and a
+    /// `@classmethod`'s `cls` must be a null pointer rather than an unpacked
+    /// carrier, so leaving the receiver in would shift every arity by one
+    /// and unpack the wrong object. It is reinstated rather than simply dropped because
     /// `pycc_codegen`'s thunk builds its own parameter list from the MIR
     /// function's parameters, which *do* include the receiver -- declaring
     /// different arities on the two sides of one symbol is the silent ABI
@@ -490,6 +494,18 @@ pub(crate) struct ExtExport {
     /// The declared return type, which picks the cast's return type and the
     /// egress: a `pycc_ext_pack_*` call, or `Py_RETURN_NONE` for `-> None`.
     pub(crate) return_ty: Ty,
+}
+
+/// The names of the module's classes whose instances may cross the `--ext`
+/// boundary at a parameter or return position (Part 1 of #1447, #1449):
+/// exactly [`collect_carrier_classes`]'s rows, so a name this admits is
+/// always one the generated `pycc_ext_carrier_class_isinstance` table that
+/// ingress consults has a row for.
+pub(crate) fn carrier_class_names(module: &HirModule) -> BTreeSet<String> {
+    collect_carrier_classes(module)
+        .into_iter()
+        .map(|carrier| carrier.class)
+        .collect()
 }
 
 /// Derives the export set from the typed program, per D-244 rule 1: every
@@ -594,6 +610,11 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
     let mut slice_widened_names: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
     let mut gaps = Vec::new();
+    // Part 1 of #1447 (#1449): the classes whose instances the boundary may
+    // carry at a parameter or return position -- the same set the generated
+    // carrier `isinstance` table is built from, so ingress can never admit
+    // a class that table cannot answer for.
+    let carrier_classes = carrier_class_names(module);
     for item in &module.items {
         let HirItem::Function {
             name,
@@ -656,9 +677,10 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
         // wrapper passes a C `NULL` for it) and an instance method's
         // leading `self` crosses it as an opaque pointer the wrapper
         // unwraps, not as a carried argument. Both are split off here,
-        // before `unsupported_boundary_ty` runs, because `Ty::Instance` has
-        // no `boundary_carrier` arm -- leaving either in would make every
-        // such export a `C0003` instead of an export.
+        // before `unsupported_boundary_ty` runs: since Part 1 of #1447
+        // (#1449) a `Ty::Instance` *is* carried, but as a host argument the
+        // wrapper unpacks from a `METH_FASTCALL` position, which neither
+        // receiver is (see `ExtExport::params`).
         let receiver = match &spelling {
             ExportName::ModuleLevel => ExtReceiver::None,
             ExportName::Method { receiver, .. } => *receiver,
@@ -688,7 +710,8 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
                 ),
             }
         };
-        if let Some(offender) = unsupported_boundary_ty(carried_params, return_ty) {
+        if let Some(offender) = unsupported_boundary_ty(carried_params, return_ty, &carrier_classes)
+        {
             gaps.push(capability_gap(name, &offender));
             continue;
         }
@@ -893,9 +916,11 @@ pub(crate) fn resolved_init<'a>(module: &'a HirModule, class: &str) -> Option<Re
 /// statement as every other export's instead of a second one that drifts
 /// (`AGENTS.md`'s canonical-statement rule). It also answers correctly, for
 /// free, on the case a hand-written predicate would most likely miss: `def
-/// __init__(self, other: Grid)` carries a `Ty::Instance`, which has no
-/// [`boundary_carrier`] arm, so the class is non-constructible rather than
-/// emitting a C declaration no C type can spell. The extra `tuple` refusal
+/// __init__(self, other: Grid)` carries a `Ty::Instance`, which since Part 1
+/// of #1447 (#1449) is carried exactly when it names a regular class of this
+/// module, so such a class is constructible from a host that already holds
+/// a `Grid`, while `def __init__(self, c: Color)` with `Color` an enum keeps
+/// the class non-constructible. The extra `tuple` refusal
 /// is not a second admissibility rule either: `is_ext_exportable_name`
 /// answers `false` for `<Class>.__init__` (its second segment starts with
 /// `_`), so `ext_thunk_required` emits no `pycc_ext_thunk_` for a
@@ -1033,10 +1058,10 @@ fn ctor_descriptor(module: &HirModule, class: &str) -> Option<ExtCtor> {
     }
     // The constructor descriptor does not come through `collect_exports`,
     // so the receiver is still at index 0 here and has to be split off
-    // exactly as the classmethod path splits `cls`: `Ty::Instance` has no
-    // carrier arm, so leaving it in would refuse every constructor.
+    // exactly as the classmethod path splits `cls`: the receiver is the
+    // carrier `tp_init` fills, not an argument it unpacks.
     let (_, carried) = params.split_first()?;
-    if unsupported_boundary_ty(carried, &Ty::None).is_some()
+    if unsupported_boundary_ty(carried, &Ty::None, &carrier_class_names(module)).is_some()
         || carried.iter().any(|(_, ty)| matches!(ty, Ty::Tuple(_)))
     {
         return None;

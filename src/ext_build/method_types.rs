@@ -480,7 +480,8 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
         // `ctor_descriptor` refuses a `tuple` parameter outright -- no
         // `pycc_ext_thunk_` exists for a constructor, so there would be no
         // callable C entry point for the flattened elements -- which leaves
-        // a scalar as the only other carrier a constructor slot can hold. A
+        // a scalar or (Part 1 of #1447) a same-module instance as the only
+        // other carriers a constructor slot can hold, and both pass `a{i}`. A
         // third arm for `BoundaryCarrier::Tuple` would be a line no test
         // could ever execute, which the 100%-changed-lines invariant does
         // not admit (D-242 rule 1).

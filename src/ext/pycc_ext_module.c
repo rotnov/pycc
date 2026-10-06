@@ -3152,6 +3152,17 @@ static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const 
                                                          const char *fn_name, Py_ssize_t index,
                                                          int writable, long long start,
                                                          long long stop);
+/*
+ * Part 1 of #1447 (#1449): the two halves of a same-module instance
+ * crossing, declared here because the generated wrappers in the companion
+ * `#include`d next are their only callers and defined after it because both
+ * need what the companion defines -- the ingress asks the generated
+ * `pycc_ext_carrier_class_isinstance`, and the egress reuses #1435's
+ * `pycc_ext_obj_pack_instance`, which needs the module name.
+ */
+static int pycc_ext_unpack_instance(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                                    const char *class_name, void **out);
+static PyObject *pycc_ext_pack_instance(void *result);
 
 #include "pycc_ext_exports.inc"
 
@@ -3322,6 +3333,87 @@ int pycc_ext_obj_isinstance_compiled(PyObject *o, const char *name)
         }
     }
     return pycc_ext_compiled_class_isinstance(o, name);
+}
+
+/*
+ * Part 1 of #1447 (#1449): unpacks one argument at a parameter annotated
+ * with a regular class compiled in this module. Returns 0 with `*out` the
+ * compiled instance the carrier holds, or -1 with a `TypeError` set.
+ *
+ * Only a carrier of this module is admitted -- an object whose type
+ * deallocates through *this* file's `pycc_ext_instance_dealloc`, which a
+ * carrier of another pycc extension does not, since each artifact links
+ * its own copy of the static -- and only one whose instance's run-time
+ * class has `class_name` on its MRO, answered by the same generated table
+ * `isinstance` uses, so a subclass instance is admitted exactly as CPython
+ * admits it. A carrier no `tp_init` filled (`mod.C.__new__(mod.C)`) holds
+ * no instance and is refused with its own message.
+ *
+ * No reference is taken. The body receives the instance, not the carrier,
+ * and the instance is never freed (D-107, D-154), so the carrier dying
+ * after the call leaves nothing dangling; the carrier link the instance
+ * holds is weak and cleared by the carrier's own `tp_dealloc`.
+ */
+static int pycc_ext_unpack_instance(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                                    const char *class_name, void **out)
+{
+    PyObject *type_name;
+    void *inst = NULL;
+    const unsigned char *cls;
+    size_t len = 0;
+    int carrier = PyType_GetSlot(Py_TYPE(obj), Py_tp_dealloc) == (void *)pycc_ext_instance_dealloc;
+
+    if (carrier) {
+        inst = ((PyccExtInstance *)obj)->inst;
+        if (inst != NULL) {
+            cls = pycc_rt_ext_instance_class(inst, &len);
+            if (pycc_ext_carrier_class_isinstance(cls, len, class_name)) {
+                *out = inst;
+                return 0;
+            }
+        }
+    }
+    /* Fully qualified on both sides, so a carrier of another pycc module
+     * that compiled a class of the same name reads `must be m.Conf, not
+     * other.Conf` rather than `must be Conf, not Conf`. */
+    type_name = PyType_GetFullyQualifiedName(Py_TYPE(obj));
+    if (type_name == NULL) {
+        return -1;
+    }
+    if (carrier && inst == NULL) {
+        PyErr_Format(PyExc_TypeError,
+                     "%s() argument %zd: the %U object is uninitialized (its __init__ never "
+                     "ran)",
+                     fn_name, index + 1, type_name);
+    } else {
+        PyErr_Format(PyExc_TypeError, "%s() argument %zd must be %s.%s, not %U", fn_name,
+                     index + 1, PYCC_EXT_MODULE_NAME_STR, class_name, type_name);
+    }
+    Py_DECREF(type_name);
+    return -1;
+}
+
+/*
+ * Part 1 of #1447 (#1449): packs a result annotated with a regular class
+ * compiled in this module through #1435's carrier egress, so a returned
+ * instance that already has a live carrier -- `self`, or an argument the
+ * host still holds -- is that very object (`o.m() is o`), and any other
+ * instance gets a fresh carrier of its run-time class. Returns a new
+ * reference, the CPython return-value convention.
+ *
+ * `result` is never NULL on this path -- the generated wrapper checks for a
+ * pending pycc exception first, and a compiled function annotated with a
+ * class cannot return `None` -- but, as in `pycc_ext_pack_object`, the
+ * guard turns a would-be crash into a `SystemError` with a message that
+ * names the return position rather than #1435's argument position.
+ */
+static PyObject *pycc_ext_pack_instance(void *result)
+{
+    if (result == NULL) {
+        PyErr_SetString(PyExc_SystemError, "instance result was NULL");
+        return NULL;
+    }
+    return pycc_ext_obj_pack_instance(result);
 }
 
 /*

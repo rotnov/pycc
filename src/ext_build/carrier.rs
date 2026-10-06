@@ -13,6 +13,7 @@
 use super::EXT_CAPABILITY_CODE;
 use pycc_diag::{Diagnostic, Severity};
 use pycc_hir::Ty;
+use std::collections::BTreeSet;
 
 /// What one `Ty` the boundary admits occupies at a generated wrapper's
 /// parameter or result position.
@@ -48,6 +49,20 @@ pub(crate) enum BoundaryCarrier {
     /// is a property of a function *body*, not of a [`Ty`], so it is set
     /// where each slot vector is built and never here.
     Buffer { writable: bool },
+    /// An instance of a class compiled in the same module (Part 1 of #1447,
+    /// #1449), named by its class: one `void *` slot holding the compiled
+    /// instance pointer, which is what `ty_to_basic_type` gives
+    /// `Ty::Instance`. Ingress hands the body the carrier object's `inst`
+    /// after `pycc_ext_unpack_instance` checks the instance's run-time
+    /// class against this name, and egress is #1435's carrier packer.
+    ///
+    /// [`boundary_carrier`] produces this for *every* `Ty::Instance`,
+    /// because it is a pure function of a `Ty` and cannot see whether the
+    /// name is a regular class of this module. That narrowing is
+    /// [`unsupported_boundary_ty`]'s, the one gate every collected
+    /// signature passes through, so an enum or exception class still
+    /// reaches the `C0003` capability gap.
+    Instance(String),
 }
 
 /// What one already-unpacked argument slot owes the wrapper before it
@@ -95,6 +110,11 @@ impl BoundaryCarrier {
             // some third position gets that same refusal by default, which
             // is the conservative direction.
             BoundaryCarrier::Buffer { .. } => None,
+            // Part 1 of #1447: the same reasoning as the buffer arm. The
+            // top-level return position is answered by `return_c_type`'s own
+            // `Ty::Instance` arm, and `tuple[C]` has no `_at` element shim,
+            // so `None` here is what keeps it a `C0003` capability gap.
+            BoundaryCarrier::Instance(_) => None,
         }
     }
 
@@ -105,7 +125,12 @@ impl BoundaryCarrier {
             BoundaryCarrier::Scalar(_, "str") => Some(SlotCleanup::StrDecref),
             // Every numeric scalar is a copied machine word, and a `tuple`'s
             // elements are copied out by value, so neither owes anything.
-            BoundaryCarrier::Scalar(..) | BoundaryCarrier::Tuple(_) => None,
+            // Part 1 of #1447: an instance is never freed (D-107, D-154) and
+            // the unpack takes no reference to its carrier, so it owes
+            // nothing either.
+            BoundaryCarrier::Scalar(..)
+            | BoundaryCarrier::Tuple(_)
+            | BoundaryCarrier::Instance(_) => None,
             BoundaryCarrier::Buffer { .. } => Some(SlotCleanup::BufferRelease),
         }
     }
@@ -224,6 +249,11 @@ pub(crate) fn boundary_carrier(ty: &Ty) -> Option<BoundaryCarrier> {
         // see -- `wrapper_for` and `tp_init_c` overwrite the flag from
         // `ExtExport`/`ExtCtor` where they build their slot vectors.
         Ty::MemoryView => Some(BoundaryCarrier::Buffer { writable: false }),
+        // Part 1 of #1447 (#1449): every compiled-class instance, by name.
+        // Which names a module may actually carry is narrowed by
+        // `unsupported_boundary_ty`, not here -- see
+        // [`BoundaryCarrier::Instance`].
+        Ty::Instance(class) => Some(BoundaryCarrier::Instance((**class).clone())),
         _ => None,
     }
 }
@@ -272,6 +302,10 @@ pub(crate) fn return_c_type(ty: &Ty) -> Option<&'static str> {
         // host's own argument object; the wrapper still releases its own
         // `Py_buffer` for that parameter, after acquiring that export.
         Ty::MemoryView => Some(BUFFER_VIEW_RETURN_C_TYPE),
+        // Part 1 of #1447 (#1449): the compiled instance pointer, stated at
+        // the top-level return position for the reason the buffer arm above
+        // gives -- `into_scalar` answering it would admit `tuple[C]`.
+        Ty::Instance(_) => Some("void *"),
         // Still asked of `boundary_carrier`: `tuple[list[int]]` is a tuple
         // whose element the boundary cannot carry, and answering `void`
         // for it unconditionally would admit a signature no wrapper can
@@ -290,14 +324,47 @@ pub(crate) fn return_c_type(ty: &Ty) -> Option<&'static str> {
 /// Parameters and the return type are asked separately because the two
 /// admissible sets genuinely differ rather than sharing one widened list:
 /// see [`carries_param`] and [`return_c_type`].
-pub(crate) fn unsupported_boundary_ty(params: &[(String, Ty)], return_ty: &Ty) -> Option<String> {
-    if let Some((name, ty)) = params.iter().find(|(_, ty)| !carries_param(ty)) {
-        return Some(format!("parameter `{name}: {}`", render_ty(ty)));
+///
+/// `carrier_classes` is the module's regular classes -- the names
+/// `method_types::collect_carrier_classes` collects, whose MROs the
+/// generated `pycc_ext_carrier_class_isinstance` table answers from. Part 1
+/// of #1447 (#1449) admits a `Ty::Instance` at either position only when it
+/// names one of them: an enum member has no layout descriptor and an
+/// exception instance is not a carrier at all, so both stay `C0003` here
+/// rather than becoming a run-time `SystemError`.
+pub(crate) fn unsupported_boundary_ty(
+    params: &[(String, Ty)],
+    return_ty: &Ty,
+    carrier_classes: &BTreeSet<String>,
+) -> Option<String> {
+    let admitted_instance = |ty: &Ty| match ty {
+        Ty::Instance(class) => carrier_classes.contains(class.as_str()),
+        _ => true,
+    };
+    if let Some((name, ty)) = params
+        .iter()
+        .find(|(_, ty)| !carries_param(ty) || !admitted_instance(ty))
+    {
+        return Some(format!("parameter `{name}: {}`", render_offender(ty)));
     }
-    if return_c_type(return_ty).is_none() {
-        return Some(format!("return type `-> {}`", render_ty(return_ty)));
+    if return_c_type(return_ty).is_none() || !admitted_instance(return_ty) {
+        return Some(format!("return type `-> {}`", render_offender(return_ty)));
     }
     None
+}
+
+/// [`render_ty`], except that a compiled-class instance is named by its
+/// class (Part 1 of #1447): since #1449 the only instance refused is one of
+/// a class the boundary cannot carry -- an enum or an exception class (a
+/// name the module's class table lacks is refused too, defensively: a
+/// foreign class lowers to `Ty::Object`, never to `Ty::Instance`) -- so
+/// naming it is what tells the reader which one, where "that type" would
+/// not.
+fn render_offender(ty: &Ty) -> String {
+    match ty {
+        Ty::Instance(class) => (**class).clone(),
+        _ => render_ty(ty).to_string(),
+    }
 }
 
 /// A short Python-facing spelling of a `Ty`, for the `C0003` message only.
@@ -376,7 +443,8 @@ pub(crate) fn capability_gap(name: &str, offender: &str) -> Diagnostic {
              this pycc version's CPython boundary can carry -- a parameter must be `int`, \
              `float`, `bool`, `str`, `memoryview` (or its other spellings `ndarray` and \
              `NDArray`), a CPython object (`Any`, `object`, a foreign class, or a container \
-             of objects) or a \
+             of objects), an instance of a class compiled in this module (not an enum or \
+             an exception class), or a \
              `tuple` of `int`/`float`/`bool`, and a \
              return type must be one of those, or `None` \
              (D-244 rule \
