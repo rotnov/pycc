@@ -23,10 +23,8 @@
 //! never ran. [`EXT_ONLY_DRIVER`] pins the documented differences (D-244's
 //! #1458 amendment): a value outside the parameter row is refused with that
 //! row's error; a setter whose value type the boundary does not carry
-//! (`list[int]`) leaves the property read-only; a carrier whose `__init__`
-//! never ran cannot be stored into; and both properties of a class that
-//! defines a compiled `__setattr__` stay read-only (#1459), the getter-only
-//! one included.
+//! (`list[int]`) leaves the property read-only; and a carrier whose
+//! `__init__` never ran cannot be stored into.
 //!
 //! The hosted test is `#[ignore]`d and contributes no line coverage; the
 //! Tier-1 `native-build-test` leg runs it with
@@ -72,7 +70,7 @@ fn assert_ok(run: &Output) {
 /// value type, a getter-only `ro`, and a `count` whose setter takes a
 /// `list[int]`, which the boundary does not carry. `Wide` inherits `n`'s
 /// setter, whose body calls the overridden `scale`. `poke` stores through
-/// an `Any` name. `Guard` defines a compiled `__setattr__`.
+/// an `Any` name.
 const MODULE: &str = r#"from typing import Any, List
 
 
@@ -178,26 +176,6 @@ class Wide(Box):
 
 def poke(target: Any, v: int) -> None:
     target.n = v
-
-
-class Guard:
-    def __init__(self, n: int) -> None:
-        self._n = n
-
-    @property
-    def n(self) -> int:
-        return self._n
-
-    @n.setter
-    def n(self, v: int) -> None:
-        self._n = v
-
-    @property
-    def ro(self) -> int:
-        return 1
-
-    def __setattr__(self, name: str, value: int) -> None:
-        pass
 "#;
 
 /// The host script both sides run. Every line is compared with CPython.
@@ -274,9 +252,6 @@ attempt(store(c, 'leaf', object()))
 attempt(store(c, 'count', [1, 2]))
 print(c.n, c.f, c.b, c.s, type(c.leaf).__name__, c.count)
 attempt(store(m.Box.__new__(m.Box), 'n', 1))
-g = m.Guard(1)
-attempt(store(g, 'n', 5))
-attempt(store(g, 'ro', 5))
 "#;
 
 const EXT_ONLY_OUT: &str = "TypeError Box.n() argument 1: 'str' object cannot be interpreted as an integer\n\
@@ -287,16 +262,13 @@ const EXT_ONLY_OUT: &str = "TypeError Box.n() argument 1: 'str' object cannot be
     TypeError Box.leaf() argument 1 must be pycc_prop_set_mod.Leaf, not object\n\
     AttributeError attribute 'count' of 'pycc_prop_set_mod.Box' objects is not writable\n\
     3 0.5 False a Leaf 0\n\
-    AttributeError cannot set 'n' on a 'Box' object whose __init__ never ran\n\
-    AttributeError attribute 'n' of 'pycc_prop_set_mod.Guard' objects is not writable\n\
-    AttributeError attribute 'ro' of 'pycc_prop_set_mod.Guard' objects is not writable\n";
+    AttributeError cannot set 'n' on a 'Box' object whose __init__ never ran\n";
 
 /// What CPython answers for the lines [`EXT_ONLY_DRIVER`] pins, so the
 /// divergence is stated, not inferred: the setter runs on any value (and
 /// raises from its own body where the value does not fit it), the
 /// `list[int]` setter stores, the setter runs on a never-initialized
-/// object (and fails on the field `__init__` would have set), and
-/// `Guard.__setattr__` swallows both stores.
+/// object (and fails on the field `__init__` would have set).
 const EXT_ONLY_CPYTHON_OUT: &str = "TypeError '<' not supported between instances of 'str' and 'int'\n\
     ok\n\
     ok\n\
@@ -305,9 +277,7 @@ const EXT_ONLY_CPYTHON_OUT: &str = "TypeError '<' not supported between instance
     ok\n\
     ok\n\
     2361183241434822606848 1.25 False a object 2\n\
-    AttributeError 'Box' object has no attribute 'sets'\n\
-    ok\n\
-    ok\n";
+    AttributeError 'Box' object has no attribute 'sets'\n";
 
 fn run(script: &str, path_entry: &Path, cwd: &Path) -> Output {
     host_python()

@@ -40,7 +40,6 @@ fn slot(name: &str, index: usize, ty: Ty) -> ExtGetset {
         name: name.to_string(),
         index,
         ty,
-        writable: true,
     }
 }
 
@@ -410,84 +409,6 @@ fn a_compiled_property_setter_calls_the_setter_wrapper() {
         "{inc}"
     );
     assert!(!inc.contains("pycc_ext_set_4_Base_5_count("), "{inc}");
-}
-
-/// #1459 wins over #1458: both properties of a class whose MRO defines a
-/// compiled `__setattr__` stay read-only, the getter-only one included,
-/// because CPython would run that method first.
-#[test]
-fn a_class_that_intercepts_stores_keeps_read_only_properties() {
-    let (ctors, inc) = ext_build(
-        "1458_intercepts",
-        "class G:\n\
-         \x20   def __init__(self, n: int) -> None:\n\
-         \x20       self._n = n\n\
-         \x20   @property\n\
-         \x20   def n(self) -> int:\n\
-         \x20       return self._n\n\
-         \x20   @n.setter\n\
-         \x20   def n(self, v: int) -> None:\n\
-         \x20       self._n = v\n\
-         \x20   @property\n\
-         \x20   def ro(self) -> int:\n\
-         \x20       return 1\n\
-         \x20   def __setattr__(self, name: str, value: int) -> None:\n\
-         \x20       pass\n",
-    );
-    for prop in ["n", "ro"] {
-        assert_eq!(setter_of(&ctors, "G", prop), PropertySetter::ReadOnly);
-        let row = format!(
-            "{{\"{prop}\", pycc_ext_get_1_G_{len}_{prop}, NULL, NULL, NULL}},\n",
-            len = prop.len()
-        );
-        assert!(inc.contains(&row), "missing {row} in:\n{inc}");
-    }
-    assert!(!inc.contains("pycc_ext_set_1_G_"), "{inc}");
-}
-
-/// #1459: a class whose MRO defines a compiled `__setattr__` or
-/// `__delattr__` -- its own or a base's -- keeps read-only slot descriptors,
-/// because the extension does not route a store through the method and a raw
-/// slot store would bypass it. A class beside them with neither is writable.
-#[test]
-fn a_class_that_intercepts_stores_keeps_read_only_slots() {
-    let source = "class S:\n\
-         \x20   def __init__(self, n: int) -> None:\n\
-         \x20       self.n = n\n\
-         \x20   def __setattr__(self, name: str, value: int) -> None:\n\
-         \x20       pass\n\
-         class D:\n\
-         \x20   def __init__(self, n: int) -> None:\n\
-         \x20       self.n = n\n\
-         \x20   def __delattr__(self, name: str) -> None:\n\
-         \x20       pass\n\
-         class E(D):\n\
-         \x20   def get(self) -> int:\n\
-         \x20       return self.n\n\
-         class F:\n\
-         \x20   def __init__(self, n: int) -> None:\n\
-         \x20       self.n = n\n";
-    let (ctors, inc) = ext_build("1443_intercepts", source);
-    for class in ["S", "D", "E"] {
-        assert_eq!(
-            getsets_of(&ctors, class),
-            &[ExtGetset::Slot {
-                name: "n".to_string(),
-                index: 0,
-                ty: Ty::Int,
-                writable: false,
-            }],
-            "{class}"
-        );
-        let row = format!("{{\"n\", pycc_ext_get_1_{class}_1_n, NULL, NULL, NULL}},\n");
-        assert!(inc.contains(&row), "missing {row} in:\n{inc}");
-        assert!(
-            !inc.contains(&format!("pycc_ext_set_1_{class}_1_n")),
-            "{inc}"
-        );
-    }
-    assert_eq!(getsets_of(&ctors, "F"), &[slot("n", 0, Ty::Int)]);
-    assert!(inc.contains("pycc_ext_set_1_F_1_n"), "{inc}");
 }
 
 /// A class with no carriable slot and no property installs no table, so

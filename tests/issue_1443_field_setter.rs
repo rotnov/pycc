@@ -24,8 +24,7 @@
 //! with that row's `TypeError` or `OverflowError` (a `float` slot refuses an
 //! `int`, as a `float` parameter does); a name with no
 //! descriptor has nowhere to go; a carrier whose `__init__` never ran
-//! cannot be stored into; every slot of a class that defines a compiled
-//! `__setattr__` or `__delattr__` stays read-only (#1459); and the object
+//! cannot be stored into; and the object
 //! a store replaces or a `del` removes keeps the reference the slot held
 //! (the compiled object store's own #1092 leak).
 //!
@@ -74,7 +73,7 @@ fn assert_ok(run: &Output) {
 /// published class) plus a list slot, which has no descriptor, and one
 /// compiled reader per slot, so a host store is checked through compiled
 /// code as well as through the getter. `Twig` subclasses the declared
-/// `Leaf`; `Other` does not. `Guard` defines a compiled `__setattr__`.
+/// `Leaf`; `Other` does not.
 const MODULE: &str = r#"from typing import Any, List
 
 
@@ -134,14 +133,6 @@ class Conf:
 
     def text(self) -> str:
         return f"{self.n}"
-
-
-class Guard:
-    def __init__(self, n: int) -> None:
-        self.n = n
-
-    def __setattr__(self, name: str, value: int) -> None:
-        pass
 "#;
 
 /// The host script both sides run. Every line is compared with CPython.
@@ -237,9 +228,6 @@ attempt(store(c, 'xs', [1]))
 attempt(store(c, 'zzz', 1))
 print(c.n, c.f, c.b, c.s, c.leaf.k)
 attempt(store(m.Conf.__new__(m.Conf), 'n', 1))
-g = m.Guard(1)
-attempt(store(g, 'n', 5))
-attempt(lambda: delattr(g, 'n'))
 o = object()
 c = m.Conf(3, 1.5, True, "ab", o, m.Leaf(1))
 before = sys.getrefcount(o)
@@ -264,14 +252,12 @@ const EXT_ONLY_OUT: &str = "TypeError Conf.n() argument 1: 'str' object cannot b
     AttributeError 'pycc_field_set_mod.Conf' object has no attribute 'zzz' and no __dict__ for setting new attributes\n\
     3 1.5 True ab 1\n\
     AttributeError cannot set 'n' on a 'Conf' object whose __init__ never ran\n\
-    AttributeError attribute 'n' of 'pycc_field_set_mod.Guard' objects is not writable\n\
-    AttributeError attribute 'n' of 'pycc_field_set_mod.Guard' objects is not writable\n\
     0\n\
     0\n";
 
 /// What CPython answers for the lines [`EXT_ONLY_DRIVER`] pins, so the
 /// divergence is stated, not inferred: a dynamically typed attribute takes
-/// any value, `Guard.__setattr__` swallows the store, and the replaced or
+/// any value, and the replaced or
 /// deleted object's reference is dropped.
 const EXT_ONLY_CPYTHON_OUT: &str = "ok\n\
     ok\n\
@@ -285,9 +271,6 @@ const EXT_ONLY_CPYTHON_OUT: &str = "ok\n\
     ok\n\
     ok\n\
     1180591620717411303424 1 1 3 1\n\
-    ok\n\
-    ok\n\
-    AttributeError 'Guard' object has no attribute 'n'\n\
     -1\n\
     -1\n";
 

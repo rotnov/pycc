@@ -1,12 +1,12 @@
 //! Class-attribute names the interpreter reserves for itself, rejected in
-//! every class body (#910, #975), plus the names CPython's `_EnumDict` keeps
-//! out of an enum's member list (#979).
+//! every class body (#910, #975, #1459), plus the names CPython's `_EnumDict`
+//! keeps out of an enum's member list (#979).
 //!
 //! Extracted from [`super::attrs`] under `AGENTS.md`'s "keep source files
 //! decomposable" rule when #975 added the second name set below, because
 //! `attrs.rs` is already past the ~1000-line bar.
 //!
-//! Three independent sets live here:
+//! Four independent sets live here:
 //!
 //! * `__slots__` (#910), which Python reads as a declaration of the instance
 //!   layout. Since #1368 a value-bound `__slots__` in a non-`@dataclass` body
@@ -60,6 +60,26 @@
 //!   because `_is_private` is. See [`enum_non_member_message`] for the
 //!   measured table, the arm ordering, and the three families this predicate
 //!   deliberately over-rejects.
+//! * The *attribute-store protocol* names `__setattr__` and `__delattr__`
+//!   (#1459), under D-236's generating rule: Python calls
+//!   `type(obj).__setattr__` on every `obj.x = v` and `type(obj).__delattr__`
+//!   on every `del obj.x`, and this compiler stores into (or refuses to
+//!   delete from) a compiled instance without ever consulting a class member
+//!   of either name. A `def` of either name compiled and ran with the method
+//!   silently bypassed -- measured on `ddada6e4`: a `__setattr__` that only
+//!   prints, under `c = C(1); c.n = 5`, printed nothing here and `intercept
+//!   n` twice under CPython 3.13.9 -- and `__setattr__ = 1` compiled where
+//!   CPython raises `TypeError: 'int' object is not callable` on the store.
+//!   Unlike the instantiation-protocol names, the set is checked on *every*
+//!   method binding form, not only the `@property` getter: a plain `def` is
+//!   exactly the binding that diverges. It is checked on two routes:
+//!   [`reject_reserved_method_name`] (every `def` spelling except a
+//!   `@<name>.setter`) and [`reject_reserved_class_attr_name`] (after the
+//!   other three sets, so an `Enum` body keeps #979's dunder-shape message).
+//!   A `Protocol` body is deliberately not checked: its methods are never
+//!   lowered into a class's method table, and any class listing a protocol
+//!   among its bases is itself lowered as a protocol and cannot be
+//!   instantiated, so no store can reach a protocol's `__setattr__`.
 //!
 //! Scope notes that are easy to get wrong. Each bullet was measured at
 //! `28a1b194` unless it names a different commit, or names #984 -- this
@@ -166,9 +186,12 @@ use pycc_diag::Diagnostic;
 /// [`super::protocol`]'s calls [`reject_reserved_protocol_method_name`],
 /// because only part of this guard applies on a method route.
 ///
-/// The three checks run in a fixed order that is load-bearing rather than
-/// stylistic: `__slots__` first, the instantiation-protocol names second, and
-/// [`enum_non_member_message`] last (#979). Every name the first two own also
+/// The four checks run in a fixed order that is load-bearing rather than
+/// stylistic: `__slots__` first, the instantiation-protocol names second,
+/// [`enum_non_member_message`] third (#979), and the attribute-store protocol
+/// names last (#1459) -- on the `Enum` route that last check is never
+/// reached for either name, because the dunder-shape arm answers both first,
+/// truthfully. Every name the first two own also
 /// matches the third's `__`-prefix shape, so any other order would silently
 /// repoint their pinned messages on the `Enum` route. The third also needs the
 /// enclosing class's name, which [`ClassBodyRoute::Enum`] carries.
@@ -190,6 +213,9 @@ pub(super) fn reject_reserved_class_attr_name(
         && let Some(message) = enum_non_member_message(attr_name, class_name)
     {
         return Err(unsupported(message, range));
+    }
+    if is_store_protocol_name(attr_name) {
+        return Err(unsupported(store_protocol_attr_message(attr_name), range));
     }
     Ok(())
 }
@@ -298,11 +324,19 @@ pub(super) fn reject_reserved_method_name(
     kind: &MethodKind,
     range: std::ops::Range<u32>,
 ) -> Result<(), Diagnostic> {
-    if let MethodKind::PropertyGetter { prop_name } = kind {
-        return reject_reserved_property_name(prop_name, range);
-    }
     if matches!(kind, MethodKind::PropertySetter { .. }) {
         return Ok(());
+    }
+    // #1459: every other binding form of these two names, the `@property`
+    // getter included, so this runs before the getter's own dispatch.
+    if is_store_protocol_name(method_name) {
+        return Err(unsupported(
+            store_protocol_method_message(method_name),
+            range,
+        ));
+    }
+    if let MethodKind::PropertyGetter { prop_name } = kind {
+        return reject_reserved_property_name(prop_name, range);
     }
     if method_name == "__slots__" {
         return Err(unsupported(
@@ -337,6 +371,50 @@ pub(super) fn reject_reserved_protocol_method_name(
         return Err(unsupported(method_slots_message("function"), range));
     }
     Ok(())
+}
+
+/// Whether `name` is one of the attribute-store protocol names (#1459):
+/// `__setattr__` or `__delattr__`.
+fn is_store_protocol_name(name: &str) -> bool {
+    matches!(name, "__setattr__" | "__delattr__")
+}
+
+/// The `C0001` message for a class-body `def` of an attribute-store protocol
+/// name (#1459), in any binding form -- a plain `def`, `@staticmethod`,
+/// `@classmethod`, `@abstractmethod`/`@override`, or a `@property` getter.
+///
+/// It names no carrier type and makes no claim about *where* the compiler
+/// stores: `super::body`'s method loop runs before
+/// `super::exception_dunders`' class-level check, so this message is also the
+/// one a user exception class gets, and an exception value has no slots.
+fn store_protocol_method_message(name: &str) -> String {
+    format!(
+        "a `def {name}` in a class body is not supported yet -- Python calls `__setattr__` \
+         implicitly on every attribute store on an instance (`obj.x = v`, including \
+         `self.x = v` inside `__init__`) and `__delattr__` on every attribute deletion \
+         (`del obj.x`), while this compiler never calls either on a store or deletion, so the \
+         method would be silently bypassed rather than honored (#1459)"
+    )
+}
+
+/// The `C0001` message for a class attribute named after an attribute-store
+/// protocol name (#1459), on every attribute route: annotated, bare, and a
+/// value-less declaration.
+///
+/// The `TypeError` claim is conditional ("binding it to a non-callable
+/// object"), as [`instantiation_protocol_message`]'s is, because the guard
+/// also sees a value-less `__setattr__: int`, which binds nothing in CPython,
+/// and the admitted `staticmethod(<foreign import>)` initializer, which binds
+/// a callable. The final clause is what holds for every one of them.
+fn store_protocol_attr_message(name: &str) -> String {
+    format!(
+        "a class attribute named `{name}` is not supported yet -- Python calls whatever \
+         `__setattr__` is bound to implicitly on every attribute store on an instance \
+         (`obj.x = v`) and whatever `__delattr__` is bound to on every attribute deletion \
+         (`del obj.x`), so binding it to a non-callable object makes CPython raise a \
+         `TypeError` there, while this compiler never consults a class attribute of that name, \
+         so the binding would be silently ignored rather than honored (#1459)"
+    )
 }
 
 /// The type CPython names in `'<carrier>' object is not iterable` for a
