@@ -61,7 +61,9 @@ fn assert_ok(run: &Output) {
 /// `ParseConf`/`ParserState` pair: `St.parse_conf` is a `Conf[T]` slot and
 /// `conf` a property returning it. `fresh` stores an instance compiled code
 /// made, which has no carrier until the first host read. `B`/`SubB`/`Holder`
-/// store a subclass instance in a base-typed slot. `color` is an enum slot.
+/// store a subclass instance in a base-typed slot. `Cfg` is lark's
+/// `ParseConf` shape, a class whose only member is `__init__` (published
+/// since #1450), held in `Wrap.c`. `color` is an enum slot.
 /// `conf_of` reads the field off an `Any` operand, which compiled code does
 /// through `PyObject_GetAttr` (D-258).
 const MODULE: &str = r#"from enum import Enum
@@ -120,6 +122,19 @@ class Holder:
         return self.b.n
 
 
+class Cfg:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+
+class Wrap:
+    def __init__(self, c: Cfg) -> None:
+        self.c = c
+
+    def renew(self) -> None:
+        self.c = Cfg(9)
+
+
 def conf_of(o: Any) -> Any:
     return o.parse_conf
 "#;
@@ -149,6 +164,11 @@ print(s.parse_conf is s.parse_conf, s.parse_conf.get())
 h = m.Holder(m.SubB(5))
 y = h.b
 print(type(y).__name__, y is h.b, y.tag(), y.get(), h.get())
+g = m.Cfg(4)
+w = m.Wrap(g)
+print(w.c is g, w.c.n, type(w.c).__name__)
+w.renew()
+print(w.c is g, w.c.n, w.c is w.c)
 blank = m.St.__new__(m.St)
 try:
     blank.parse_conf
@@ -164,6 +184,8 @@ const DRIVER_OUT: &str = "True True True 3\n\
     0\n\
     True 7\n\
     SubB True 2 5 5\n\
+    True 4 Cfg\n\
+    False 9 True\n\
     AttributeError 'St' object has no attribute 'parse_conf'\n\
     False dflt\n";
 
