@@ -750,17 +750,16 @@ consulted, as CPython's do, while a store into a setter-bearing property of
 a carrier whose `__init__` never ran raises the slot's `cannot set` message.
 A setter whose value type (or return type) the boundary does not carry --
 a `list[int]` parameter, say -- leaves the property read-only, the same
-silent partiality as a getter it cannot carry. Two kinds of attribute stay
-unwritable and keep CPython's own `AttributeError`. A name with no
-descriptor -- a slot of a type the getter does not carry, or a new name --
-has nowhere to go (`... has no attribute 'xs' and no __dict__ for setting
-new attributes`). And every descriptor -- slot and property alike, a
-getter-only property included -- of a class whose MRO defines a compiled
-`__setattr__` or `__delattr__` is read-only (`attribute '<name>' of
-'<mod>.<Class>' objects is not writable`), because the extension does not
-run that method on a host store and a raw slot store or a direct setter
-call would bypass it silently
-([#1459](https://github.com/rotnov/pycc/issues/1459)). Since
+silent partiality as a getter it cannot carry. A name with no descriptor
+-- a slot of a type the getter does not carry, or a new name -- stays
+unwritable and keeps CPython's own `AttributeError`: it has nowhere to go
+(`... has no attribute 'xs' and no __dict__ for setting new attributes`).
+A class whose body binds `__setattr__` or `__delattr__` never reaches these
+descriptors: the frontend refuses either name with `C0001`, because neither
+a compiled store nor a host store through a descriptor would run the
+method, and a raw slot store or a direct setter call would bypass it
+silently ([#1459](https://github.com/rotnov/pycc/issues/1459); see
+[TYPE_SYSTEM.md](TYPE_SYSTEM.md)'s reserved-name sets). Since
 [#1457](https://github.com/rotnov/pycc/issues/1457), compiled code storing
 into or deleting a field through an object-typed name (`other.x = v` and
 `del other.x` on an `Any`) goes through `PyObject_SetAttr` and

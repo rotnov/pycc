@@ -41,6 +41,10 @@ mod reserved_dunder_class_attrs;
 // module rather than more of the one above.
 mod enum_non_member_names;
 
+// A class body binding `__setattr__` or `__delattr__` (#1459) -- the
+// attribute-store protocol set, checked on the method and attribute routes.
+mod store_protocol_names;
+
 // The `C0001` that makes `--ext`'s abstract-method exclusion total
 // (#1145) -- a derivation nothing pinned before, and its discriminating
 // counterpart. Its own module for the reason the four above give.
