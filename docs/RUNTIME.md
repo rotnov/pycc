@@ -530,7 +530,9 @@ and discards it, passing the same null receiver every native
 `Class.method(...)` call site already passes. A `@property` getter or setter,
 and any method of a private class or of a user exception class, are **not**
 exported and are not `C0003`: they are excluded as representation, not as a
-capability gap. A public `@staticmethod` or `@classmethod` of a public class
+capability gap. (Since #1442 a constructible class's getter is reachable as a
+read-only attribute descriptor instead -- "Reading a field through the
+published type" below -- never as a callable method.) A public `@staticmethod` or `@classmethod` of a public class
 whose signature the boundary cannot carry *is* a `C0003`, where it was
 previously skipped in silence.
 
@@ -578,7 +580,8 @@ the published class, and the walk never falls through to a base that exports
 the same name.
 
 So a `Derived` that binds `value` as a `@property` publishes no callable
-`value` at all, exactly as Python's own attribute lookup gives the derived
+`value` at all (only, when `Derived` is constructible, the property's read-only
+descriptor, #1442), exactly as Python's own attribute lookup gives the derived
 property rather than `Base.value`; a derived ordinary method shadows a base
 `@property` in the same way; a derived `@staticmethod` shadows a base instance
 method, published under its own receiver kind; a base's `value: int = 2`
