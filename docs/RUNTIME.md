@@ -538,8 +538,9 @@ and CPython never applies it to the entry module. Any other module-scope
 binding of a hook name in the entry module -- an import (`from lib import
 __getattr__`, `import x as __dir__`), an assignment or other store or `del`
 target (`__getattr__ = 5`, a `for`/`with` target, a walrus), a `class`
-statement or a `match` capture -- at the top level or inside a top-level
-`if`/`try`, is refused with a located `C0001`, since CPython would call (or
+statement, an `except ... as` name or a `match` capture -- at the top level,
+inside a top-level `if`/`try` or in a `def`/`class` header (a walrus in a
+default or decorator), is refused with a located `C0001`, since CPython would call (or
 lose) a hook the boundary cannot publish. The scan does not evaluate
 guards, so a binding under `if TYPE_CHECKING:` is refused too, and a
 `global` rebinding from a function body is not modelled; a hook whose

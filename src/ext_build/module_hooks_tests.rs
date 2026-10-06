@@ -114,6 +114,35 @@ fn every_other_module_scope_binding_of_a_hook_name_is_refused() {
         ("del __getattr__\n", "deleted by a `del` statement"),
         ("class __dir__:\n    pass\n", "bound by a class statement"),
         (
+            "try:\n    pass\nexcept ValueError as __getattr__:\n    pass\n",
+            "bound by an except clause",
+        ),
+        (
+            "try:\n    pass\nexcept* ValueError as __dir__:\n    pass\n",
+            "bound by an except clause",
+        ),
+        // A `def` or `class` header runs at module scope.
+        (
+            "def f(a: int = (__dir__ := 1)) -> int:\n    return a\n",
+            "bound by an assignment",
+        ),
+        (
+            "@(__getattr__ := staticmethod)\ndef f() -> None:\n    pass\n",
+            "bound by an assignment",
+        ),
+        (
+            "def f() -> (__dir__ := int):\n    return 1\n",
+            "bound by an assignment",
+        ),
+        (
+            "@(__dir__ := dataclass)\nclass C:\n    pass\n",
+            "bound by an assignment",
+        ),
+        (
+            "class C((__getattr__ := object)):\n    pass\n",
+            "bound by an assignment",
+        ),
+        (
             "match 1:\n    case __getattr__:\n        pass\n",
             "bound by a match pattern",
         ),
@@ -148,7 +177,9 @@ fn a_read_of_a_hook_name_and_a_non_hook_store_are_not_refused() {
     assert!(
         defined(
             "def __getattr__(name: str) -> int:\n    return 1\n\n\n\
-             g = __getattr__\nx = 1\nmatch 1:\n    case y:\n        pass\n"
+             g = __getattr__\nx = 1\nmatch 1:\n    case y:\n        pass\n\
+             try:\n    pass\nexcept ValueError as e:\n    pass\nexcept TypeError:\n    pass\n\n\n\
+             def h(a: int = 1, *, __dir__: int = 2) -> int:\n    return a\n"
         )
         .contains(&"__getattr__".to_string())
     );

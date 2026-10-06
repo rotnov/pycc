@@ -23,7 +23,8 @@
 //! `HirItem::Function`. CPython never applies a helper's hook to the entry
 //! module, so only a `def` at the entry module's top level counts. Any
 //! other module-scope binding of a hook name in the entry module -- an
-//! import, an assignment, a `class` statement -- would put a value in
+//! import, an assignment, a `class` statement, an `except ... as` name --
+//! would put a value in
 //! CPython's dict that this boundary cannot publish, so it is refused with
 //! a located `C0001` rather than ignored.
 
@@ -31,8 +32,8 @@ use std::collections::BTreeSet;
 
 use pycc_ast::visitor::{self, Visitor};
 use pycc_ast::{
-    Expr, ExprContext, ModModule, Pattern, PatternMatchAs, PatternMatchMapping, PatternMatchStar,
-    Stmt,
+    ExceptHandler, ExceptHandlerExceptHandler, Expr, ExprContext, ModModule, Pattern,
+    PatternMatchAs, PatternMatchMapping, PatternMatchStar, Stmt,
 };
 use pycc_diag::{Diagnostic, Span};
 
@@ -62,9 +63,10 @@ impl EntryHooks {
 
     /// Scans the entry module: a top-level `def` of a hook name defines it,
     /// and every other binding of a hook name -- an import alias, a store
-    /// or `del` target, a `class` statement, a `match` capture -- at the top
-    /// level or anywhere inside a top-level compound statement, but not
-    /// inside a function or class body, whose bindings are not module
+    /// or `del` target, a `class` statement, an `except ... as` name, a
+    /// `match` capture -- at the top level, anywhere inside a top-level
+    /// compound statement or in a `def`/`class` header, but not inside a
+    /// function or class body, whose bindings are not module
     /// attributes, is one located `C0001`: CPython would call (or lose) a
     /// hook the boundary cannot publish. The scan is deliberately
     /// over-inclusive: it does not evaluate a guard, so a binding CPython
@@ -122,15 +124,32 @@ impl HookBindings {
 impl<'a> Visitor<'a> for HookBindings {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
         match stmt {
-            // A local scope: nothing bound in it is a module attribute. A
-            // top-level `def` of a hook name is the published form.
-            Stmt::FunctionDef(_) => return,
+            // The body is a local scope: nothing bound in it is a module
+            // attribute, and a top-level `def` of a hook name is the
+            // published form. The header runs at module scope, so a walrus
+            // in a decorator, a default or an annotation binds there.
+            Stmt::FunctionDef(def) => {
+                for decorator in &def.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+                self.visit_parameters(&def.parameters);
+                if let Some(returns) = &def.returns {
+                    self.visit_annotation(returns);
+                }
+                return;
+            }
             Stmt::ClassDef(class) => {
                 self.check(
                     class.name.as_str(),
                     class.name.range,
                     "bound by a class statement",
                 );
+                for decorator in &class.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+                if let Some(arguments) = &class.arguments {
+                    self.visit_arguments(arguments);
+                }
                 return;
             }
             // `import a.b` binds `a`; `import a.b as c` binds `c`.
@@ -169,6 +188,16 @@ impl<'a> Visitor<'a> for HookBindings {
             }
         }
         visitor::walk_expr(self, expr);
+    }
+
+    /// `except E as name` (and `except*`) binds the name, then deletes it
+    /// when the handler ends.
+    fn visit_except_handler(&mut self, handler: &'a ExceptHandler) {
+        let ExceptHandler::ExceptHandler(ExceptHandlerExceptHandler { name, .. }) = handler;
+        if let Some(name) = name {
+            self.check(name.as_str(), name.range, "bound by an except clause");
+        }
+        visitor::walk_except_handler(self, handler);
     }
 
     /// A capture in a `match` pattern binds its name as an assignment does.
