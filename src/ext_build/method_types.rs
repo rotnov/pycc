@@ -63,7 +63,8 @@ pub(crate) const UNPUBLISHED_CLASS_ISINSTANCE: &str = "pycc_ext_unpublished_clas
 /// override already shadowing its base's definition. A constructible class
 /// that resolves nothing -- one with a perfectly carriable `__init__` but no
 /// public method anywhere in its MRO, lark's `ParseConf` (#1450) -- gets a
-/// type object whose method table holds only the sentinel. This function
+/// type object whose method table holds only the shared `__copy__` row
+/// (#1455) before the sentinel. This function
 /// renders that decision and never re-derives it, so the MRO walk exists
 /// once (`AGENTS.md`'s canonical-statement rule).
 ///

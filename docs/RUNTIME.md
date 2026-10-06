@@ -552,8 +552,9 @@ member of its own is published on the strength of what it inherits, and since
 published even when it resolves no method at all: an `__init__`-only class
 (lark's `ParseConf`) or `class Empty: pass`, whose implicit `object.__init__`
 makes it constructible, gets a type object whose method table holds only the
-shared `__copy__` (#1455, below), so the host can name it, construct it, read its fields and pass the instance to
-a compiled function (`tests/issue_1450_init_only_class.rs`). A public class
+shared `__copy__` (#1455, below), so the host can name it, construct it,
+read its fields and pass the instance to a compiled function
+(`tests/issue_1450_init_only_class.rs`). A public class
 that resolves nothing and is not constructible -- its `__init__` takes a
 `tuple`, say -- still gets no type object, and so does a monomorphized
 generic specialization (`0gen_<Class>__...`, the class `Cell[int](6)`
@@ -755,8 +756,8 @@ has no such attribute; a copy's object-slot reference outlives the copy, since
 the clone is never freed (D-107, D-154) -- each `copy.copy` allocates a
 never-freed instance, the same leak linear in the host's call count the
 constructor has; and the refusals above. An embedded executable compiles the
-same shim and the same generated table, so a carrier there copies the same
-way.
+same shim and the same generated table, so a carrier there inherits the same
+`__copy__`; that path is not separately tested.
 
 The table below is the canonical statement of what the `ext` boundary carries
 today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,
@@ -1688,8 +1689,9 @@ above. Four rules fix what that carrier is.
   published class reads its fields through that type's read-only descriptors
   (#1442, "Reading a field through the published type" above), as CPython
   does. Any other carrier -- a non-constructible published type's, or an
-  on-demand carrier type's -- exposes exactly its type's exported methods: no
-  attribute is readable, so `hasattr(x, 'n')` is `False` where CPython says
+  on-demand carrier type's -- exposes exactly its type's exported methods and
+  the shared `__copy__` (#1455, "Copying an instance through `copy.copy`"
+  above): no attribute is readable, so `hasattr(x, 'n')` is `False` where CPython says
   `True` ([#1448](https://github.com/rotnov/pycc/issues/1448)). Published types are
   flat, so the host's own `isinstance(derived, mod.Base)` is `False`; a
   compiled `isinstance(x, Base)` on a carrier that comes back answers from

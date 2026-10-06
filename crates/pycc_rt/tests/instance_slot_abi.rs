@@ -109,4 +109,9 @@ fn the_ext_instance_copy_clones_the_slots() {
     assert_eq!(unsafe { pycc_rt_instance_get_slot_checked(copy, 1) }, 0);
     let (_, message) = take_pending();
     assert_eq!(message, "'Q' object has no attribute 'm'");
+    // A slotless class's kind string is empty, and the shim may hand it over
+    // as a null pointer; only a non-zero length needs readable bytes.
+    let slotless = unsafe { pycc_rt_instance_new(0, LAYOUT.as_ptr(), 1) };
+    assert!(!unsafe { pycc_rt_ext_instance_copy(slotless, std::ptr::null(), 0) }.is_null());
+    assert!(unsafe { pycc_rt_ext_instance_copy(q, std::ptr::null(), 2) }.is_null());
 }

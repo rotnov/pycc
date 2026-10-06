@@ -86,6 +86,12 @@ class Conf(Generic[T]):
         self.n = self.n + 100
         self.s = self.s + "!"
 
+    def grow(self) -> None:
+        self.n = self.n * self.n
+
+    def text(self) -> str:
+        return f"{self.n}"
+
 
 def read(c: Conf[Any]) -> int:
     return c.n * 10
@@ -205,6 +211,12 @@ print(m.plain(lambda p: m.plain_n(copy.copy(p))))
 print(m.plain(lambda p: type(copy.copy(p)).__name__), m.plain(lambda p: copy.copy(p) is not p))
 d = copy.copy(m.DeepOnly(7))
 print(type(d) is m.DeepOnly, d.n)
+big = m.Conf(2**31, "ab", o)
+big.grow()
+yb = copy.copy(big)
+yb.bump()
+big.bump()
+print(big.text(), yb.text())
 "#;
 
 const DRIVER_OUT: &str = "True True 3 ab True\n\
@@ -220,7 +232,8 @@ const DRIVER_OUT: &str = "True True 3 ab True\n\
     AttributeError 'St' object has no attribute 'parse_conf'\n\
     5\n\
     _Plain True\n\
-    True 7\n";
+    True 7\n\
+    4611686018427388004 4611686018427388004\n";
 
 /// The documented differences from CPython, run against the extension only.
 const EXT_ONLY_DRIVER: &str = r#"import copy
