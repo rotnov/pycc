@@ -1088,6 +1088,7 @@ fn ctor_descriptor(module: &HirModule, class: &str) -> Option<ExtCtor> {
             .collect(),
         defaults: defaults::carried_defaults(module, name, true),
         slot_names: instance_slot_names(module, class_def),
+        getsets: getset::collect_getsets(module, class_def, &mro_class_defs(module, class_def)),
     })
 }
 
@@ -1117,7 +1118,18 @@ fn ctor_descriptor(module: &HirModule, class: &str) -> Option<ExtCtor> {
 /// -- only ever appears in the MRO of an exception class, which
 /// [`instance_shape_admissible`] already refused above.
 fn instance_slot_names(module: &HirModule, class_def: &HirClassDef) -> Vec<String> {
-    let mro_defs: Vec<&HirClassDef> = class_def
+    flat_attr_layout(&mro_class_defs(module, class_def))
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// `class_def`'s MRO resolved to the definitions that carry its slots, most
+/// derived first -- [`instance_slot_names`]' input, shared with the getset
+/// collector (#1442) so both read one layout. Panics on an MRO entry this
+/// program does not define; see [`instance_slot_names`] for why.
+fn mro_class_defs<'m>(module: &'m HirModule, class_def: &HirClassDef) -> Vec<&'m HirClassDef> {
+    class_def
         .mro
         .iter()
         .map(|mro_class| {
@@ -1137,10 +1149,6 @@ fn instance_slot_names(module: &HirModule, class_def: &HirClassDef) -> Vec<Strin
                 ),
             }
         })
-        .collect();
-    flat_attr_layout(&mro_defs)
-        .into_iter()
-        .map(|(name, _)| name)
         .collect()
 }
 
@@ -1177,6 +1185,10 @@ pub(crate) struct ExtCtor {
     /// called with and which, after [`ExtCtor::class`], make up the layout
     /// descriptor it is passed (#1388).
     pub(crate) slot_names: Vec<String>,
+    /// The read-only attributes the class's type object exposes through
+    /// `Py_tp_getset` (#1442): its carriable slots and properties, so a
+    /// host-side or compiled object-typed `instance.field` read finds them.
+    pub(crate) getsets: Vec<ExtGetset>,
 }
 
 /// The constructible classes among the published ones, in publication order.
@@ -1516,6 +1528,8 @@ mod carrier;
 mod defaults;
 pub(crate) use carrier::*;
 mod export_name;
+mod getset;
+pub(crate) use getset::ExtGetset;
 mod inherited;
 pub(crate) use export_name::*;
 mod method_types;

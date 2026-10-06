@@ -8,6 +8,7 @@
 //! constructor half.
 
 use super::export_name::ExtReceiver;
+use super::getset::getset_c;
 use super::{
     ExtCtor, ExtPublishedClass, arg_slot_locals, buffer_releases, c_param_list, defaults,
     source_level_name, unpack_args,
@@ -109,6 +110,7 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
             published.class
         ));
     }
+    let mut emitted_getters: Vec<String> = Vec::new();
     for published in publications {
         let class = &published.class;
         let ctor = ctors.iter().find(|ctor| ctor.class == *class);
@@ -143,6 +145,7 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
         out.push_str("    {NULL, NULL, 0, NULL},\n};\n\n");
         if let Some(ctor) = ctor {
             out.push_str(&tp_init_c(ctor));
+            out.push_str(&getset_c(ctor, &mut emitted_getters));
         }
         out.push_str(&format!(
             "static PyType_Slot pycc_ext_type_slots_{class}[] = {{\n    \
@@ -164,7 +167,15 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
         // in it by `pycc_ext_obj_pack_instance`, constructible or not, so
         // each needs room for the carrier and the deallocator that unlinks
         // it.
-        out.push_str("    {Py_tp_dealloc, pycc_ext_instance_dealloc},\n    {0, NULL},\n};\n\n");
+        out.push_str("    {Py_tp_dealloc, pycc_ext_instance_dealloc},\n");
+        // #1442: installed only when the class has a descriptor, so a class
+        // with none keeps its slot array byte for byte.
+        if ctor.is_some_and(|ctor| !ctor.getsets.is_empty()) {
+            out.push_str(&format!(
+                "    {{Py_tp_getset, pycc_ext_type_getset_{class}}},\n"
+            ));
+        }
+        out.push_str("    {0, NULL},\n};\n\n");
         // A non-constructible class keeps the `DISALLOW_INSTANTIATION` flag
         // Part 1 emitted; a constructible one must not refuse its own
         // constructor.

@@ -149,9 +149,9 @@ const SUBJECT_SOURCE: &str = "from typing import Any\n\
     \x20       return self.__eq__(o)\n";
 
 /// Prints what the subject's `__eq__` returns for operands it does not
-/// handle. A handled operand (another `ParserState`) is left out: the
-/// method then reads `other.state_stack` through the object, and a compiled
-/// instance does not publish its fields to CPython attribute lookup yet.
+/// handle. A handled operand (another `ParserState`), whose fields the
+/// method reads through the object, is covered by
+/// `tests/issue_1442_compiled_field_read.rs`.
 fn subject_report(load: &str) -> String {
     format!(
         "{load}\n\

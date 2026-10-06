@@ -76,6 +76,15 @@ extern const unsigned char *pycc_rt_ext_str_bytes(void *s, size_t *len);
  * The inner object therefore outlives its carrier; see
  * `pycc_ext_instance_dealloc`. */
 extern void *pycc_rt_instance_new(long long slot_count, const char *layout, size_t layout_len);
+/* The read half of the instance boundary (#1442): the generated read-only
+ * `Py_tp_getset` getters read a slot word with the same checked accessor a
+ * compiled `self.x` read uses, so an unassigned slot raises the same
+ * `AttributeError` (#1388) through the pending-exception channel. A `str`
+ * slot keeps its own reference, so its getter takes one with
+ * `pycc_rt_str_incref` before `pycc_ext_pack_str` discharges it. */
+extern long long pycc_rt_instance_get_slot_checked(void *instance, long long slot);
+extern void pycc_rt_str_incref(void *s);
+
 /* The instance egress (#1435). The class an instance was constructed as
  * (field 0 of its layout descriptor; empty for an instance without one), and
  * the weak back-pointer to the `PyccExtInstance` carrier currently standing

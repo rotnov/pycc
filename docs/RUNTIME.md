@@ -530,7 +530,9 @@ and discards it, passing the same null receiver every native
 `Class.method(...)` call site already passes. A `@property` getter or setter,
 and any method of a private class or of a user exception class, are **not**
 exported and are not `C0003`: they are excluded as representation, not as a
-capability gap. A public `@staticmethod` or `@classmethod` of a public class
+capability gap. (Since #1442 a constructible class's getter is reachable as a
+read-only attribute descriptor instead -- "Reading a field through the
+published type" below -- never as a callable method.) A public `@staticmethod` or `@classmethod` of a public class
 whose signature the boundary cannot carry *is* a `C0003`, where it was
 previously skipped in silence.
 
@@ -578,7 +580,8 @@ the published class, and the walk never falls through to a base that exports
 the same name.
 
 So a `Derived` that binds `value` as a `@property` publishes no callable
-`value` at all, exactly as Python's own attribute lookup gives the derived
+`value` at all (only, when `Derived` is constructible, the property's read-only
+descriptor, #1442), exactly as Python's own attribute lookup gives the derived
 property rather than `Base.value`; a derived ordinary method shadows a base
 `@property` in the same way; a derived `@staticmethod` shadows a base instance
 method, published under its own receiver kind; a base's `value: int = 2`
@@ -645,6 +648,40 @@ refuses a non-empty `kwds`, not because CPython refused it first. And the
 instance a constructor allocates is never freed: D-107's arena model, narrowed
 by D-154, gives `pycc_rt` no ownership model, so the leak a `native` program
 bounds at process exit becomes linear in the host's call count.
+
+*Reading a field through the published type*
+([#1442](https://github.com/rotnov/pycc/issues/1442)). A constructible class's
+type object also carries a read-only `Py_tp_getset` table: one descriptor per
+instance-attribute slot and one per `@property` whose declared type is `int`,
+`float`, `bool`, `str` or, in an `--ext` module, the object (D-258). A slot is
+read with the same checked accessor a compiled `self.x` read uses, so an
+unassigned slot -- a base's slot a derived `__init__` never assigns (#1148), or
+any slot of a carrier `mod.Class.__new__(mod.Class)` never initialized --
+raises CPython's `AttributeError: '<Class>' object has no attribute '<name>'`,
+and `hasattr`/`getattr(obj, name, default)` answer as for any missing
+attribute. A property runs its compiled getter through the same wrapper an
+instance method gets, the receiver-exact copy for a subclass (D-254); on a
+never-initialized carrier it raises the same `AttributeError` naming the
+property itself, where CPython's getter body would name the slot it reads. A
+property is described only where it wins the namespace walk above, and each
+value is packed by the return-type row of the table below, so an `int` outside
+the inline range raises `OverflowError`. This is what lets compiled code read a
+field off an `Any` operand: `other.state_stack` in lark's
+`ParserState.__eq__(self, other)` lowers to `PyObject_GetAttr` (D-258), which
+finds the descriptor when `other` is a compiled instance, so the host's
+`obj.field` and the compiled `other.field` answer alike. Two limits are
+deliberate. A field whose type no row packs from one machine word (a
+`list[int]` slot, an instance-typed one, a `tuple`-returning getter) gets **no
+descriptor**, never a `C0003`: the table widens what a host can observe of an
+object it already holds, and refusing a build over one unobservable field
+would turn that into a regression. And no descriptor has a setter, so a host
+store such as `obj.n = 3` raises CPython's `AttributeError: attribute 'n' of
+'mod.Class' objects is not writable` where CPython would store it
+([#1443](https://github.com/rotnov/pycc/issues/1443) tracks host-side
+stores). The table is a constructible class's only: a non-constructible
+published type and an on-demand carrier type (#1435) wrap an instance as well,
+but carry no descriptor yet, so a field read through one raises
+`AttributeError` ([#1448](https://github.com/rotnov/pycc/issues/1448)).
 
 The table below is the canonical statement of what the `ext` boundary carries
 today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,
@@ -1569,9 +1606,13 @@ above. Four rules fix what that carrier is.
   syntactic check reaches the packer's `NULL` guard, which raises
   `SystemError`.
 - *Deviations from CPython, pinned by
-  `tests/issue_1435_instance_argument.rs`.* A carrier exposes exactly its
-  type's exported methods: no attribute is readable, so `hasattr(x, 'n')` is
-  `False` (as for a host-constructed object since #1145). Published types are
+  `tests/issue_1435_instance_argument.rs`.* A carrier of a constructible
+  published class reads its fields through that type's read-only descriptors
+  (#1442, "Reading a field through the published type" above), as CPython
+  does. Any other carrier -- a non-constructible published type's, or an
+  on-demand carrier type's -- exposes exactly its type's exported methods: no
+  attribute is readable, so `hasattr(x, 'n')` is `False` where CPython says
+  `True` ([#1448](https://github.com/rotnov/pycc/issues/1448)). Published types are
   flat, so the host's own `isinstance(derived, mod.Base)` is `False`; a
   compiled `isinstance(x, Base)` on a carrier that comes back answers from
   the run-time class's MRO instead (above), and matches CPython. A class's dunder

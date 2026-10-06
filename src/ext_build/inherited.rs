@@ -17,7 +17,8 @@
 //! - which exported item a published class's method table binds for a
 //!   member an ancestor owns ([`receiver_exact_export`]);
 //! - which compiled `__init__` a host-side construction runs
-//!   ([`receiver_exact_init`]);
+//!   ([`receiver_exact_init`]), and which compiled `@property` getter a
+//!   host-side attribute read runs ([`receiver_exact_member`], #1442);
 //! - whether an exported copy is itself publishable ([`copy_export_verdict`]):
 //!   a copy is compiled for exactly one receiver class, so it is reachable
 //!   only on that class, and a copied `@property` getter is attribute
@@ -124,7 +125,21 @@ pub(crate) fn receiver_exact_init<'m>(
     class: &str,
     mangled: &'m str,
 ) -> &'m str {
-    let copy = format!("{class}.__init__");
+    receiver_exact_member(module, class, "__init__", mangled)
+}
+
+/// The compiled item a host-side read of `class`'s member `member` runs,
+/// given the MRO-resolved item `mangled` that owns it: the copy compiled for
+/// `class` when the member is inherited and needed one, else `mangled`.
+/// [`receiver_exact_init`] is this question for `__init__`; a `@property`
+/// getter published as a getset descriptor (#1442) asks it for its own name.
+pub(crate) fn receiver_exact_member<'m>(
+    module: &'m HirModule,
+    class: &str,
+    member: &str,
+    mangled: &'m str,
+) -> &'m str {
+    let copy = format!("{class}.{member}");
     if copy == mangled {
         return mangled;
     }
