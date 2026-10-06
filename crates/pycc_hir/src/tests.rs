@@ -45,9 +45,13 @@ mod enum_non_member_names;
 // attribute-store protocol set, checked on the method and attribute routes.
 mod store_protocol_names;
 
+// A class body binding `__getattribute__` or `__getattr__` (#1465) -- the
+// attribute-read protocol set, the read-side sibling of the one above.
+mod read_protocol_names;
+
 // The `C0001` that makes `--ext`'s abstract-method exclusion total
 // (#1145) -- a derivation nothing pinned before, and its discriminating
-// counterpart. Its own module for the reason the four above give.
+// counterpart. Its own module for the reason the five above give.
 mod abstract_without_abc_base;
 
 // D-228's bare-container advice positions (#918), moved out when #1266 added

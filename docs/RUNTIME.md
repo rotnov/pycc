@@ -759,7 +759,12 @@ descriptors: the frontend refuses either name with `C0001`, because neither
 a compiled store nor a host store through a descriptor would run the
 method, and a raw slot store or a direct setter call would bypass it
 silently ([#1459](https://github.com/rotnov/pycc/issues/1459); see
-[TYPE_SYSTEM.md](TYPE_SYSTEM.md)'s reserved-name sets). Since
+[TYPE_SYSTEM.md](TYPE_SYSTEM.md)'s reserved-name sets). Likewise a class
+whose body binds `__getattribute__` or `__getattr__` never reaches the
+slot or property getters: neither a compiled read nor a host read through
+a descriptor, nor a host read of a missing name, would call the method,
+so the frontend refuses both names with `C0001` too
+([#1465](https://github.com/rotnov/pycc/issues/1465)). Since
 [#1457](https://github.com/rotnov/pycc/issues/1457), compiled code storing
 into or deleting a field through an object-typed name (`other.x = v` and
 `del other.x` on an `Any`) goes through `PyObject_SetAttr` and
