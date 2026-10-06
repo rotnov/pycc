@@ -42,7 +42,8 @@ fn write(dir: &Path, file: &str, body: &str) -> PathBuf {
 
 /// The module both sides import. `ParseConf` has nothing but `__init__`
 /// (lark's `ParseConf`, generic as there); `St` takes one in its
-/// constructor, as lark's `ParserState` does. `Empty` has no member at all.
+/// constructor, as lark's `ParserState` does, and one in a method
+/// (`merge`). `Empty` has no member at all.
 /// `Pair`'s only member is an `__init__` taking a `tuple`, which no
 /// generated constructor can carry, so it stays unpublished (the pinned
 /// deviation below). `Cell[int]` is a monomorphized specialization that
@@ -67,7 +68,8 @@ const MODULE: &str = "from typing import Any, Generic, TypeVar\n\
     class St(Generic[T]):\n    def __init__(self, conf: ParseConf[T], k: int) -> None:\n        \
     self.conf = conf\n        self.k = k\n\n    \
     def total(self) -> int:\n        return self.k + self.conf.n\n\n    \
-    def conf_of(self) -> ParseConf[T]:\n        return self.conf\n\
+    def conf_of(self) -> ParseConf[T]:\n        return self.conf\n\n    \
+    def merge(self, other: ParseConf[T]) -> int:\n        return self.k * other.n\n\
     \n\
     \n\
     def conf_n(c: ParseConf[Any]) -> int:\n    return c.n\n\
@@ -94,7 +96,7 @@ const DRIVER: &str = "import gc\n\
     print(type(c).__name__, type(c) is mod.ParseConf)\n\
     print(c.n, c.name)\n\
     s = mod.St(c, 4)\n\
-    print(s.total(), s.conf_of() is c)\n\
+    print(s.total(), s.conf_of() is c, s.merge(mod.ParseConf(5, 'y')))\n\
     print(mod.conf_n(c), mod.conf_n(mod.make_conf(9)))\n\
     m = mod.make_conf(5)\n\
     print(type(m) is mod.ParseConf, m.n, m.name)\n\
@@ -117,7 +119,7 @@ const DRIVER: &str = "import gc\n\
     print(sys.getrefcount(c) - before)\n";
 
 /// What `DRIVER` prints under CPython.
-const EXPECTED: &str = "ParseConf True\n3 x\n7 True\n3 9\nTrue 5 made\nTrue False\n\
+const EXPECTED: &str = "ParseConf True\n3 x\n7 True 20\n3 9\nTrue 5 made\nTrue False\n\
     Empty True\n6\nTypeError\nTypeError\nTypeError\n0\n";
 
 fn python(dir: &Path, script: &str) -> Output {
