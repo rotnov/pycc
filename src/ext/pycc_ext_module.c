@@ -2151,8 +2151,8 @@ int pycc_ext_obj_isinstance(PyObject *o, PyObject *cls, int builtin)
 
 /*
  * The answer for a compiled class no published type descends from (a
- * private class, one exporting no method, every class of an embedded
- * build), asked of an object that carries no compiled instance (a carrier,
+ * private class, one exporting no method that the host cannot construct
+ * either, every class of an embedded build), asked of an object that carries no compiled instance (a carrier,
  * #1435, is answered before this is reached): no such object is an
  * instance of the class, but CPython's own
  * `isinstance` does not answer False before it has looked up the object's

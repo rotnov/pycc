@@ -954,7 +954,10 @@ fn instance_shape_admissible(class_def: &HirClassDef, class: &str) -> bool {
 /// set is non-empty *or* the class is [`class_constructible`] (#1450) -- is
 /// deliberately *not* here, and a witness does not need it: a witness is
 /// required to be [`class_constructible`], which satisfies that condition
-/// on its own. Stating the method half here would also be circular, since
+/// on its own -- except for a monomorphized `0gen_` witness, which the
+/// constructor half skips and which is published through the method half
+/// instead, as before #1450: the export it witnesses is in its own resolved
+/// set. Stating the method half here would also be circular, since
 /// the resolved set is built out of the export set this predicate helps
 /// decide.
 /// Where each conjunct bites: the name half is what a *witness* needs --
