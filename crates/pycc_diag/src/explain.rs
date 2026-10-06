@@ -183,7 +183,11 @@ subclass does not make its abstract base's stub receivable. \
 Every gap in a program is \
 reported at once. The two fixes are to make the member private under \
 D-038's rule -- rename it with a leading underscore, which removes it from \
-the export set -- or to build without `--ext`.",
+the export set -- or to build without `--ext`. The one exception is a PEP \
+562 module hook (#1467): a top-level `def __getattr__` or `def __dir__` of \
+the entry module is in the export set although it is a dunder, and \
+renaming it would silently stop the host from calling it, so its fixes are \
+to change its signature or to build without `--ext`.",
         // The example has to name a signature the boundary still refuses
         // *and* that `native` mode compiles, since the explanation above
         // rests on exactly that contrast. It must be re-pointed whenever

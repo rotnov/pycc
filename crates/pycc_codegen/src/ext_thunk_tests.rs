@@ -455,6 +455,19 @@ fn the_export_predicate_applies_the_public_name_rule_to_both_segments() {
 }
 
 #[test]
+fn the_export_predicate_admits_exactly_the_two_pep_562_module_hooks() {
+    // #1467: the driver publishes an entry module's `__getattr__` and
+    // `__dir__`, so a tuple-carrying hook needs its thunk. No other dunder,
+    // and no near-miss spelling, is admitted.
+    assert!(crate::is_ext_exportable_name("__getattr__"));
+    assert!(crate::is_ext_exportable_name("__dir__"));
+    assert!(!crate::is_ext_exportable_name("__getattr__x"));
+    assert!(!crate::is_ext_exportable_name("__getattribute__"));
+    assert!(!crate::is_ext_exportable_name("_getattr"));
+    assert!(!crate::is_ext_exportable_name("Grid.__getattr__"));
+}
+
+#[test]
 fn the_export_predicate_refuses_an_empty_segment_and_a_specialization() {
     // `is_public_name`'s underlying rule (`!starts_with('_')`) is `true` for
     // the empty string, so each empty segment is refused explicitly rather

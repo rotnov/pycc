@@ -28,7 +28,10 @@ use super::*;
 /// module-level function keeps its `pycc_ext_methods[]` row unchanged; a
 /// method goes into its own class's table instead, because a row in
 /// `pycc_ext_methods[]` would publish exactly the flat `mod."Class.method"`
-/// attribute the type object exists to avoid.
+/// attribute the type object exists to avoid. A PEP 562 module hook
+/// (#1467) goes into `pycc_ext_module_hooks[]` rather than
+/// `pycc_ext_methods[]`, because the shim may add it only after the module
+/// body has run.
 pub(crate) fn generate_exports_inc(
     module_name: &str,
     exports: &[ExtExport],
@@ -47,13 +50,34 @@ pub(crate) fn generate_exports_inc(
     for export in exports {
         out.push_str(&wrapper_for(export));
     }
-    out.push_str("static PyMethodDef pycc_ext_methods[] = {\n");
-    for export in exports.iter().filter(|export| export.class.is_none()) {
+    let module_level = || exports.iter().filter(|export| export.class.is_none());
+    out.push_str(&module_method_table(
+        "pycc_ext_methods",
+        module_level().filter(|export| !is_module_hook(&export.name)),
+    ));
+    // #1467: a PEP 562 hook is added by `pycc_ext_exec_module` only once
+    // the module body has run (see `module_hooks`). Always emitted, as the
+    // bare sentinel when the module defines no hook, so the shim can name
+    // the table unconditionally.
+    out.push_str(&module_method_table(
+        "pycc_ext_module_hooks",
+        module_level().filter(|export| is_module_hook(&export.name)),
+    ));
+    out.push_str(&method_types_c(publications, ctors));
+    out.push_str(&carrier_class_isinstance_c(carriers));
+    out.push_str(&carrier_class_copy_kinds_c(carriers));
+    out
+}
+
+/// One module-level `PyMethodDef` table named `table`, sentinel included.
+fn module_method_table<'a>(table: &str, exports: impl Iterator<Item = &'a ExtExport>) -> String {
+    let mut out = format!("static PyMethodDef {table}[] = {{\n");
+    for export in exports {
         // A module-level function's bare name, its mangled name and its
         // wrapper suffix are all the same string -- the mangling is the
         // identity for a dot-free name -- so this row keeps its single-`name`
         // format. The divergence between `ml_name` and the wrapper symbol
-        // belongs to the per-class tables below.
+        // belongs to the per-class tables.
         out.push_str(&format!(
             "    {{\"{name}\", (PyCFunction)(void (*)(void))pycc_ext_wrap_{name}, \
              {flags}, NULL}},\n",
@@ -62,8 +86,5 @@ pub(crate) fn generate_exports_inc(
         ));
     }
     out.push_str("    {NULL, NULL, 0, NULL},\n};\n\n");
-    out.push_str(&method_types_c(publications, ctors));
-    out.push_str(&carrier_class_isinstance_c(carriers));
-    out.push_str(&carrier_class_copy_kinds_c(carriers));
     out
 }

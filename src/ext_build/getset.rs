@@ -95,7 +95,7 @@ pub(crate) enum ExtGetset {
         /// The property name, which is the host-visible descriptor name.
         name: String,
         /// The zero-argument instance export the getter wrapper is rendered
-        /// from. It is never in the export set ([`super::collect_exports`]
+        /// from. It is never in the export set ([`super::collect_exports_with_hooks`]
         /// excludes a getter as representation), so the wrapper is emitted
         /// here and nowhere else.
         getter: ExtExport,
@@ -111,7 +111,7 @@ pub(crate) enum PropertySetter {
     /// boundary carries: a store calls it through its `METH_FASTCALL`
     /// wrapper, rendered from this one-argument instance export. Like the
     /// getter's, the export is never in the export set
-    /// ([`super::collect_exports`] refuses a `.setter` spelling), so its
+    /// ([`super::collect_exports_with_hooks`] refuses a `.setter` spelling), so its
     /// wrapper is emitted only by [`getset_c`]. Boxed, so a `Refuse` or
     /// `ReadOnly` descriptor does not carry an export's footprint.
     Compiled(Box<ExtExport>),

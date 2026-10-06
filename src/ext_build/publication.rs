@@ -60,7 +60,7 @@ pub(crate) struct ExtPublishedClass {
 /// `@property`, and a derived `@staticmethod` still shadows a base
 /// instance method, each published under its own receiver kind.
 ///
-/// That direction is the opposite of [`collect_exports`]' `(class, method)`
+/// That direction is the opposite of [`collect_exports_with_hooks`]' `(class, method)`
 /// dedup, which keeps the *last* binding because a rebound name is what
 /// `Grid.f` means in one class body.
 ///
@@ -101,7 +101,7 @@ pub(crate) struct ExtPublishedClass {
 /// not an exception class: [`register_class_c`] already publishes a user
 /// exception class under its bare name, and a second `PyModule_AddObjectRef`
 /// under that name would replace it. Both are already true of every class in
-/// the export set -- [`classify_export_name`] and [`collect_exports`]'
+/// the export set -- [`classify_export_name`] and [`collect_exports_with_hooks`]'
 /// exception filter see to that -- so the test bites only on an inheriting
 /// class that exports nothing itself. Abstractness is deliberately *not*
 /// tested: Part 1 published a `@staticmethod` on an abstract class, and an
@@ -110,7 +110,7 @@ pub(crate) struct ExtPublishedClass {
 ///
 /// [`resolved_init`]: super::resolved_init
 /// [`class_constructible`]: super::class_constructible
-/// [`collect_exports`]: super::collect_exports
+/// [`collect_exports_with_hooks`]: super::collect_exports_with_hooks
 /// [`is_public_name`]: pycc_hir::is_public_name
 /// [`register_class_c`]: super::register_class_c
 /// [`classify_export_name`]: super::classify_export_name

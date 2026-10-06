@@ -694,6 +694,12 @@ pub fn ext_thunk_symbol(name: &str) -> String {
 /// [`ext_thunk_required`], so a disagreement emits the wrong C declaration
 /// for a `tuple`-carrying method.
 ///
+/// Since #1467 the one name class this answers `true` for beyond that
+/// lexical verdict is the two PEP 562 module hooks, `__getattr__` and
+/// `__dir__`: the driver admits them through `is_module_hook`, not through
+/// `classify_export_name`, so the parity test compares this function with
+/// `classify_export_name(name).is_some() || is_module_hook(name)`.
+///
 /// The public-name test is D-038's predicate, spelled out rather than
 /// delegated to `pycc_hir::is_public_name` because this crate deliberately
 /// does not depend on `pycc_hir` -- it sees only `pycc_mir`'s re-export of
@@ -749,6 +755,14 @@ pub fn ext_thunk_symbol(name: &str) -> String {
 pub fn is_ext_exportable_name(name: &str) -> bool {
     if name.starts_with("0gen_") {
         return false;
+    }
+    // #1467: the two PEP 562 module hooks, which the driver publishes from
+    // the entry module although D-038's predicate refuses every dunder. The
+    // driver admits only the entry module's own `def`, which this lexical
+    // mirror cannot see, so a helper module's hook gets a dead thunk -- the
+    // safe superset direction described above.
+    if name == "__getattr__" || name == "__dir__" {
+        return true;
     }
     let mut segments = name.split('.');
     // `str::split` always yields at least one segment, so the fallback is

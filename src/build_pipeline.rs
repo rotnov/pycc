@@ -342,17 +342,30 @@ fn plan_ext(
         eprintln!("error: {}", e.message());
         ExitCode::from(2)
     })?;
-    let mut exports = ext_build::collect_exports(typed_hir).map_err(|gaps| {
-        // Span-less `C0003`s (a lowered `HirItem::Function` carries no
-        // source range), so the empty source text below is never read:
-        // `pycc_diag::render_human` renders a span-less diagnostic as
-        // exactly `error[C0003]: <message>`.
+    // #1461 and #1467 both read the entry module's own source: keyword
+    // binding needs the `def`s HIR no longer spells, and the PEP 562 hooks
+    // to publish are the entry module's own (see `ext_build::module_hooks`).
+    let entry_source = std::fs::read_to_string(source_path).unwrap_or_default();
+    // A located `C0001`, so it is rendered against the real source text.
+    let hooks = ext_build::EntryHooks::from_source(&entry_source).map_err(|refusals| {
         ExitCode::from(report_build_failure(frontend::FrontendFailure::compile(
             &source_path.display().to_string(),
-            "",
-            gaps,
+            &entry_source,
+            refusals,
         )))
     })?;
+    let mut exports =
+        ext_build::collect_exports_with_hooks(typed_hir, hooks.defined()).map_err(|gaps| {
+            // Span-less `C0003`s (a lowered `HirItem::Function` carries no
+            // source range), so the empty source text below is never read:
+            // `pycc_diag::render_human` renders a span-less diagnostic as
+            // exactly `error[C0003]: <message>`.
+            ExitCode::from(report_build_failure(frontend::FrontendFailure::compile(
+                &source_path.display().to_string(),
+                "",
+                gaps,
+            )))
+        })?;
     // Every function whose return type is a buffer except the shapes the
     // `--ext` boundary admits: Part 2b of #1142 (#1164) admitted a public
     // *module-level* export, and #1174 widened that to the whole export
@@ -391,9 +404,7 @@ fn plan_ext(
     // #1461: which exports a host call may name keywords for is read from
     // the entry source itself (see `ext_build::keywords`), and bound before
     // `collect_class_publications` copies the method exports.
-    let signatures = ext_build::SourceSignatures::from_source(
-        &std::fs::read_to_string(source_path).unwrap_or_default(),
-    );
+    let signatures = ext_build::SourceSignatures::from_source(&entry_source);
     ext_build::bind_keyword_names(typed_hir, &signatures, &mut exports);
     let publications = ext_build::collect_class_publications(typed_hir, &exports);
     let mut ctors = ext_build::collect_constructors(typed_hir, &publications);

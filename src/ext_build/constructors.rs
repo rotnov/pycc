@@ -164,7 +164,7 @@ pub(crate) fn class_publishable(class_def: &HirClassDef, class: &str) -> bool {
 }
 
 /// Whether `class`'s own shape admits instance exports **and** the host can
-/// actually obtain a receiver for them -- the predicate [`collect_exports`]
+/// actually obtain a receiver for them -- the predicate [`collect_exports_with_hooks`]
 /// applies to the bare method spelling, and the canonical statement of
 /// D-244 rule 1's #1145 receiver-reachability clause.
 ///

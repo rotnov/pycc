@@ -820,9 +820,17 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
         "0gen_f.scale.static",
         "Grid..static",
         ".static",
+        // #1467: the PEP 562 hooks, which the driver admits through
+        // `collect_exports_with_hooks` rather than `classify_export_name`.
+        "__getattr__",
+        "__dir__",
+        "__getattr__x",
+        "__getattribute__",
+        "_getattr",
+        "Grid.__getattr__",
     ] {
         assert_eq!(
-            classify_export_name(name).is_some(),
+            classify_export_name(name).is_some() || is_module_hook(name),
             pycc_codegen::is_ext_exportable_name(name),
             "predicates disagree on {name:?}"
         );

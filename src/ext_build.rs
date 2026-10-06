@@ -9,7 +9,7 @@
 //!   floor), [`ExtToolchain`];
 //! * the per-platform shared-object link argv, [`ExtLinkPlatform`] and
 //!   [`ext_link_args`];
-//! * the export set and its `C0003` capability gaps, [`collect_exports`];
+//! * the export set and its `C0003` capability gaps, [`collect_exports_with_hooks`];
 //! * the generated C companion to the fixed shim, [`generate_exports_inc`]
 //!   and [`SHIM_C`].
 //!
@@ -421,7 +421,9 @@ pub(crate) use export_name::*;
 pub(crate) use instance_copy::*;
 pub(crate) use keywords::{SourceSignatures, bind_ctor_keyword_names, bind_keyword_names};
 mod method_types;
+mod module_hooks;
 pub(crate) use method_types::*;
+pub(crate) use module_hooks::{EntryHooks, is_module_hook};
 mod publication;
 use publication::namespace_owner;
 pub(crate) use publication::{ExtPublishedClass, collect_class_publications};
