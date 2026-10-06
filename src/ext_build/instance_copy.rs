@@ -30,7 +30,8 @@ use super::publication::class_member_names;
 /// The exact C declaration of the generated kind lookup, which the shim's
 /// `pycc_ext_instance_copy` calls. The shim is defined below the point the
 /// companion is included at, so it needs no forward declaration; the shim
-/// test asserts the call against this one spelling.
+/// test pins the call text, and the C compiler checks it against this one
+/// spelling when the artifact builds.
 pub(crate) const CARRIER_CLASS_COPY_KINDS_DECL: &str = "static int \
      pycc_ext_carrier_class_copy_kinds(const unsigned char *cls, size_t len, \
      const char **kinds, size_t *nkinds, const char **refused)";

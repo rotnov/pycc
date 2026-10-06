@@ -3,7 +3,7 @@
 //!
 //! The instance crosses as a `PyccExtInstance` carrier of its run-time
 //! class (`pycc_ext_obj_pack_instance` in `src/ext/pycc_ext_module.c`): the
-//! class's published type when it has one, otherwise a method-less carrier
+//! class's published type when it has one, otherwise a carrier
 //! type named `<module>.<Class>`. Identity follows CPython while the
 //! carrier lives -- `self` handed out by a method of a host-constructed
 //! object is that object, and two crossings of one instance are `is`-equal.
@@ -294,7 +294,8 @@ fn the_carrier_deviations_from_cpython_are_pinned() {
 
 /// An embedded executable (D-248) passes an instance to a CPython call the
 /// same way: no class is published, so every instance crosses as the lazy
-/// method-less carrier type, named after `__main__` as CPython names it.
+/// carrier type (only the shared `__copy__`, #1455), named after
+/// `__main__` as CPython names it.
 const EMBEDDED: &str = "import builtins\n\n\n\
     class Q:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\n\n\
     q = Q(1)\n\
