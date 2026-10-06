@@ -808,18 +808,38 @@ twin. Four rules follow from that model:
 - **The scope is a module-level `def` and a method.** A method -- `__init__`,
   a regular method, a `@classmethod` or a `@staticmethod` -- may declare a
   default under these same rules (the method part of
-  [#1140](https://github.com/rotnov/pycc/issues/1140)), but no in-module call
-  fills it yet: a method or constructor call that omits a defaulted argument
-  is the ordinary `T0021` arity error, for the same reason a keyword argument
-  is `C0001` there (pycc has no method signature to bind against; Part 4 of
-  #884, [#1191](https://github.com/rotnov/pycc/issues/1191)). Its one consumer
-  today is the `ext` host boundary, where a host call may omit it
-  (`docs/RUNTIME.md`, the `ext` boundary's default-value paragraph). One rule
+  [#1140](https://github.com/rotnov/pycc/issues/1140)). An in-module call of
+  a **regular instance method** (`obj.m()`, `self.m()`) may omit its
+  defaulted trailing arguments (Part 1 of
+  [#1191](https://github.com/rotnov/pycc/issues/1191),
+  [#1438](https://github.com/rotnov/pycc/issues/1438)). Lowering cannot fill
+  that call, because the method it reaches depends on the receiver's type, so
+  `pycc_types` accepts it once the MRO walk has resolved the method, and
+  `pycc_mir` appends the same default nodes the method's `def` recorded, from
+  the class that declares the dispatched body (an override's own default, not
+  its base's). A PEP 695 generic class's specializations carry the same
+  defaults, so `Box[int](1).m()` is filled like `Box(1).m()`. The defaults
+  are checked as if written at the call site. A
+  short call that omits a required argument, or a call with too many, stays
+  `T0021`, worded "`m` expects from 1 to 2 argument(s), got 0" when the
+  method declares a default. Every other method call shape keeps the
+  ordinary `T0021` arity error for an omitted defaulted argument: a
+  constructor, a `@staticmethod` or `@classmethod` (called on the class or
+  on an instance), and `super().m()`. A keyword argument stays `C0001` at
+  every method call, because HIR refuses it before the receiver's class is
+  known (Part 4 of #884, the rest of #1191). The other consumer is the `ext`
+  host boundary, where a host call may omit a defaulted argument of any
+  method kind (`docs/RUNTIME.md`, the `ext` boundary's default-value
+  paragraph). One rule
   is wider there: `None` may default a parameter of the opaque object type
   (`Any` or `object` in an `ext` module, D-258), because the boundary hands
   that parameter the host's own `None` object exactly as a host passing
   `None` does; a module-level `def`'s default is spliced into a native call
-  instead, so `def f(a: Any = None)` stays `T0021`. A `Protocol` member keeps
+  instead, so `def f(a: Any = None)` stays `T0021`. For the same reason an
+  in-module method call that would fill such a `None`-at-object default is
+  `C0001` ("filling the `None` default of argument 2 of `m`, an `object`
+  parameter, at an in-module call is not supported yet"): pass an object
+  value for that argument explicitly. A `Protocol` member keeps
   the unchanged `C0001` "default parameter values are not supported yet". A
   `@dataclass` field default is its own deferred feature (above), and the
   receiver's own `self`/`cls` default keeps its own message. The binder is

@@ -44,6 +44,7 @@ use pycc_hir::{
 };
 
 mod comprehension;
+mod method_defaults;
 mod protocol_method;
 pub(crate) use protocol_method::specialize_protocol_method_call;
 
@@ -1703,6 +1704,9 @@ pub(crate) fn instantiate_generic_class_methods(
         // -- rather than `find`'s first match, which would specialize a
         // stale, shadowed definition.
         let mut mangled_methods: Vec<(String, String)> = Vec::new();
+        // Part 1 of #1191: (origin mangled, specialized mangled) for
+        // re-keying `method_defaults` below.
+        let mut method_renames: Vec<(String, String)> = Vec::new();
         for (method_name, original_mangled) in &class_def.methods {
             // The `rfind` filter already guarantees the item is a
             // `HirItem::Function`, so the destructuring cannot fail — the
@@ -1781,6 +1785,7 @@ pub(crate) fn instantiate_generic_class_methods(
                     return_ty: Ty::Instance(Box::new(mangled_class.clone())),
                 });
             }
+            method_renames.push((original_mangled.clone(), new_mangled.clone()));
             mangled_methods.push((method_name.clone(), new_mangled));
         }
 
@@ -2122,7 +2127,10 @@ pub(crate) fn instantiate_generic_class_methods(
             class_methods: mangled_class_methods,
             is_enum: false,
             implicit_object_init: false,
-            method_defaults: Vec::new(),
+            method_defaults: method_defaults::rekey_method_defaults(
+                &class_def.method_defaults,
+                &method_renames,
+            ),
             enum_members: Vec::new(),
             is_dataclass: class_def.is_dataclass,
             dataclass_fields: substituted_dataclass_fields,

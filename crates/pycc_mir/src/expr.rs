@@ -20,6 +20,7 @@ use std::collections::HashMap;
 mod foreign_static;
 mod instance_hash;
 mod receiver_dispatch;
+mod regular_method;
 mod sequence;
 pub(crate) mod set_ops;
 
@@ -1438,40 +1439,15 @@ pub(super) fn lower_expr(
                     ty,
                 };
             }
-            // #432: walk the MRO to find the method's mangled name.
-            let (owner, mangled) = class_def
-                .mro
-                .iter()
-                .find_map(|mro_class| {
-                    let mro_def = mro_class_def(mro_class, classes);
-                    mro_def
-                        .methods
-                        .iter()
-                        .find(|(name, _)| name == method)
-                        .map(|(_, mangled)| (mro_class, mangled.clone()))
-                })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "pycc_mir: internal error: method `{method}` not declared on class `{}` or \
-                     any base in its MRO -- pycc_types::check should have rejected this HIR \
-                     before it reached pycc_mir",
-                        class_def.name
-                    )
-                });
-            // #1337 (D-254): the receiver-exact copy when one exists.
-            let mangled = exact_callee(&class_def.name, owner, mangled, scopes, classes);
-            let ty = lookup(scopes, &format!("$fn:{mangled}"));
-            let mut call_args = Vec::with_capacity(args.len() + 1);
-            call_args.push(base);
-            call_args.extend(
-                args.iter()
-                    .map(|a| lower_expr(a, scopes, classes, current_class)),
-            );
-            MirExpr::Call {
-                callee: mangled,
-                args: call_args,
-                ty,
-            }
+            regular_method::lower_regular_method_call(
+                base,
+                class_def,
+                method,
+                args,
+                scopes,
+                classes,
+                current_class,
+            )
         }
         // Part 2a of #1371: `table[k](args)`. `pycc_types` admits the node
         // only when the callee is a CPython object, so it is the existing

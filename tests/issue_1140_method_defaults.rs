@@ -6,7 +6,9 @@
 //!
 //! The native tests pin what an in-module program sees: the defaulted
 //! method compiles and runs when every argument is passed, and a short
-//! in-module call keeps its arity `T0021` (Part 4 of #884, #1191). The
+//! in-module constructor call keeps its arity `T0021` (Part 4 of #884,
+//! #1191). A short regular-method call is filled from its defaults since
+//! Part 1 of #1191 (#1438, `tests/issue_1438_method_call_defaults.rs`). The
 //! hosted tests are `#[ignore]`d and contribute no line coverage; the
 //! Tier-1 `native-build-test` leg runs them with
 //! `cargo test --workspace -- --include-ignored`, comparing the extension
@@ -72,10 +74,16 @@ fn a_defaulted_method_runs_natively_when_every_argument_is_passed() {
 }
 
 #[test]
-fn a_short_in_module_method_or_constructor_call_keeps_its_arity_error() {
+fn a_short_constructor_call_keeps_its_arity_error_and_a_method_call_reports_the_range() {
     for (tail, message) in [
         ("S()\n", "`S` expects 2 argument(s), got 0"),
-        ("S(1, 'a').feed(1)\n", "`feed` expects 2 argument(s), got 1"),
+        ("S(1)\n", "`S` expects 2 argument(s), got 1"),
+        // Part 1 of #1191 fills omitted method defaults, not a missing
+        // required argument.
+        (
+            "S(1, 'a').feed()\n",
+            "`feed` expects from 1 to 2 argument(s), got 0",
+        ),
     ] {
         let output = pycc_on("check", "1140_native_short", &format!("{CLASS}{tail}"));
         let rendered = stdout_of(&output);

@@ -19,6 +19,7 @@ mod attr_set;
 mod binding;
 pub(crate) mod foreign_static;
 mod method_call;
+mod method_defaults;
 mod receiver_class_call;
 mod static_call;
 mod super_call;

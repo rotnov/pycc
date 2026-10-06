@@ -17,6 +17,11 @@
 //! in `class/super_call.rs`, and attribute access plus protocol conformance
 //! in `class.rs` itself.
 //!
+//! Part 1 of #1191 (#1438) routes the regular-method arm's argument check
+//! through `class/method_defaults.rs`, so a call may omit trailing
+//! parameters the dispatched method declares defaults for. The protocol arm
+//! keeps the plain arity check.
+//!
 //! #1174 added the one check here that is not part of the original move: a
 //! buffer-returning method's return value may not be handed to an
 //! intra-artifact caller, refused through
@@ -125,7 +130,16 @@ pub(crate) fn resolve_method_call(
             // exit has to refuse handing its return value to an
             // intra-artifact caller.
             crate::buffer::refuse_buffer_returning_method(class_name, method, return_ty)?;
-            check_call_args(method, arg_tys, method_param_tys, Some(env))?;
+            // Part 1 of #1191 (#1438): a call may omit trailing parameters
+            // the dispatched method declares defaults for.
+            super::method_defaults::check_method_call_args(
+                env,
+                mro_def,
+                mangled,
+                method,
+                arg_tys,
+                method_param_tys,
+            )?;
             return Ok(return_ty.clone());
         }
     }
