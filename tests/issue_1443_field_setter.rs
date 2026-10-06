@@ -16,11 +16,13 @@
 //! very same script against the source imported as plain Python, so CPython
 //! is the oracle for every line of [`DRIVER`], including the stored
 //! object's reference-count delta, a subclass instance in a base-typed
-//! slot, a `bool` in an `int` slot, a store of a value a compiled method
-//! then promotes past the inline range, `del` and re-store, and a copy's
+//! slot, a `bool` in an `int` slot read back by the getter and by compiled
+//! arithmetic, a host-stored `str` a compiled method then replaces, a store
+//! of a value a compiled method then promotes past the inline range, `del` and re-store, and a copy's
 //! independent slots. [`EXT_ONLY_DRIVER`] pins the documented differences
 //! (D-244's #1443 amendment): a value outside the parameter row is refused
-//! with that row's `TypeError` or `OverflowError`; a name with no
+//! with that row's `TypeError` or `OverflowError` (a `float` slot refuses an
+//! `int`, as a `float` parameter does); a name with no
 //! descriptor has nowhere to go; a carrier whose `__init__` never ran
 //! cannot be stored into; every slot of a class that defines a compiled
 //! `__setattr__` or `__delattr__` stays read-only (#1459); and the object
@@ -124,7 +126,8 @@ class Conf:
         return self.n + 100
 
     def restr(self) -> str:
-        return self.s + "!"
+        self.s = self.s + "!"
+        return self.s
 
     def grow(self) -> None:
         self.n = self.n * self.n
@@ -160,9 +163,9 @@ t = m.Twig(7, 8)
 c.leaf = t
 print(c.leaf is t, c.leaf_k(), type(c.leaf).__name__)
 c.n = True
-print(c.plus())
+print(c.n, c.plus())
 c.s = "q" * 3
-print(c.restr(), c.s)
+print(c.restr(), c.s, c.s_c())
 c.n = 2**31
 c.grow()
 print(c.text())
@@ -197,8 +200,8 @@ print(c.n, c.s, y.n, y.s)
 const DRIVER_OUT: &str = "5 5 2.5 2.5 False False xy xy\n\
     1 True True\n\
     True 7 Twig\n\
-    101\n\
-    qqq! qqq\n\
+    True 101\n\
+    qqq! qqq! qqq!\n\
     4611686018427387904\n\
     1 1\n\
     False\n\
@@ -224,6 +227,7 @@ c = m.Conf(3, 1.5, True, "ab", object(), m.Leaf(1))
 attempt(store(c, 'n', 'x'))
 attempt(store(c, 'n', 2**70))
 attempt(store(c, 'f', 'x'))
+attempt(store(c, 'f', 1))
 attempt(store(c, 'b', 1))
 attempt(store(c, 's', 3))
 attempt(store(c, 'leaf', object()))
@@ -250,6 +254,7 @@ print(sys.getrefcount(o) - before)
 const EXT_ONLY_OUT: &str = "TypeError Conf.n() argument 1: 'str' object cannot be interpreted as an integer\n\
     OverflowError Conf.n() argument 1: int is outside the inline-integer range [-2**62, 2**62-1] this pycc version's `ext` boundary supports (see #1040)\n\
     TypeError Conf.f() argument 1: 'str' object cannot be interpreted as a float\n\
+    TypeError Conf.f() argument 1: 'int' object cannot be interpreted as a float\n\
     TypeError Conf.b() argument 1: 'int' object cannot be interpreted as a bool\n\
     TypeError Conf.s() argument 1: 'int' object cannot be interpreted as a str\n\
     TypeError Conf.leaf() argument 1 must be pycc_field_set_mod.Leaf, not object\n\
@@ -278,7 +283,8 @@ const EXT_ONLY_CPYTHON_OUT: &str = "ok\n\
     ok\n\
     ok\n\
     ok\n\
-    1180591620717411303424 x 1 3 1\n\
+    ok\n\
+    1180591620717411303424 1 1 3 1\n\
     ok\n\
     ok\n\
     AttributeError 'Guard' object has no attribute 'n'\n\
