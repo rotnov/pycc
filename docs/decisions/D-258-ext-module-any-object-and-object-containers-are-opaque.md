@@ -173,3 +173,4 @@ status: accepted
     spellings: `list[int]` is native and `list[Any]` is a CPython list. A diagnostic that mixes them
     (for example a native `list[int]` passed to a `list` parameter) must name both, so the reader can see
     which one was meant.
+- Amendment (2026-10-06, [#1445](https://github.com/rotnov/pycc/issues/1445)): the Part 2d amendment's source (b) is unchanged. The #1207 subject's lines 94-101 still reported `T0003` because that source had no evidence to read: the subject binds `action, arg` inside a `try`/`except KeyError` (lines 76-80), and the shared flat binder that source (b) reads had no `try` arm, so `size = len(rule.expansion)` and `s = value_stack[-size:]` never typed. D-245's #1445 amendment records the binder change. With it, `s = []` there becomes the fresh CPython `list` source (b) already specifies.
