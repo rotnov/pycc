@@ -354,7 +354,8 @@ fn a_tuple_of_something_uncarriable_is_a_capability_gap_naming_the_tuple() {
         message.contains(
             "a parameter must be `int`, `float`, `bool`, `str`, `memoryview` (or its \
              other spellings `ndarray` and `NDArray`), a CPython object (`Any`, `object`, \
-             a foreign class, or a container of objects) or a `tuple` of \
+             a foreign class, or a container of objects), an instance of a class compiled \
+             in this module (not an enum or an exception class), or a `tuple` of \
              `int`/`float`/`bool`, and a \
              return type must be one of those, or `None`"
         ),
@@ -818,7 +819,7 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
 
 /// The module every constructibility test below varies one field of: a
 /// public class with a public instance method and a carriable `__init__`.
-fn constructible_module(class: &str) -> HirModule {
+pub(super) fn constructible_module(class: &str) -> HirModule {
     let mut hir = module_with_classes(
         vec![
             init_func(class, &[("w", Ty::Int), ("h", Ty::Int)], Ty::None),
@@ -969,12 +970,16 @@ fn every_constructibility_condition_removes_the_class_and_its_instance_methods()
     returning_init.items[0] = init_func("Grid", &[("w", Ty::Int), ("h", Ty::Int)], Ty::Int);
     rows.push(("__init__ return type", returning_init));
 
-    // `Ty::Instance` has no `boundary_carrier` arm at all, which is exactly
-    // the case a hand-rolled parameter predicate would miss.
+    // Since Part 1 of #1447 (#1449) a `Ty::Instance` is carried exactly when
+    // it names a regular class of this module, so the parameter that keeps a
+    // class non-constructible is an instance of a class the module's table
+    // does not hold -- the case a predicate on the type alone would miss.
+    // The admitted counterpart is
+    // `an_init_taking_a_same_module_instance_makes_the_class_constructible`.
     let mut instance_param = constructible_module("Grid");
     instance_param.items[0] = init_func(
         "Grid",
-        &[("other", Ty::Instance(Box::new("Grid".to_string())))],
+        &[("other", Ty::Instance(Box::new("Elsewhere".to_string())))],
         Ty::None,
     );
     rows.push(("uncarriable __init__ parameter", instance_param));

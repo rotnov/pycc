@@ -303,7 +303,9 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
     }
     for (index, slot) in slots.iter().enumerate() {
         match slot {
-            BoundaryCarrier::Scalar(..) => call_args.push(format!("a{index}")),
+            BoundaryCarrier::Scalar(..) | BoundaryCarrier::Instance(_) => {
+                call_args.push(format!("a{index}"))
+            }
             BoundaryCarrier::Tuple(elements) => {
                 call_args.extend((0..elements.len()).map(|element| format!("a{index}_{element}")))
             }
@@ -432,6 +434,13 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
             }
             out.push_str("    return pycc_ext_pack_memoryview(result);\n}\n\n");
         }
+        // Part 1 of #1447 (#1449): its own arm for the reason the buffer
+        // arm above gives -- `into_scalar` answers `None` for an instance so
+        // that `tuple[C]` stays refused, and the generic arm below would
+        // panic. The packer reuses #1435's carrier egress, so a returned
+        // instance with a live carrier (`self`, or an argument the host
+        // still holds) is that very object.
+        Ty::Instance(_) => out.push_str("    return pycc_ext_pack_instance(result);\n}\n\n"),
         ty => {
             let (_, helper) = boundary_carrier(ty)
                 .and_then(BoundaryCarrier::into_scalar)
@@ -459,6 +468,9 @@ pub(crate) fn arg_slot_locals(slots: &[BoundaryCarrier]) -> String {
             BoundaryCarrier::Scalar(c_type, _) => {
                 out.push_str(&format!("    {c_type} a{index};\n"));
             }
+            // Part 1 of #1447: the compiled instance pointer the carrier
+            // holds, which is what `ty_to_basic_type` gives `Ty::Instance`.
+            BoundaryCarrier::Instance(_) => out.push_str(&format!("    void *a{index};\n")),
             BoundaryCarrier::Tuple(elements) => {
                 for (element, (c_type, _)) in elements.iter().enumerate() {
                     out.push_str(&format!("    {c_type} a{index}_{element};\n"));
@@ -523,6 +535,14 @@ pub(crate) fn unpack_args(
             BoundaryCarrier::Scalar(_, helper) => out.push_str(&format!(
                 "    if (pycc_ext_unpack_{helper}({arg}, \"{source_name}\", {index}, &a{index}) \
                  != 0) {{\n{cleanup}{fail}    }}\n"
+            )),
+            // Part 1 of #1447 (#1449): the scalar call shape plus the class
+            // the argument must be an instance of, which the shim checks
+            // against the instance's run-time MRO. A refusal leaves nothing
+            // owed, so only the earlier slots' cleanup runs.
+            BoundaryCarrier::Instance(class) => out.push_str(&format!(
+                "    if (pycc_ext_unpack_instance({arg}, \"{source_name}\", {index}, \"{class}\", \
+                 &a{index}) != 0) {{\n{cleanup}{fail}    }}\n"
             )),
             BoundaryCarrier::Tuple(elements) => {
                 let elements_len = elements.len();
@@ -715,6 +735,7 @@ pub(crate) fn c_param_list(
     for slot in slots {
         match slot {
             BoundaryCarrier::Scalar(c_type, _) => types.push((*c_type).to_string()),
+            BoundaryCarrier::Instance(_) => types.push("void *".to_string()),
             BoundaryCarrier::Tuple(elements) => {
                 types.extend(elements.iter().map(|(c_type, _)| (*c_type).to_string()));
             }

@@ -73,6 +73,12 @@ fn refusal_arms(carrier: &BoundaryCarrier, name: &str, index: usize) -> Vec<Stri
             "if (pycc_ext_unpack_memoryview(args[{index}], \"{name}\", {index}, 0, &b{index}) \
              != 0) {{"
         )],
+        // Part 1 of #1447 (#1449): one arm, a scalar's shape plus the class
+        // the shim checks the instance's run-time MRO against.
+        BoundaryCarrier::Instance(class) => vec![format!(
+            "if (pycc_ext_unpack_instance(args[{index}], \"{name}\", {index}, \"{class}\", \
+             &a{index}) != 0) {{"
+        )],
     }
 }
 
@@ -88,7 +94,7 @@ fn refusal_arms(carrier: &BoundaryCarrier, name: &str, index: usize) -> Vec<Stri
 fn call_site(name: &str, params: &[(&str, Ty)], return_ty: &Ty) -> String {
     let types: Vec<Ty> = params.iter().map(|(_, ty)| ty.clone()).collect();
     let first = match boundary_carrier(&types[0]).expect("an admitted argument type") {
-        BoundaryCarrier::Scalar(..) => "a0".to_string(),
+        BoundaryCarrier::Scalar(..) | BoundaryCarrier::Instance(_) => "a0".to_string(),
         BoundaryCarrier::Tuple(_) => "a0_0".to_string(),
         BoundaryCarrier::Buffer { .. } => "&a0".to_string(),
     };
@@ -118,6 +124,7 @@ fn the_shim_declares_exactly_the_unpack_helpers_the_boundary_refuses_through() {
         "bool_at",
         "float",
         "float_at",
+        "instance",
         "int",
         "int_at",
         "memoryview",
@@ -158,10 +165,17 @@ fn every_admitted_argument_type_refuses_before_the_call_and_after_the_arity_chec
         // whose helper admits every object but still sits behind the same
         // `!= 0` arm, so the wrapper's shape stays uniform.
         ("take_object", Ty::Object),
+        // Part 1 of #1447 (#1449): a regular class compiled in this module,
+        // which the module below defines -- the admission is narrowed by
+        // the module's class table, not by the type alone.
+        ("take_instance", Ty::Instance(Box::new("Conf".to_string()))),
     ];
     for (name, ty) in rows {
         let params = [("a", ty.clone()), ("b", ty.clone())];
-        let hir = module(vec![func(name, &params, Ty::Int)]);
+        let hir = module_with_classes(
+            vec![func(name, &params, Ty::Int)],
+            vec![("Conf".to_string(), class_def("Conf", None))],
+        );
         let exports = collect_exports(&hir).expect("every row is a carriable signature");
         let carrier = boundary_carrier(&ty).expect("every row is an admitted argument type");
         let inc = generate_exports_inc("m", &exports, &[], &[], &[], &[]);
@@ -223,7 +237,6 @@ fn expected_to_carry(ty: &Ty) -> bool {
         | Ty::Dict(_)
         | Ty::Set(_)
         | Ty::FrozenSet(_)
-        | Ty::Instance(_)
         | Ty::Protocol(_)
         | Ty::Optional(_) => false,
         // Part 1 of #1027: admitted at a parameter position, and refused at
@@ -234,6 +247,12 @@ fn expected_to_carry(ty: &Ty) -> bool {
         // D-258 rule 5 (#1397), replacing Part 1 of #1026's refusal: the
         // opaque CPython object crosses as the `PyObject *` itself.
         Ty::Object => true,
+        // Part 1 of #1447 (#1449): every compiled-class instance has a
+        // carrier shape. Which class names a module may actually carry is
+        // `unsupported_boundary_ty`'s narrowing against the module's class
+        // table, which this type-only predicate deliberately does not
+        // model -- see `an_instance_is_admitted_only_for_a_regular_class_of_the_module`.
+        Ty::Instance(_) => true,
     }
 }
 
@@ -262,6 +281,8 @@ fn no_type_outside_the_admitted_set_is_carried_at_a_parameter_position() {
         Ty::Tuple(Box::new(vec![Ty::MemoryView])),
         // Nor for D-258's object (#1397): carried at a top-level slot only.
         Ty::Tuple(Box::new(vec![Ty::Object])),
+        // Nor for a compiled-class instance (Part 1 of #1447).
+        Ty::Tuple(Box::new(vec![Ty::Instance(name())])),
         // The two element shapes the boundary refuses: neither has an
         // `_at` helper, and both are unreachable from source today only
         // because `T0039` refuses the annotation first.
