@@ -678,7 +678,10 @@ would turn that into a regression. And no descriptor has a setter, so a host
 store such as `obj.n = 3` raises CPython's `AttributeError: attribute 'n' of
 'mod.Class' objects is not writable` where CPython would store it
 ([#1443](https://github.com/rotnov/pycc/issues/1443) tracks host-side
-stores).
+stores). The table is a constructible class's only: a non-constructible
+published type and an on-demand carrier type (#1435) wrap an instance as well,
+but carry no descriptor yet, so a field read through one raises
+`AttributeError` ([#1448](https://github.com/rotnov/pycc/issues/1448)).
 
 The table below is the canonical statement of what the `ext` boundary carries
 today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,

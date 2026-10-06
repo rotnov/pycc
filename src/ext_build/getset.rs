@@ -26,10 +26,12 @@
 //! one field cannot be observed would turn an additive capability into a
 //! regression for every program that has such a field today.
 //!
-//! **Constructible classes only.** The descriptors are part of
-//! [`super::ExtCtor`] because only a constructible class's carrier has an
-//! `inst` field to read; a non-constructible type object has
-//! `basicsize == 0` and no instance at all.
+//! **Constructible classes only, for now.** The descriptors are part of
+//! [`super::ExtCtor`], so only a constructible class's type object carries
+//! them. Since #1435 every published type, and every on-demand carrier type
+//! `pycc_ext_carrier_type` creates for a class that publishes nothing, also
+//! wraps a live `inst`; those carry no table yet (#1448), so a field read
+//! through one still raises `AttributeError`.
 
 use pycc_hir::{HirClassDef, HirItem, HirModule, Ty, flat_attr_layout};
 
