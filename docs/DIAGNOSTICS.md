@@ -161,10 +161,26 @@ as well (a recorded fail-closed residual, closed by
 [#768](https://github.com/rotnov/pycc/issues/768)). An alias on a project
 module keeps the plain-`import` C0001 (``import of module `geometry` is not
 supported yet``, [#964](https://github.com/rotnov/pycc/issues/964)), as does
-a dotted one. Since [#1291](https://github.com/rotnov/pycc/issues/1291) an
+a dotted name under a project module or package (`import geometry.sub`). Since [#1291](https://github.com/rotnov/pycc/issues/1291) an
 alias on an undotted module that is neither a project module nor a
 `pycc_std` registration (`import numpy as np`) is a foreign import instead,
-binding the CPython module object. An alias pycc resolves by its spelling
+binding the CPython module object. Since Part 3 of
+[#1138](https://github.com/rotnov/pycc/issues/1138)
+([#1381](https://github.com/rotnov/pycc/issues/1381)) a dotted module whose
+root is neither a project module nor a project package is one too, plain or
+aliased: `import xml.dom` binds the root `xml`, and `import xml.dom as d`
+binds the leaf `xml.dom` to `d`. Two spellings of it keep a C0001. A leaf
+bound under its own root's name (`import xml.dom as xml`) is refused with
+``binding the CPython module `xml.dom` to `xml`, the name of its own
+top-level package, is not supported yet``, because pycc tells the root
+binding from the leaf binding by whether the bound name is the root. An
+unaliased dotted import whose root is a name pycc resolves by its spelling
+(`import typing.sub`, which would bind `typing`) is refused with the
+spelling C0001 below, naming the root as the bound name. Two dotted imports
+that bind the same module to one name (`import os` and `import os.path`, or
+`import xml.dom` and `import xml.sax`) are the same binding, not a shadow;
+two that bind different modules to one name (`import xml.dom as x` and
+`import xml.sax as x`) keep the shadowing C0001. An alias pycc resolves by its spelling
 -- any Python builtin (`range`, `super`, `property`, `ValueError`, ...), a
 `pycc_std` module name such as `typing`, or a marker pycc recognises without
 an import (`TYPE_CHECKING`; the base-class markers `Enum`, `StrEnum`,

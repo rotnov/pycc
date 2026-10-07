@@ -462,6 +462,15 @@ pub enum ImportBinding {
     /// root gates never see such a binding, because the flag requires
     /// `--ext`, which skips all three.
     ///
+    /// A plain dotted import (#1381, Part 3 of #1138) keeps the whole
+    /// dotted name in `module_path` with `from` `None`. Unaliased, `import
+    /// a.b` imports `a.b` and binds the *root* `a`, so `local_name` is `a`;
+    /// aliased, `import a.b as c` binds the *leaf* `a.b` to `c`. Which of the
+    /// two a binding is follows from these fields alone --
+    /// [`foreign_binds_root`] -- because `pycc_hir` refuses the one spelling
+    /// they cannot tell apart, `import a.b as a`. Both forms are fetched by
+    /// `pycc_ext_obj_import_dotted`.
+    ///
     /// `site` says where the import runs; see [`ForeignImportSite`].
     ///
     /// `span` is the `import` statement's own source range. Every other
@@ -563,10 +572,48 @@ pub fn foreign_import_statement(module_path: &str, from: Option<&FromImport>) ->
     }
 }
 
+/// Whether an [`ImportBinding::Foreign`] with these fields is the root
+/// binding of an unaliased plain dotted import (#1381): `import a.b`, which
+/// imports `a.b` but binds the root module `a` to `local_name` `a`. Every
+/// other plain import binds the module `module_path` names -- `import a`,
+/// and the leaf of an aliased `import a.b as c` -- and a from-import binds
+/// an attribute.
+///
+/// The answer is exact only because two invariants hold. `pycc_hir`
+/// refuses `import a.b as a` (`import::lower_import_alias`), the one
+/// spelling whose leaf binding would read as a root binding here; and no
+/// pass renames a foreign binding's `local_name` (`program::link` and the
+/// `pycc_types` position remaps rebuild it field for field). A pass that
+/// starts renaming foreign locals must carry the root/leaf distinction
+/// explicitly instead.
+pub fn foreign_binds_root(local_name: &str, module_path: &str, from: Option<&FromImport>) -> bool {
+    from.is_none()
+        && module_path
+            .split_once('.')
+            .is_some_and(|(root, _)| root == local_name)
+}
+
+/// The module a plain foreign import binds (#1381): the root `a` for the
+/// root binding of `import a.b` ([`foreign_binds_root`]), `module_path`
+/// otherwise. This, not `module_path`, is the bound object's identity:
+/// `import os` and `import os.path` both bind the module `os`.
+pub fn foreign_bound_module<'a>(
+    local_name: &str,
+    module_path: &'a str,
+    from: Option<&FromImport>,
+) -> &'a str {
+    match module_path.split_once('.') {
+        Some((root, _)) if foreign_binds_root(local_name, module_path, from) => root,
+        _ => module_path,
+    }
+}
+
 /// What a foreign binding binds, as diagnostics name it: `the CPython module
 /// `numpy`` for `import numpy`, `the CPython object `itertools.product``
 /// for `from itertools import product` (#1278), `the CPython object
-/// `.sib`` for a relative `from . import sib` (#1366).
+/// `.sib`` for a relative `from . import sib` (#1366). Callers pass the
+/// bound module ([`foreign_bound_module`]), so `import a.b` names `a`
+/// (#1381).
 pub fn foreign_bound_object(module_path: &str, from: Option<&FromImport>) -> String {
     match from {
         None => format!("the CPython module `{module_path}`"),

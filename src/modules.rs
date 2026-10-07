@@ -97,10 +97,9 @@ enum Resolution {
     /// The import cannot be satisfied, with the exact diagnostic to report.
     NotFound { code: &'static str, message: String },
     /// Not a project import after all (an absolute module name that
-    /// resolves nowhere on disk and is not [`Resolution::Foreign`]: a plain
-    /// dotted `import X.Y`, or a dotted name under a project module or
-    /// package): left unanswered so `pycc_hir` reports it exactly as a
-    /// single-file compilation would.
+    /// resolves nowhere on disk and is not [`Resolution::Foreign`]: a
+    /// dotted name under a project module or package): left unanswered so
+    /// `pycc_hir` reports it exactly as a single-file compilation would.
     Unanswered,
     /// A bare `import X` -- or one name `X` of `import X, Y` (#1280), or
     /// `import X as Y` (#1291), or the module of `from X import a, b`
@@ -108,7 +107,8 @@ enum Resolution {
     /// (#1383) -- whose single-segment absolute root is neither a
     /// project module nor a `pycc_std` one (Part 1 of #1026), or the dotted
     /// module of `from X.Y import a` whose root `X` is neither a project
-    /// module nor a project package (Part 1 of #1138): the name is
+    /// module nor a project package (Part 1 of #1138), or a plain dotted
+    /// `import X.Y` / `import X.Y as Z` under such a root (#1381): the name is
     /// taken to be a CPython module the produced extension imports at
     /// module-exec time, and `pycc_hir` binds it, or each imported name of
     /// it, as an opaque object (`ImportBinding::Foreign`). Whether that module actually exists is
@@ -641,21 +641,19 @@ impl Loader {
             // Part 1 of #1138: the from form's module may be dotted
             // (`from X.Y import a`) when its root `X` is neither a project
             // package (the probe missed at the first segment) nor a project
-            // module (`X.py` beside the root). A dotted name under a project
-            // root keeps the `C0001`: that root is compiled into the
-            // artifact, so a runtime lookup of `X.Y` in the host would name a
-            // different `X` than the one pycc compiled. A non-package
-            // `X/` directory that shadows a CPython root (`json/` without an
-            // `__init__.py`) is walked into, and keeps the `C0001` too --
-            // conservative, as for the undotted form's namespace-package
-            // refusal. The plain `import X.Y` (empty `names`) keeps its
-            // `C0001` as well (#1381): it binds `X` while importing `X.Y`,
-            // which no later pass models yet.
+            // module (`X.py` beside the root). So may a plain `import X.Y`
+            // or `import X.Y as Z` (empty `names`, #1381), at top level or
+            // nested, under the same two conditions; `pycc_hir` binds the
+            // root `X` for the first and the leaf `X.Y` for the second. A
+            // dotted name under a project root keeps the `C0001`: that root
+            // is compiled into the artifact, so a runtime lookup of `X.Y` in
+            // the host would name a different `X` than the one pycc
+            // compiled. A non-package `X/` directory that shadows a CPython
+            // root (`json/` without an `__init__.py`) is walked into, and
+            // keeps the `C0001` too -- conservative, as for the undotted
+            // form's namespace-package refusal.
             let root = module.split('.').next().unwrap_or_default();
-            if !request.names.is_empty()
-                && position == 0
-                && !base.path.join(format!("{root}.py")).is_file()
-            {
+            if position == 0 && !base.path.join(format!("{root}.py")).is_file() {
                 return Resolution::Foreign;
             }
             return Resolution::Unanswered;

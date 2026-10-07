@@ -129,6 +129,17 @@ pub const EXT_OBJ_IMPORT_SYMBOL: &str = "pycc_ext_obj_import";
 /// `EXT_OBJ_IMPORT_SYMBOL` is.
 pub const EXT_OBJ_IMPORT_FROM_SYMBOL: &str = "pycc_ext_obj_import_from";
 
+/// The fixed C shim's plain dotted-import helper (#1381, Part 3 of #1138):
+/// `PyObject *pycc_ext_obj_import_dotted(const char *name, long long
+/// bind_root)` runs CPython's `IMPORT_NAME` of the dotted `name` with no
+/// fromlist and returns a *new* reference to the root package when
+/// `bind_root` is non-zero (`import a.b` binds `a`), or else to the leaf it
+/// reaches with one `IMPORT_FROM` per remaining segment (`import a.b as c`
+/// binds `a.b`), or `NULL` with the CPython exception already set. An
+/// undotted `import a` keeps [`EXT_OBJ_IMPORT_SYMBOL`]. Spelled once here
+/// for exactly the reason `EXT_OBJ_IMPORT_SYMBOL` is.
+pub const EXT_OBJ_IMPORT_DOTTED_SYMBOL: &str = "pycc_ext_obj_import_dotted";
+
 /// The fixed C shim's failed-import bridge (#1293, Part 3 of #1282): called
 /// on the `NULL` edge of a foreign import nested in a module-level
 /// `if`/`try` block, it returns `1` after translating CPython's pending

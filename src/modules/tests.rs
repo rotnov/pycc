@@ -300,28 +300,64 @@ fn a_bare_import_of_a_real_project_module_is_recognized_but_unsupported() {
     );
 }
 
-/// A plain dotted `import no.where` found nowhere is left unanswered, so
-/// `pycc_hir` keeps the single-file `C0001` (#1381, Part 3 of #1138): only
-/// the from form of a dotted module is a foreign import (the next tests).
+/// #1381 (Part 3 of #1138): a plain dotted import whose root is neither a
+/// project package nor a project module is answered as a CPython module, at
+/// top level and nested in a module-level `try`. Unaliased, it binds the
+/// root; aliased, the leaf.
 #[test]
-fn a_plain_dotted_import_that_resolves_nowhere_keeps_the_single_file_diagnostic() {
+fn a_plain_dotted_import_that_resolves_nowhere_is_a_foreign_import() {
     let scratch = ScratchDir::new("modules_tests").expect("scratch");
     let entry = write(
         &scratch,
         "main.py",
         "import no.where
+import no.where.deep as deep
+try:
+    import other.place
+except ImportError:
+    pass
 
 
 def main() -> None:
     print(1)
 ",
     );
-    let (_, code, message) = first_diagnostic(&entry);
-    assert_eq!(code, "C0001");
-    assert!(
-        message.contains("import of module `no.where` is not supported yet"),
-        "unexpected message: {message}"
+    let program =
+        load(&entry, None).unwrap_or_else(|failure| panic!("must load: {}", describe(&failure)));
+    assert_eq!(program.modules.len(), 1, "nothing but the entry loads");
+    assert_eq!(
+        entry_foreign_plain_imports(&program),
+        vec![
+            ("no".to_string(), "no.where".to_string()),
+            ("deep".to_string(), "no.where.deep".to_string()),
+            ("other".to_string(), "other.place".to_string()),
+        ]
     );
+}
+
+/// #1381: a plain dotted import under a project module or a project package
+/// keeps the single-file `C0001`, like the from form: the root is compiled
+/// into the artifact, so a host lookup would name a different module.
+#[test]
+fn a_plain_dotted_import_under_a_project_root_keeps_the_single_file_diagnostic() {
+    for (fixture, import) in [
+        ("helper.py", "helper.sub"),
+        ("pkg/__init__.py", "pkg.missing"),
+    ] {
+        let scratch = ScratchDir::new("modules_tests").expect("scratch");
+        write(&scratch, fixture, "x = 1\n");
+        let entry = write(
+            &scratch,
+            "main.py",
+            &format!("import {import}\n\n\ndef main() -> None:\n    print(1)\n"),
+        );
+        let (_, code, message) = first_diagnostic(&entry);
+        assert_eq!(code, "C0001", "{import}");
+        assert!(
+            message.contains(&format!("import of module `{import}` is not supported yet")),
+            "unexpected message: {message}"
+        );
+    }
 }
 
 /// Part 1 of #1138: a dotted module whose root is neither a project package
@@ -823,6 +859,29 @@ fn load_foreign(entry: &Path) -> Result<LoadedProgram, FrontendFailure> {
 
 /// The `(module_path, name, level)` of every foreign from-import binding of
 /// the loaded program's entry module.
+/// `(local_name, module_path)` of every plain foreign import of the entry
+/// module, in source order (#1381).
+fn entry_foreign_plain_imports(program: &LoadedProgram) -> Vec<(String, String)> {
+    program
+        .modules
+        .last()
+        .expect("the entry is loaded last")
+        .module
+        .hir
+        .imports
+        .iter()
+        .filter_map(|binding| match binding {
+            pycc_hir::ImportBinding::Foreign {
+                local_name,
+                module_path,
+                from: None,
+                ..
+            } => Some((local_name.clone(), module_path.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
 fn entry_foreign_from_imports(program: &LoadedProgram) -> Vec<(String, String, u32)> {
     program
         .modules

@@ -1332,6 +1332,45 @@ done:
 }
 
 /*
+ * One CPython `IMPORT_FROM` of `name` from `module` (#1278, shared with
+ * #1381's dotted walk): a new reference to the attribute when `module` has
+ * one; on a missing attribute only, the `sys.modules` entry
+ * `<module.__name__>.<name>`; otherwise CPython's `cannot import name`
+ * `ImportError` (`pycc_ext_import_from_error`). Any other attribute-lookup
+ * failure propagates unchanged. Returns NULL with the exception set on
+ * failure; borrows both arguments.
+ */
+static PyObject *pycc_ext_import_from_step(PyObject *module, PyObject *name)
+{
+    PyObject *pkgname = NULL;
+    PyObject *fullname = NULL;
+    PyObject *value = NULL;
+
+    if (PyObject_GetOptionalAttr(module, name, &value) != 0) {
+        /* Found (1) or a non-`AttributeError` failure (-1): done either way. */
+        return value;
+    }
+    if (PyObject_GetOptionalAttrString(module, "__name__", &pkgname) < 0) {
+        return NULL;
+    }
+    if (pkgname != NULL && PyUnicode_Check(pkgname)) {
+        fullname = PyUnicode_FromFormat("%U.%U", pkgname, name);
+        if (fullname == NULL) {
+            goto done;
+        }
+        value = PyImport_GetModule(fullname);
+        if (value != NULL || PyErr_Occurred()) {
+            goto done;
+        }
+    }
+    pycc_ext_import_from_error(module, name);
+done:
+    Py_XDECREF(fullname);
+    Py_XDECREF(pkgname);
+    return value;
+}
+
+/*
  * #1278: the helper compiled code calls for each name of a foreign
  * `from itertools import product, chain`.
  *
@@ -1386,8 +1425,6 @@ PyObject *pycc_ext_obj_import_from(const char *module_name, const char *const *f
     PyObject *names = NULL;
     PyObject *module = NULL;
     PyObject *name = NULL;
-    PyObject *pkgname = NULL;
-    PyObject *fullname = NULL;
     PyObject *value = NULL;
     long long i;
     int found;
@@ -1439,32 +1476,84 @@ PyObject *pycc_ext_obj_import_from(const char *module_name, const char *const *f
     if (name == NULL) {
         goto done;
     }
-    if (PyObject_GetOptionalAttr(module, name, &value) != 0) {
-        /* Found (1) or a non-`AttributeError` failure (-1): done either way. */
-        goto done;
-    }
-    if (PyObject_GetOptionalAttrString(module, "__name__", &pkgname) < 0) {
-        goto done;
-    }
-    if (pkgname != NULL && PyUnicode_Check(pkgname)) {
-        fullname = PyUnicode_FromFormat("%U.%U", pkgname, name);
-        if (fullname == NULL) {
-            goto done;
-        }
-        value = PyImport_GetModule(fullname);
-        if (value != NULL || PyErr_Occurred()) {
-            goto done;
-        }
-    }
-    pycc_ext_import_from_error(module, name);
+    value = pycc_ext_import_from_step(module, name);
 done:
-    Py_XDECREF(fullname);
-    Py_XDECREF(pkgname);
     Py_XDECREF(name);
     Py_XDECREF(module);
     Py_XDECREF(names);
     Py_XDECREF(import);
     return value;
+}
+
+/*
+ * #1381 (Part 3 of #1138): the helper compiled code calls for a foreign
+ * plain dotted import, `import a.b.c` or `import a.b.c as d`. An undotted
+ * `import a` keeps `pycc_ext_obj_import`.
+ *
+ * It mirrors CPython 3.14's bytecode for both forms and returns a new
+ * reference to the bound object, or NULL with the CPython exception set:
+ *
+ * 1. `IMPORT_NAME`: `builtins.__import__(name, None, None, None, 0)`. With
+ *    no fromlist, `__import__` imports every package on the way to the leaf
+ *    and returns the *root* package, which `import a.b.c` binds to `a`
+ *    (`bind_root` non-zero): the call's result is returned as is.
+ * 2. Otherwise `import a.b.c as d` walks from the root with one
+ *    `IMPORT_FROM` per remaining segment (`b`, then `c`), exactly as the
+ *    compiled `IMPORT_FROM`/`SWAP`/`POP_TOP` chain does, through the step
+ *    `pycc_ext_obj_import_from` shares: the attribute, else the
+ *    `sys.modules` entry `<__name__>.<segment>`, else CPython's `cannot
+ *    import name` `ImportError`. So a package whose `__init__` rebinds a
+ *    submodule's name binds that attribute, as in CPython.
+ *
+ * Not `static`: LLVM-generated code declares and calls it by this name
+ * (`EXT_OBJ_IMPORT_DOTTED_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ * `name` is a NUL-terminated UTF-8 constant the artifact owns, always
+ * holding at least one dot. The returned reference is never released, on
+ * the same leak-only rule as `pycc_ext_obj_import`.
+ */
+PyObject *pycc_ext_obj_import_dotted(const char *name, long long bind_root)
+{
+    PyObject *import = NULL;
+    PyObject *current = NULL;
+    PyObject *segment = NULL;
+    const char *rest;
+    int found;
+
+    found = PyDict_GetItemStringRef(PyEval_GetBuiltins(), "__import__", &import);
+    if (found < 0) {
+        return NULL;
+    }
+    if (found == 0) {
+        PyErr_SetString(PyExc_ImportError, "__import__ not found");
+        return NULL;
+    }
+    current = PyObject_CallFunction(import, "sOOOi", name, Py_None, Py_None, Py_None, 0);
+    Py_DECREF(import);
+    if (current == NULL || bind_root) {
+        return current;
+    }
+    rest = strchr(name, '.');
+    while (rest != NULL) {
+        const char *start = rest + 1;
+        PyObject *next;
+
+        rest = strchr(start, '.');
+        segment = (rest != NULL)
+                      ? PyUnicode_FromStringAndSize(start, (Py_ssize_t)(rest - start))
+                      : PyUnicode_FromString(start);
+        if (segment == NULL) {
+            Py_DECREF(current);
+            return NULL;
+        }
+        next = pycc_ext_import_from_step(current, segment);
+        Py_DECREF(segment);
+        Py_DECREF(current);
+        if (next == NULL) {
+            return NULL;
+        }
+        current = next;
+    }
+    return current;
 }
 
 /*

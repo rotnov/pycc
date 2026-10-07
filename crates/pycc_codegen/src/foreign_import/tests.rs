@@ -765,3 +765,65 @@ fn an_identical_from_import_at_top_level_and_in_both_arms_verifies() {
         .collect();
     assert_eq!(fromlists.len(), 3, "{ir}");
 }
+
+/// #1381: a plain dotted import calls `pycc_ext_obj_import_dotted` with
+/// `bind_root` 1 for `import xml.dom` (bound to the root `xml`) and 0 for
+/// `import email.utils as eu` (bound to the leaf), at top level and nested
+/// in a module-level block alike; an undotted import keeps
+/// `pycc_ext_obj_import`, and the dotted helper is declared once.
+#[test]
+fn a_dotted_import_calls_the_dotted_helper_with_its_root_flag() {
+    let plain = |local: &str, module: &str| MirItem::ForeignImport {
+        local_name: local.to_string(),
+        module_path: module.to_string(),
+        from: None,
+    };
+    let ir = module_ir(
+        "foreign_import_dotted",
+        vec![
+            plain("xml", "xml.dom"),
+            plain("eu", "email.utils"),
+            plain("json", "json"),
+            if_block_import(&[("os", "os.path"), ("sp", "os.path")]),
+        ],
+    );
+    let calls: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.contains(&format!("call ptr @{EXT_OBJ_IMPORT_DOTTED_SYMBOL}(")))
+        .collect();
+    assert_eq!(calls.len(), 4, "{ir}");
+    for (call, (local, root)) in calls
+        .iter()
+        .zip([("xml", 1), ("eu", 0), ("os", 1), ("sp", 0)])
+    {
+        assert!(
+            call.ends_with(&format!("(ptr @pycc_foreign_module_{local}, i64 {root})")),
+            "{call}"
+        );
+    }
+    assert!(
+        ir.lines()
+            .any(|line| line.starts_with("@pycc_foreign_module_xml ")
+                && line.contains("c\"xml.dom\\00\"")),
+        "the helper is passed the whole dotted name: {ir}"
+    );
+    assert_eq!(
+        ir.matches(&format!(
+            "declare ptr @{EXT_OBJ_IMPORT_DOTTED_SYMBOL}(ptr, i64)"
+        ))
+        .count(),
+        1,
+        "{ir}"
+    );
+    assert_eq!(
+        ir.lines()
+            .filter(|line| line.contains(&format!("call ptr @{EXT_OBJ_IMPORT_SYMBOL}(")))
+            .count(),
+        1,
+        "only `import json` uses the undotted helper: {ir}"
+    );
+    assert!(
+        ir.contains("store ptr %foreign_import, ptr @pyglobal_xml"),
+        "{ir}"
+    );
+}

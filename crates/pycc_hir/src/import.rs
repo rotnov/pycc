@@ -563,10 +563,26 @@ fn lower_import_alias(
     // module body so the generated `pycc_ext_obj_import` call runs in
     // source order rather than hoisted (see `MirItem::ForeignImport`); for
     // one nested in a module-level block, `Block` (#1291). `import X as Y`
-    // binds `Y` (#1291).
+    // binds `Y` (#1291). A dotted `import X.Y` (#1381) binds the root `X`,
+    // and `import X.Y as Z` binds the leaf `X.Y` to `Z`.
     if matches!(answer, Some(ResolvedImport::Foreign)) {
-        let local_name = alias.asname.as_ref().map_or(module_name, |n| n.as_str());
-        if alias.asname.is_some() && spelling::shadows_a_resolved_spelling(local_name) {
+        let root = module_name.split('.').next().unwrap_or(module_name);
+        let local_name = alias.asname.as_ref().map_or(root, |n| n.as_str());
+        if alias.asname.is_some() && module_name.contains('.') && local_name == root {
+            // `import a.b as a` binds the leaf under the root's own name,
+            // which `foreign_binds_root` would read as the root binding of
+            // `import a.b`.
+            return Err(unsupported(
+                format!(
+                    "binding the CPython module `{module_name}` to `{local_name}`, the name of \
+                     its own top-level package, is not supported yet"
+                ),
+                statement.start..statement.end,
+            ));
+        }
+        if (alias.asname.is_some() || local_name != module_name)
+            && spelling::shadows_a_resolved_spelling(local_name)
+        {
             return Err(unsupported(
                 format!(
                     "binding the CPython module `{module_name}` to `{local_name}`, a name pycc \
@@ -865,7 +881,10 @@ fn bind_project_name(
                      project modules is not supported yet",
                     module.display_path,
                     match from {
-                        None => format!("the CPython module object `{module_path}`"),
+                        None => format!(
+                            "the CPython module object `{}`",
+                            crate::foreign_bound_module(name, module_path, None)
+                        ),
                         Some(_) => crate::foreign_bound_object(module_path, from.as_ref()),
                     }
                 ),
