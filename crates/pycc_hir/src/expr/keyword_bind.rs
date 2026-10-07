@@ -102,8 +102,9 @@ pub(crate) struct SignatureTable {
     container_method_names: BTreeSet<&'static str>,
     /// Issue #1095: the module can hold a CPython object (`Ty::Object`) --
     /// it is compiled into an `ext` artifact, where `Any`, `object` and an
-    /// object container annotation all spell one (D-258), it has bound a
-    /// foreign import (D-244 rule 3), or (#1425) a direct project
+    /// object container annotation all spell one (D-258), its body binds a
+    /// foreign import anywhere (D-244 rule 3; decided before the first
+    /// statement is lowered since #1482), or (#1425) a direct project
     /// dependency, or a package `__init__` on its path, can hold one (see
     /// `ResolvedImports::inherit_object_receivers`). Then every one of the
     /// four container method names lowers with both readings, so that
@@ -215,8 +216,9 @@ impl SignatureTable {
     }
 
     /// Issue #1095: records that the module can hold a CPython object, so
-    /// every container method name dispatches on its receiver from here on
-    /// (see the `object_receivers` field).
+    /// every container method name dispatches on its receiver. Called before
+    /// the module's first statement is lowered, so the admission covers the
+    /// whole module (#1425, #1482; see the `object_receivers` field).
     pub(crate) fn admit_object_receivers(&mut self) {
         self.object_receivers = true;
     }

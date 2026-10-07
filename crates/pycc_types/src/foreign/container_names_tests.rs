@@ -121,6 +121,35 @@ fn a_native_receiver_keeps_its_container_diagnostics() {
     );
 }
 
+/// Issue #1482: no source program reaches the container reading of a call
+/// on a CPython object's attribute any more, so the node is built by hand
+/// from the admitted reading. The type checker still refuses it with
+/// `I0404` rather than the misleading `T0033`.
+#[test]
+fn a_container_node_on_an_object_attribute_is_refused_with_i0404() {
+    let mut module = lower("import gc\n\ngc.garbage.append(1)\n", false);
+    let rewritten = module.items.iter_mut().find_map(|item| match item {
+        pycc_hir::HirItem::TopLevelStmt(pycc_hir::HirStmt::ExprStmt(expr)) => match expr {
+            pycc_hir::HirExpr::ReceiverDispatchedCall { call, .. } => {
+                *expr = call.container_form().expect("an admitted reading");
+                Some(())
+            }
+            _ => None,
+        },
+        _ => None,
+    });
+    assert_eq!(rewritten, Some(()));
+    let diagnostics = crate::check_all(&module).expect_err("the container node is refused");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "I0404", "{diagnostics:#?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("on a CPython object's attribute"),
+        "{diagnostics:#?}"
+    );
+}
+
 /// A private helper's `o.pop()` on a local object resolves to `object`
 /// in the constraint solver, as any other method call on it does:
 /// `object + int` is refused naming `object`.

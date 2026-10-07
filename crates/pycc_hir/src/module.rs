@@ -36,6 +36,7 @@
 //! checker (`src/frontend.rs`), so no partial module is ever type-checked.
 
 mod lowered;
+mod own_foreign;
 mod poison;
 mod type_var;
 
@@ -214,8 +215,8 @@ pub fn lower_module(
         .signatures
         .inherit_container_method_names(resolved.container_method_names().iter().copied());
     // Issue #1425: a direct dependency can hold a CPython object, so any
-    // receiver here may be one -- for the whole module, unlike an own
-    // foreign import, which admits only from its statement down.
+    // receiver here may be one -- for the whole module, as below for an own
+    // foreign import (#1482).
     if resolved.object_receivers() {
         state.signatures.admit_object_receivers();
     }
@@ -230,6 +231,15 @@ pub fn lower_module(
         state
             .aliases
             .push((crate::func::EXT_MODULE_MARKER.to_string(), Ty::Object));
+    }
+    // Issue #1482: an own foreign import, top-level or in a module-level
+    // `if`/`try`, admits for the whole module too, so a `def` written above
+    // `import gc` reads `gc` as CPython does when it runs. Skipped when the
+    // module is already admitted.
+    if !(resolved.object_receivers() || resolved.ext_module())
+        && own_foreign::binds_foreign_import(module, resolved, &state.imports)
+    {
+        state.signatures.admit_object_receivers();
     }
     let container_method_names = state.signatures.container_method_names().clone();
     // Part 1 of #541 (extending D-173): give the builtin exception
@@ -655,11 +665,6 @@ fn lower_top_level_item<'a>(
         // `HirModule::type_aliases`: the name neither re-exports nor leaks,
         // while a D-135 alias built from it is an ordinary alias of `object`.
         for binding in &lowered.bindings {
-            // Issue #1095: from here on a container-named method call may
-            // have an object receiver, so it keeps both readings.
-            if matches!(binding, ImportBinding::Foreign { .. }) {
-                state.signatures.admit_object_receivers();
-            }
             if let ImportBinding::Foreign { local_name, .. } = binding
                 && !state.aliases.iter().any(|(name, _)| name == local_name)
             {
@@ -882,15 +887,6 @@ fn lower_top_level_item<'a>(
         ));
     }
     let imports_before_block = state.imports.len();
-    // Issue #1095: a foreign import nested in a module-level block binds an
-    // object receiver just as a top-level one does.
-    if block_imports
-        .bindings
-        .iter()
-        .any(|binding| matches!(binding, ImportBinding::Foreign { .. }))
-    {
-        state.signatures.admit_object_receivers();
-    }
     state.imports.extend(block_imports.bindings.iter().cloned());
     // #1213: a chained assignment expands into several statements, all
     // lowered before any is recorded, so an `Err` still records nothing.

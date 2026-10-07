@@ -67,9 +67,11 @@ pub struct LoweredModule {
     /// slots.
     pub class_slots: Vec<ClassSlotsRow>,
     /// Issue #1425: whether this module can hold a CPython object -- its
-    /// *final* admission state, read after the whole module is lowered, so
-    /// it counts the module's own top-level and block foreign imports as well
-    /// as what it inherited (`ResolvedImports::inherit_object_receivers`).
+    /// *final* admission state, read after the whole module is lowered. It
+    /// counts the module's own top-level and block foreign imports (decided
+    /// before the first statement is lowered since #1482, see
+    /// `module::own_foreign`) as well as what it inherited
+    /// (`ResolvedImports::inherit_object_receivers`).
     /// The driver hands it to every module that imports this one, which then
     /// lowers its container-method calls with both readings for its whole
     /// body. The `SignatureTable` itself stays lowering-internal; only this
