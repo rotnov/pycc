@@ -276,15 +276,15 @@ impl Loader {
                 } => {
                     // Issue #1188: a direct dependency's container method
                     // names reach this module, and through them the whole
-                    // transitive import closure's.
+                    // transitive import closure's. Issue #1425: so does
+                    // whether it can hold a CPython object -- its final
+                    // state, which already includes what it inherited.
                     for dependency in package_inits.into_iter().chain([index]) {
+                        let dependency = &self.modules[dependency].module;
                         resolved.inherit_container_method_names(
-                            self.modules[dependency]
-                                .module
-                                .container_method_names
-                                .iter()
-                                .copied(),
+                            dependency.container_method_names.iter().copied(),
                         );
+                        resolved.inherit_object_receivers(dependency.object_receivers);
                     }
                     let loaded = &self.modules[index];
                     resolved.insert(

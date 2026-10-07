@@ -7,8 +7,9 @@
 //! method of one of those names, and such a module keeps lowering exactly as
 //! before. In a module that can (`SignatureTable::dispatches_on_receiver`),
 //! the same spelling may equally be a call to the user's method -- or, in a
-//! module that can hold a CPython object (an `ext` module or one with a
-//! foreign import, issue #1095), a foreign method call on that object -- so
+//! module that can hold a CPython object (an `ext` module, one with a
+//! foreign import, issue #1095, or one importing a project module that can
+//! hold one, issue #1425), a foreign method call on that object -- so
 //! this module lowers *both* readings and records them in one
 //! [`HirExpr::ReceiverDispatchedCall`]. `pycc_types` and `pycc_mir` then pick
 //! a reading from the receiver's static type, through the one shared rule in

@@ -1,9 +1,11 @@
 //! Issue #1095: in a module that can hold a CPython object -- an `ext`
-//! module (D-258), or one that has bound a foreign import (D-244 rule 3) --
-//! a call to `append`, `pop`, `get` or `add` keeps both readings in a
+//! module (D-258), one that has bound a foreign import (D-244 rule 3), or
+//! (#1425) one with a direct project dependency that can hold one -- a call
+//! to `append`, `pop`, `get` or `add` keeps both readings in a
 //! `HirExpr::ReceiverDispatchedCall`, so an object receiver can take the
 //! foreign method-call reading. Every other module lowers these calls
-//! exactly as before.
+//! exactly as before. Issue #1425 also publishes the module's final state
+//! as `LoweredModule::object_receivers`, which importers inherit.
 
 use super::*;
 use crate::{ContainerFallback, HirExpr, HirItem, HirStmt, Ty, receiver_takes_method_path};
@@ -17,6 +19,17 @@ fn lower(source: &str, ext: bool) -> LoweredModule {
     for request in project_import_requests(&parsed) {
         resolved.insert(request.span, ResolvedImport::Foreign);
     }
+    lower_module(&parsed, &resolved, None)
+        .unwrap_or_else(|diagnostics| panic!("{source:?} must lower: {diagnostics:#?}"))
+}
+
+/// Lowers `source` as a `native` module whose dependencies can
+/// (`inherited == true`) or cannot hold a CPython object (#1425). No import
+/// request is answered, so nothing in `source` admits on its own.
+fn lower_inheriting(source: &str, inherited: bool) -> LoweredModule {
+    let parsed = parse(source);
+    let mut resolved = ResolvedImports::default();
+    resolved.inherit_object_receivers(inherited);
     lower_module(&parsed, &resolved, None)
         .unwrap_or_else(|diagnostics| panic!("{source:?} must lower: {diagnostics:#?}"))
 }
@@ -143,4 +156,55 @@ fn a_foreign_import_inside_a_module_level_block_turns_the_gate_on() {
         dispatched(exprs[0], "get"),
         ContainerFallback::Refused(_)
     ));
+}
+
+#[test]
+fn an_inherited_admission_dispatches_from_the_first_statement() {
+    let module = lower_inheriting("xs = [1]\nxs.append(2)\n", true);
+    let exprs = top_level_exprs(&module);
+    assert_eq!(dispatched(exprs[0], "append"), ContainerFallback::Admitted);
+    // The module publishes what it inherited, so the bit is transitive.
+    assert!(module.object_receivers);
+}
+
+#[test]
+fn an_inherited_false_changes_nothing() {
+    let mut resolved = ResolvedImports::default();
+    resolved.inherit_object_receivers(false);
+    assert!(!resolved.object_receivers());
+    let module = lower_inheriting("xs = [1]\nxs.append(2)\n", false);
+    let exprs = top_level_exprs(&module);
+    assert!(matches!(exprs[0], HirExpr::ListAppend { .. }), "{exprs:?}");
+    assert!(!module.object_receivers);
+}
+
+#[test]
+fn an_inherited_true_is_not_cleared_by_a_later_false() {
+    let mut resolved = ResolvedImports::default();
+    resolved.inherit_object_receivers(true);
+    resolved.inherit_object_receivers(false);
+    assert!(resolved.object_receivers());
+}
+
+#[test]
+fn an_own_foreign_import_publishes_the_final_state() {
+    // The import comes after every container call, so only a read taken
+    // after the whole module is lowered sees the admission.
+    let module = lower("xs = [1]\nimport gc\n", false);
+    assert!(module.object_receivers);
+}
+
+#[test]
+fn a_block_foreign_import_publishes_the_final_state() {
+    let module = lower(
+        "try:\n    import gc\nexcept ImportError:\n    pass\n",
+        false,
+    );
+    assert!(module.object_receivers);
+}
+
+#[test]
+fn a_native_module_without_a_foreign_import_publishes_false() {
+    let module = lower("xs = [1]\nxs.append(2)\n", false);
+    assert!(!module.object_receivers);
 }
