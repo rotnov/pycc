@@ -1,7 +1,8 @@
 //! `None` into an `object` return slot (#1387, `crate::object_none`): both
 //! walkers admit a bare `return` and `return None` in a function declared
-//! `-> Any`/`-> object`, and every neighbouring `None`-into-object seam keeps
-//! its diagnostic.
+//! `-> Any`/`-> object`. Since #1475 every neighbouring `None`-into-object
+//! seam boxes too (`crate::object_box`); falling off the end of such a
+//! function and an `Optional` value keep their diagnostics.
 //!
 //! A fully annotated module is decided by the check phase alone; a module
 //! holding one unannotated private helper (`_id`) also runs the constraint
@@ -70,15 +71,10 @@ fn a_method_returning_an_object_admits_a_bare_return() {
 }
 
 #[test]
-fn a_none_typed_expression_is_still_refused_at_an_object_return() {
-    // Only the literal is CPython's `None` by construction; a call whose
-    // type is `None` would need a conversion this change does not add.
-    refused(
-        "def g() -> None:\n    return\n\n\ndef f() -> Any:\n    return g()\n",
-        true,
-        "T0022",
-        "expected `object`, found `None`",
-    );
+fn a_none_typed_expression_is_boxed_at_an_object_return() {
+    // #1475: a call whose type is `None` is evaluated and answers CPython's
+    // `None` (`crate::object_box`).
+    checks("def g() -> None:\n    return\n\n\ndef f() -> Any:\n    return g()\n");
 }
 
 #[test]
@@ -92,17 +88,29 @@ fn falling_off_the_end_of_an_object_function_is_still_refused() {
 }
 
 #[test]
-fn every_other_none_into_object_seam_keeps_its_diagnostic() {
-    // An annotated binding.
+fn every_other_none_into_object_seam_is_boxed() {
+    // #1475: an annotated binding and a call argument box `None` too.
+    checks("def f() -> None:\n    y: Any = None\n    print(y)\n");
+    checks("def g(o: object) -> None:\n    return\n\n\ndef f() -> None:\n    g(None)\n");
+}
+
+#[test]
+fn an_optional_into_an_object_seam_keeps_its_diagnostic() {
+    // An `Optional` value has no single packer, at every seam.
     refused(
-        "def f() -> None:\n    y: Any = None\n    print(y)\n",
+        "def f(n: int | None) -> Any:\n    return n\n",
+        true,
+        "T0022",
+        "",
+    );
+    refused(
+        "def f(n: int | None) -> None:\n    y: Any = n\n    print(y)\n",
         true,
         "T0025",
         "",
     );
-    // A call argument.
     refused(
-        "def g(o: object) -> None:\n    return\n\n\ndef f() -> None:\n    g(None)\n",
+        "def g(o: object) -> None:\n    return\n\n\ndef f(n: int | None) -> None:\n    g(n)\n",
         true,
         "T0021",
         "",

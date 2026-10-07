@@ -17,7 +17,7 @@
 
 use crate::Environment;
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::Ty;
+use pycc_hir::{HirExpr, Ty};
 
 use super::{
     check_call_args, expect_class, foreign_static, t0044_unknown_member, t0047_super_instance_attr,
@@ -157,6 +157,7 @@ pub(crate) fn resolve_super_attr_get(env: &Environment, attr: &str) -> Result<Ty
 pub(crate) fn resolve_super_method_call(
     env: &Environment,
     method: &str,
+    args: &[HirExpr],
     arg_tys: &[Ty],
 ) -> Result<Ty, Diagnostic> {
     // #915: both `super()` forms below assume a `self` receiver -- the
@@ -223,7 +224,7 @@ pub(crate) fn resolve_super_method_call(
     // the MRO entry that declares the method -- see
     // `buffer::buffer_returning_method_call_unsupported`.
     crate::buffer::refuse_buffer_returning_method(current_class, method, return_ty)?;
-    check_call_args(method, arg_tys, method_param_tys, None)?;
+    check_call_args(env, method, args, arg_tys, method_param_tys, false)?;
     Ok(return_ty.clone())
 }
 
@@ -277,7 +278,7 @@ mod tests {
     fn resolve_super_method_call_rejects_a_receiver_less_super() {
         // #915: the method-call form of the same gap.
         let env = super_env_without_self(|_| {});
-        let err = super::resolve_super_method_call(&env, "m", &[]).unwrap_err();
+        let err = super::resolve_super_method_call(&env, "m", &[], &[]).unwrap_err();
         assert_eq!(err.code, "C0001");
         assert!(
             err.message.contains("no `self` receiver to bind"),
@@ -505,7 +506,7 @@ mod tests {
             );
         });
         assert_eq!(
-            super::resolve_super_method_call(&env, "greet", &[]),
+            super::resolve_super_method_call(&env, "greet", &[], &[]),
             Ok(Ty::Int)
         );
     }
@@ -568,7 +569,7 @@ mod tests {
                 },
             );
         });
-        let err = super::resolve_super_method_call(&env, "nonexistent", &[]).unwrap_err();
+        let err = super::resolve_super_method_call(&env, "nonexistent", &[], &[]).unwrap_err();
         assert_eq!(err.code, "T0044");
     }
 

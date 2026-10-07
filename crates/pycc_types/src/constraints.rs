@@ -3140,6 +3140,17 @@ pub(crate) fn collect_block_constraints(
                     )?,
                     None => Some(Ok(Ty::None)),
                 };
+                // #1475: a concrete value returned into a declared `object`
+                // slot is a boxing seam, not a unification. The solver has no
+                // class environment to tell a boxable value from a refused
+                // one (a container, an `Optional`), so it defers to the check
+                // phase's `crate::object_box::admits_value`, which decides
+                // every such return.
+                if let (Ok(Ty::Object), Some(Ok(actual_ty))) = (&return_term, &actual)
+                    && *actual_ty != Ty::Object
+                {
+                    continue;
+                }
                 if let Some(actual) = actual {
                     // #949: this solver runs over *every* module-level
                     // function, not only D-038 private helpers, so the context

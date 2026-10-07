@@ -427,13 +427,14 @@ fn t0047_super_instance_attr(attr: &str, declaring_class: &str) -> Diagnostic {
 /// shape an ordinary function call already validates.
 ///
 /// #953: `structural` selects the assignability predicate applied to each
-/// argument. `Some(env)` uses the environment-aware
+/// argument. `true` uses the environment-aware
 /// [`is_assignable_env`], so a concrete class instance is accepted for a
 /// protocol-typed parameter when it structurally conforms (PEP 544);
-/// `None` keeps the plain nominal [`is_assignable`]. Only the two
-/// instance-method-call sites in `class/method_call.rs` pass `Some`: the
+/// `false` keeps the plain nominal [`is_assignable`]. Only the
+/// instance-method-call sites (`class/method_call.rs`,
+/// `class/method_defaults.rs`) pass `true`: the
 /// static-method, class-method, `super()`, constructor and exception-
-/// constructor sites still pass `None`, because accepting a conforming
+/// constructor sites still pass `false`, because accepting a conforming
 /// concrete argument there needs protocol monomorphization support that
 /// does not exist yet for those lowering shapes, and flipping one of them
 /// without that support produces a `pycc_mir`/`pycc_codegen` panic rather
@@ -442,11 +443,23 @@ fn t0047_super_instance_attr(attr: &str, declaring_class: &str) -> Diagnostic {
 /// are identical either way: a non-conforming argument keeps today's
 /// message, and `T0046` (`assignable_error`) stays reserved for the
 /// assignment/conformance positions that already use it.
+///
+/// Independently of `structural`, every site admits a native value boxed
+/// into an `object` parameter ([`crate::object_box::admits_value`], Part 2
+/// of #1387): codegen's one argument-marshalling helper boxes it for every
+/// call shape, so no site needs a lowering of its own. `args` are the
+/// call's argument expressions, in `arg_tys` order, so a class method's
+/// own `cls` is refused (`I0404`) at every call shape. It is shorter than
+/// `arg_tys` when `method_defaults` filled trailing defaults in; a filled
+/// default is appended unboxed, so it never boxes here and must be
+/// assignable as it stands.
 pub(crate) fn check_call_args(
+    env: &Environment,
     callee: &str,
+    args: &[HirExpr],
     arg_tys: &[Ty],
     param_tys: &[Ty],
-    structural: Option<&Environment>,
+    structural: bool,
 ) -> Result<(), Diagnostic> {
     if arg_tys.len() != param_tys.len() {
         return Err(Diagnostic::error(
@@ -461,10 +474,13 @@ pub(crate) fn check_call_args(
         .with_help(format!("pass exactly {} argument(s)", param_tys.len())));
     }
     for (i, (arg_ty, param_ty)) in arg_tys.iter().zip(param_tys.iter()).enumerate() {
-        let assignable = match structural {
-            Some(env) => is_assignable_env(env, arg_ty, param_ty),
-            None => is_assignable(arg_ty.clone(), param_ty.clone()),
-        };
+        let assignable = if structural {
+            is_assignable_env(env, arg_ty, param_ty)
+        } else {
+            is_assignable(arg_ty.clone(), param_ty.clone())
+        } || args.get(i).map_or(Ok(false), |arg| {
+            crate::object_box::admits_value(env, arg, arg_ty, param_ty)
+        })?;
         if !assignable {
             return Err(Diagnostic::error(
                 "T0021",

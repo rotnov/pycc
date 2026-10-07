@@ -26,6 +26,7 @@ mod item_names;
 use item_names::resolve_method_owner_class;
 use item_names::{item_anchor_class, source_frame_name};
 mod obj_compare;
+mod object_box;
 pub use obj_compare::{ObjBuiltinClass, ObjIsInstanceClass};
 mod receiver_exact;
 mod set_ops;
@@ -127,6 +128,24 @@ pub enum MirExpr {
     /// `coerce_scalar_to_type` is driven by that already-correct slot type
     /// directly at the assignment site either way.
     OptionalWrap(Box<MirExpr>, Box<Ty>),
+    /// A native `int`, `float`, `bool`, `str`, compiled-instance or `None`
+    /// value boxed into an `object` slot (Part 2 of #1387, D-258's boxing
+    /// amendment). Statically `Ty::Object`, so the slot
+    /// `pycc_codegen::collect_stmt_bindings` derives from `value.ty()` is
+    /// the `PyObject *` one, exactly as `OptionalWrap` fixes an `Optional`
+    /// slot. Unlike `OptionalWrap` it is a *converting* node:
+    /// `pycc_codegen`'s `object_box` module packs the value through the
+    /// shim's `pycc_ext_obj_pack_*` helpers, and a packer `NULL` (the
+    /// #1040 bigint `OverflowError`) takes the foreign failure edge.
+    ///
+    /// `stmt::lower_stmt` inserts it at the three statement seams whose
+    /// slot type it knows -- an `AnnAssign` under an `object` annotation,
+    /// a plain rebinding of an `object`-typed name and an attribute store
+    /// into an `object`-typed slot. A call argument and a returned value
+    /// are boxed by codegen itself, which knows the parameter and return
+    /// types this pass does not. `pycc_types::object_box::admits` owns
+    /// which values reach it.
+    ObjectBox(Box<MirExpr>),
     /// Issue #769 (Part 2 of #747): the read-side counterpart of
     /// `OptionalWrap` above. `pycc_types::check` has already proven, via its
     /// own flow-sensitive `narrowed` overlay (`pycc_types::narrow`), that a
@@ -948,7 +967,7 @@ impl MirExpr {
             MirExpr::BoolLiteral(_) => Ty::Bool,
             MirExpr::StringLiteral(_) | MirExpr::FString(_) => Ty::Str,
             MirExpr::NoneLiteral => Ty::None,
-            MirExpr::NotImplemented => Ty::Object,
+            MirExpr::NotImplemented | MirExpr::ObjectBox(_) => Ty::Object,
             MirExpr::OptionalWrap(_, inner) => Ty::Optional(inner.clone()),
             MirExpr::OptionalUnwrap(_, inner) => (**inner).clone(),
             MirExpr::Name { ty, .. }
@@ -1175,7 +1194,9 @@ impl MirExpr {
                 }
             }
             MirExpr::IntBoundary(inner) => inner.collect_named_expr_bindings(out),
-            MirExpr::OptionalWrap(inner, _) => inner.collect_named_expr_bindings(out),
+            MirExpr::OptionalWrap(inner, _) | MirExpr::ObjectBox(inner) => {
+                inner.collect_named_expr_bindings(out)
+            }
             // Issue #769 (Part 2 of #747): `OptionalUnwrap` wraps a single
             // sub-expression (the narrowed name's own read), exactly like
             // `OptionalWrap`/`IntBoundary` immediately above -- a walrus

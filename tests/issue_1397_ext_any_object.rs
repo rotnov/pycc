@@ -118,17 +118,18 @@ fn the_literals_part_2d_leaves_refused_into_an_object_slot() {
     );
 }
 
-/// `None` is not assignable to the object (#1387): since Part 1 of #1387 a
-/// bare `return` or `return None` in a `-> Any` function returns CPython's
-/// `None` (`tests/issue_1387_none_into_object_return.rs`), but a
-/// `None`-typed expression there is still a return-type mismatch.
+/// `None` into the object (#1387): since Part 1 of #1387 a bare `return`
+/// or `return None` in a `-> Any` function returns CPython's `None`
+/// (`tests/issue_1387_none_into_object_return.rs`), and since #1475 a
+/// `None`-typed expression there is boxed too; an `Optional` value, which
+/// has no single packer, is still a return-type mismatch.
 #[test]
-fn none_into_an_object_return_is_still_t0022() {
+fn an_optional_into_an_object_return_is_still_t0022() {
     assert_ext_error(
         "1397_none_return",
-        &format!("{ANY}def g() -> None:\n    return\n\n\ndef f(x: Any) -> Any:\n    return g()\n"),
+        &format!("{ANY}def f(x: Any, n: int | None) -> Any:\n    return n\n"),
         "T0022",
-        "return type mismatch: expected `object`, found `None`",
+        "expected return type `object`, got `int | None`",
     );
 }
 

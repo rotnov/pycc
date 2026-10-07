@@ -4,7 +4,7 @@
 //! arm. Every other diagnostic and check is unchanged; the only other edits
 //! are the ones the module boundary forces (`use` lines).
 
-use crate::{Environment, infer_expr_in, is_assignable};
+use crate::{Environment, infer_expr_in, is_assignable, object_box};
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{HirExpr, Ty};
 
@@ -161,7 +161,9 @@ pub(crate) fn check_attr_set(
                     )
                 });
                 let setter_param_ty = &param_tys[1]; // exclude `self`
-                if !is_assignable(value_ty.clone(), setter_param_ty.clone()) {
+                if !is_assignable(value_ty.clone(), setter_param_ty.clone())
+                    && !object_box::admits_value(env, value, &value_ty, setter_param_ty)?
+                {
                     return Err(Diagnostic::error(
                         "T0021",
                         format!(
@@ -185,7 +187,9 @@ pub(crate) fn check_attr_set(
     // Regular attribute slot -- `resolve_attr_get` already walks the MRO.
     let attr_ty = resolve_attr_get(env, &base_ty, attr)?;
     let value_ty = infer_expr_in(env, local_names, value)?;
-    if !is_assignable(value_ty.clone(), attr_ty.clone()) {
+    if !is_assignable(value_ty.clone(), attr_ty.clone())
+        && !object_box::admits_value(env, value, &value_ty, &attr_ty)?
+    {
         return Err(Diagnostic::error(
             "T0021",
             format!(

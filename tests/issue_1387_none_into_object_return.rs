@@ -61,6 +61,17 @@ fn compile(tag: &str, body: &str, ext: bool) -> Output {
     command.output().expect("pycc should spawn")
 }
 
+/// Asserts `body` compiles.
+fn assert_admitted(tag: &str, body: &str, ext: bool) {
+    let output = compile(tag, body, ext);
+    assert!(
+        output.status.success(),
+        "{tag}: {}{}",
+        stdout_of(&output),
+        stderr_of(&output)
+    );
+}
+
 /// Asserts `body` is refused with exactly `expected` among its diagnostics.
 fn assert_refused(tag: &str, body: &str, ext: bool, expected: &str) {
     let output = compile(tag, body, ext);
@@ -69,16 +80,42 @@ fn assert_refused(tag: &str, body: &str, ext: bool, expected: &str) {
     assert!(rendered.contains(expected), "{tag}: {rendered}");
 }
 
+/// Since #1475 (Part 2 of #1387) these `--ext` programs box their native
+/// value into the `object` slot instead of being refused: a `None`-typed
+/// call returned as `Any`, `None` under an `Any` annotation, and an explicit
+/// `__eq__` call with an `int` or instance argument.
+/// `tests/issue_1475_object_boxing.rs` runs them against CPython. Building
+/// an `--ext` artifact needs a CPython 3.13+ to build against, so this test
+/// is `#[ignore]`d like every other `--ext` build.
 #[test]
-fn a_none_typed_call_is_still_refused_at_an_object_return() {
-    assert_refused(
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn native_values_box_into_object_slots_under_ext() {
+    assert_admitted(
         "1387_none_call",
         "from typing import Any\n\ndef g() -> None:\n    return\n\n\
          def f() -> Any:\n    return g()\n",
         true,
-        "error[T0022]: return type mismatch: expected `object`, found `None`",
+    );
+    assert_admitted(
+        "1387_ann_assign",
+        "from typing import Any\n\ndef f() -> None:\n    y: Any = None\n    print(y)\n",
+        true,
+    );
+    assert_admitted(
+        "1387_eq_int_arg",
+        &format!("{EQ_CLASS}def run() -> bool:\n    return C(1).__eq__(3)\n"),
+        true,
+    );
+    assert_admitted(
+        "1387_eq_instance_arg",
+        &format!("{EQ_CLASS}def run() -> bool:\n    return C(1).__eq__(C(2))\n"),
+        true,
     );
 }
+
+/// A class whose `__eq__` takes an unannotated (`object`) operand.
+const EQ_CLASS: &str = "class C:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\
+                        \x20   def __eq__(self, other) -> bool:\n        return other is None\n\n\n";
 
 #[test]
 fn falling_off_the_end_of_an_object_function_is_still_refused() {
@@ -90,11 +127,14 @@ fn falling_off_the_end_of_an_object_function_is_still_refused() {
     );
 }
 
+/// `None` into an annotated object binding is boxed since #1475
+/// ([`native_values_box_into_object_slots_under_ext`]); an `Optional`
+/// value, which has no single packer, keeps its `T0025`.
 #[test]
-fn none_into_an_annotated_object_binding_is_still_refused() {
+fn an_optional_into_an_annotated_object_binding_is_still_refused() {
     assert_refused(
-        "1387_ann_assign",
-        "from typing import Any\n\ndef f() -> None:\n    y: Any = None\n    print(y)\n",
+        "1387_ann_assign_optional",
+        "from typing import Any\n\ndef f(n: int | None) -> None:\n    y: Any = n\n    print(y)\n",
         true,
         "error[T0025]",
     );
@@ -152,24 +192,17 @@ fn a_native_executable_returns_none_into_a_foreign_class_return() {
 }
 
 /// In an `--ext` module the operand is the object, so an in-module explicit
-/// `__eq__` call with a native argument is a `T0021` argument mismatch until
-/// the boxing #1387 still owns; before Part 1 the same program was refused
-/// as an uninferable parameter, so no program that compiled stops compiling.
+/// `__eq__` call boxes a native argument since #1475 (Part 2 of #1387,
+/// [`native_values_box_into_object_slots_under_ext`]). A container argument
+/// is still the `T0021` argument mismatch.
 #[test]
-fn an_explicit_eq_call_with_a_native_argument_is_refused_under_ext() {
-    let class = "class C:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\
-                 \x20   def __eq__(self, other) -> bool:\n        return other is None\n\n\n";
+fn an_explicit_eq_call_with_a_container_argument_is_refused_under_ext() {
+    let class = EQ_CLASS;
     assert_refused(
-        "1387_eq_int_arg",
-        &format!("{class}def run() -> bool:\n    return C(1).__eq__(3)\n"),
+        "1387_eq_list_arg",
+        &format!("{class}def run() -> bool:\n    return C(1).__eq__([3])\n"),
         true,
-        "error[T0021]: argument 1 of `__eq__` expects `object`, got `int`",
-    );
-    assert_refused(
-        "1387_eq_instance_arg",
-        &format!("{class}def run() -> bool:\n    return C(1).__eq__(C(2))\n"),
-        true,
-        "error[T0021]: argument 1 of `__eq__` expects `object`, got `C`",
+        "error[T0021]: argument 1 of `__eq__` expects `object`, got `list[int]`",
     );
     // The `native` build of the same call still cannot infer the operand.
     assert_refused(

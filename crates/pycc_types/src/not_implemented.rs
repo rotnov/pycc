@@ -3,11 +3,12 @@
 //!
 //! `pycc_hir`'s `class::method::lower_method` widens such a method's return
 //! type to `Ty::Object` whatever its annotation says, as CPython's own
-//! behaviour does. A native `return self.v == other.v` in the same body then
-//! meets that `object` return with a `bool` and is refused as an ordinary
-//! `T0022` -- boxing a native value into the object is #1387's work -- but
-//! the bare "expected `object`, found `bool`" would leave the programmer who
-//! wrote `-> bool` wondering where the `object` came from. Both phases'
+//! behaviour does. Since #1475 a native `return self.v == other.v` in the
+//! same body is boxed into that `object` (`crate::object_box`), but a value
+//! the object cannot hold (`return [self.v]`, an `Optional`) is refused as
+//! an ordinary `T0022`, and the bare "expected `object`, found `list[int]`"
+//! would leave the programmer who wrote `-> bool` wondering where the
+//! `object` came from. Both phases'
 //! per-function loops (the solver's in `constraints::signatures` and the
 //! check phase's in `crate::module`) route a body's refusal through
 //! [`widened_return_help`], so the help is attached whichever phase reports

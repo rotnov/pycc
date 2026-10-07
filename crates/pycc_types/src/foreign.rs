@@ -323,7 +323,9 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              `int`/`float`/`bool`/`str`/`list`/`dict`/`tuple`, `for` iteration, a list \
              or set comprehension over it unless it is a bare name, binding the \
              value to a name, returning it from and passing it to a pycc \
-             function, printing it and f-string \
+             function, boxing a scalar, `None` or class-instance value into an \
+             `object` binding, parameter, attribute or return value, printing it \
+             and f-string \
              interpolation, the `float`, \
              `bool`, `int` and `str` conversions and an annotated \
              module-level assignment to a fixed-arity all-`float` `tuple` \

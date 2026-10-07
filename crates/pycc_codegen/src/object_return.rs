@@ -10,15 +10,15 @@
 //! `SystemError`), and `NoneLiteral` emits the native `Optional` carrier.
 //!
 //! [`object_return_value`] folds the bare form into the literal one, and
-//! [`object_return_none`] turns the literal into
-//! [`foreign_pack::none_pointer`]'s borrowed `Py_None`. Borrowed is the
-//! leak-only ownership model's convention for a compiled body
-//! (`docs/RUNTIME.md`): the export wrapper's `pycc_ext_pack_object` takes
-//! the new reference the host receives, exactly as it does for a borrowed
-//! object parameter returned by name.
+//! since Part 2 of #1387 the `return` path boxes every native returned value
+//! -- the `None` literal included -- through `object_box`, which turns the
+//! literal into [`crate::foreign_pack::none_pointer`]'s borrowed `Py_None`.
+//! Borrowed is the leak-only ownership model's convention for a compiled
+//! body (`docs/RUNTIME.md`): the export wrapper's `pycc_ext_pack_object`
+//! takes the new reference the host receives, exactly as it does for a
+//! borrowed object parameter returned by name.
 
 use super::*;
-use crate::foreign_pack::none_pointer;
 
 /// The value a `return` statement hands back: `value` itself, except that a
 /// bare `return` in an `object`-returning function is `return None`, spelled
@@ -32,18 +32,4 @@ pub(crate) fn object_return_value<'a>(
         None if *expected_return_ty == pycc_mir::Ty::Object => Some(bare_none),
         other => other.as_ref(),
     }
-}
-
-/// CPython's `None` as the returned object when `expr` is the `None` literal
-/// and the function returns `object`; `None` (emitting nothing) otherwise,
-/// so the caller evaluates `expr` the ordinary way.
-pub(crate) fn object_return_none<'ctx>(
-    context: &'ctx Context,
-    builder: &inkwell::builder::Builder<'ctx>,
-    module: &inkwell::module::Module<'ctx>,
-    expected_return_ty: &pycc_mir::Ty,
-    expr: &MirExpr,
-) -> Option<Scalar<'ctx>> {
-    (*expected_return_ty == pycc_mir::Ty::Object && matches!(expr, MirExpr::NoneLiteral))
-        .then(|| Scalar::Object(none_pointer(context, builder, module)))
 }

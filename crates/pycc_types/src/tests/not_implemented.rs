@@ -4,7 +4,8 @@
 //! `pycc_hir` widens such a method's return type to the CPython object and
 //! lowers the admitted `return NotImplemented` to `HirExpr::NotImplemented`;
 //! these tests pin what the checker makes of that: an object-valued body
-//! passes, a native return stays `T0022` with the widened-return help, the
+//! passes, a native scalar return is boxed (#1475) while a container
+//! return stays `T0022` with the widened-return help, the
 //! widened method's result flows as an object, a native `==` on two
 //! instances stays refused, and a `native` build keeps its `T0021`.
 
@@ -49,12 +50,21 @@ fn an_object_valued_widened_method_is_admitted() {
 }
 
 #[test]
-fn a_native_return_in_a_widened_method_is_t0022_with_the_help() {
-    let diagnostic = refusal(&widened("True"), true);
+fn a_native_scalar_return_in_a_widened_method_is_boxed() {
+    // #1475: a `bool` is boxed into the widened `object` return.
+    crate::check_all(&lower(&widened("True"), true))
+        .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+}
+
+#[test]
+fn a_container_return_in_a_widened_method_is_t0022_with_the_help() {
+    let diagnostic = refusal(&widened("[1]"), true);
     assert_eq!(diagnostic.code, "T0022", "{diagnostic:#?}");
+    // The check phase's wording: the solver defers a concrete value
+    // returned into a declared `object` to it (#1475).
     assert_eq!(
         diagnostic.message,
-        "return type mismatch: expected `object`, found `bool`"
+        "expected return type `object`, got `list[int]`"
     );
     assert_eq!(
         diagnostic.help.as_deref(),

@@ -17,7 +17,7 @@
 
 use crate::Environment;
 use pycc_diag::Diagnostic;
-use pycc_hir::Ty;
+use pycc_hir::{HirExpr, Ty};
 
 use super::{check_call_args, expect_class, t0044_unknown_member};
 
@@ -36,6 +36,7 @@ pub(crate) fn resolve_static_or_class_method_call(
     env: &Environment,
     class_name: &str,
     method: &str,
+    args: &[HirExpr],
     arg_tys: &[Ty],
 ) -> Result<Ty, Diagnostic> {
     let class_def = expect_class(env, class_name);
@@ -56,7 +57,7 @@ pub(crate) fn resolve_static_or_class_method_call(
             });
             // #1174: see `class/method_call.rs`'s own exit.
             crate::buffer::refuse_buffer_returning_method(class_name, method, return_ty)?;
-            check_call_args(method, arg_tys, param_tys, None)?;
+            check_call_args(env, method, args, arg_tys, param_tys, false)?;
             return Ok(return_ty.clone());
         }
     }
@@ -77,7 +78,7 @@ pub(crate) fn resolve_static_or_class_method_call(
             // #1174: the `class_methods` exit is separate from the
             // `static_methods` one above and needs its own interception.
             crate::buffer::refuse_buffer_returning_method(class_name, method, return_ty)?;
-            check_call_args(method, arg_tys, method_param_tys, None)?;
+            check_call_args(env, method, args, arg_tys, method_param_tys, false)?;
             return Ok(return_ty.clone());
         }
     }
@@ -147,7 +148,8 @@ mod tests {
             },
         );
         let diagnostic =
-            super::resolve_static_or_class_method_call(&env, "C", "nonexistent", &[]).unwrap_err();
+            super::resolve_static_or_class_method_call(&env, "C", "nonexistent", &[], &[])
+                .unwrap_err();
         assert_eq!(diagnostic.code, "T0044");
     }
 
@@ -275,7 +277,7 @@ mod tests {
                 is_abstract: false,
             },
         );
-        let _ = super::resolve_static_or_class_method_call(&env, "C", "create", &[Ty::Int]);
+        let _ = super::resolve_static_or_class_method_call(&env, "C", "create", &[], &[Ty::Int]);
     }
 
     #[test]
@@ -314,6 +316,6 @@ mod tests {
                 is_abstract: false,
             },
         );
-        let _ = super::resolve_static_or_class_method_call(&env, "C", "greet", &[Ty::Int]);
+        let _ = super::resolve_static_or_class_method_call(&env, "C", "greet", &[], &[Ty::Int]);
     }
 }

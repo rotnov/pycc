@@ -2143,6 +2143,26 @@ leak through an attribute: across 100 calls `+200` for `self.s = [probe,
 probe]`, `+100` for `self.s = self.s or [probe]` with an empty slot, and
 unchanged when the slot is truthy.
 
+**A native value boxed into an object slot is one more producer.** Part 2 of
+[#1387](https://github.com/rotnov/pycc/issues/1387)
+([#1475](https://github.com/rotnov/pycc/issues/1475)) adds no runtime code:
+MIR wraps an `int`, `float`, `bool`, `str` or pycc-instance value bound,
+rebound (a plain `name = value` only) or stored as an attribute into an
+`object` slot in `ObjectBox`; a call argument and a `return` carry no MIR
+node, and codegen boxes them itself when the slot is `object`
+(`pycc_codegen`'s `object_box::boxes_into`). Either way codegen packs the
+value with the matching `pycc_ext_obj_pack_*` packer, the same ones the
+export boundary uses; a `None` value is the borrowed `Py_None` from
+`pycc_ext_obj_none`, with no packer. A packer's `NULL` routes through the
+function's ordinary error path (the IR label `object_box_failed`), so its
+CPython exception propagates from the seam. The packed reference is new and,
+like every other producer's, is leaked until
+[#1092](https://github.com/rotnov/pycc/issues/1092): the boxing emits no
+decrement. The int packer's inline-range `OverflowError` applies here too
+([#1040](https://github.com/rotnov/pycc/issues/1040)). An instance packs to
+its live carrier when it has one, so the same instance boxed twice is the
+same CPython object, as `is` sees it in CPython.
+
 **`and`/`or` boxes a selected native operand and leaks it.** Part 6 of
 [#1371](https://github.com/rotnov/pycc/issues/1371) types `n or o` and
 `o and n` (`n` an `int`, `float`, `bool` or `str`) as `object`

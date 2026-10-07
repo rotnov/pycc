@@ -33,7 +33,7 @@
 
 use crate::Environment;
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{ProtocolMember, Ty};
+use pycc_hir::{HirExpr, ProtocolMember, Ty};
 
 use super::{check_call_args, expect_class, t0043_not_an_instance, t0044_unknown_member};
 
@@ -69,6 +69,7 @@ pub(crate) fn resolve_method_call(
     env: &Environment,
     base_ty: &Ty,
     method: &str,
+    args: &[HirExpr],
     arg_tys: &[Ty],
 ) -> Result<Ty, Diagnostic> {
     // #380 (PR-20, PEP 544): protocol-typed variable method call.
@@ -85,7 +86,7 @@ pub(crate) fn resolve_method_call(
             } = member
                 && member_name == method
             {
-                check_call_args(method, arg_tys, proto_param_tys, Some(env))?;
+                check_call_args(env, method, args, arg_tys, proto_param_tys, true)?;
                 return Ok(proto_return_ty.clone());
             }
         }
@@ -137,6 +138,7 @@ pub(crate) fn resolve_method_call(
                 mro_def,
                 mangled,
                 method,
+                args,
                 arg_tys,
                 method_param_tys,
             )?;
@@ -187,6 +189,7 @@ mod tests {
             &Ty::Instance(Box::new("Ghost".to_string())),
             "foo",
             &[],
+            &[],
         );
     }
 
@@ -230,6 +233,7 @@ mod tests {
             &env,
             &Ty::Instance(Box::new("Exception".to_string())),
             "__init__",
+            &[],
             &[Ty::Str],
         )
         .expect_err("a direct call on a synthetic class's method must be rejected");

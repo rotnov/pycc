@@ -554,6 +554,9 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // the `Ty::Int`-classified expression `int_temporary_word` passes
         // in; it joins the combined "owning" answer for the same reason.
         | MirExpr::OptionalWrap(_, _)
+        // `ObjectBox`'s `.ty()` is always `Ty::Object` (Part 2 of #1387),
+        // for the same reason as `OptionalWrap` immediately above.
+        | MirExpr::ObjectBox(_)
         // Non-`Ty::Int` `NamedExpr` joins the combined "owning" answer for
         // the same reason the non-`Ty::Int` `Name`/`AttrGet` arms do just
         // above: `int_temporary_word`'s caller has already established

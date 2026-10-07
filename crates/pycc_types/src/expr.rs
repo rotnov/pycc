@@ -707,7 +707,7 @@ pub(crate) fn infer_expr_in(
             // `lower_top_level_item`) -- so trying the class table first here
             // is unambiguous, not merely an assumption.
             if env.lookup_class(callee).is_some() {
-                return class::resolve_instantiation(env, callee, arg_tys);
+                return class::resolve_instantiation(env, callee, args, arg_tys);
             }
             // D-133/D-134: a call to a PEP 695 generic function is resolved
             // through call-site substitution, not through the ordinary
@@ -848,7 +848,9 @@ pub(crate) fn infer_expr_in(
                 ).with_help(format!("pass exactly {} argument(s)", param_tys.len())));
             }
             for (i, (arg_ty, param_ty)) in arg_tys.iter().zip(param_tys.iter()).enumerate() {
-                if !class::is_assignable_env(env, arg_ty, param_ty) {
+                if !class::is_assignable_env(env, arg_ty, param_ty)
+                    && !crate::object_box::admits_value(env, &args[i], arg_ty, param_ty)?
+                {
                     // #380 (PR-20): if the mismatch involves a protocol,
                     // produce a detailed T0046 conformance error.
                     let diag = if matches!(param_ty, Ty::Protocol(_)) || matches!(arg_ty, Ty::Protocol(_)) {
@@ -1090,6 +1092,7 @@ pub(crate) fn infer_expr_in(
                     env,
                     class_name,
                     "__class_getitem__",
+                    std::slice::from_ref(index.as_ref()),
                     &[index_ty],
                 );
             }
@@ -1642,7 +1645,7 @@ pub(crate) fn infer_expr_in(
                     .iter()
                     .map(|arg| infer_expr_in(env, local_names, arg))
                     .collect::<Result<Vec<_>, _>>()?;
-                return class::resolve_super_method_call(env, method, &arg_tys);
+                return class::resolve_super_method_call(env, method, args, &arg_tys);
             }
             // Part 1 of #1284: `C.name(args)` reaching a
             // `staticmethod(<foreign callable>)` class attribute. Runs
@@ -1682,7 +1685,7 @@ pub(crate) fn infer_expr_in(
                     .map(|arg| infer_expr_in(env, local_names, arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 return class::resolve_static_or_class_method_call(
-                    env, class_name, method, &arg_tys,
+                    env, class_name, method, args, &arg_tys,
                 );
             }
             let base_ty = infer_expr_in(env, local_names, base)?;
@@ -1730,10 +1733,10 @@ pub(crate) fn infer_expr_in(
                 && class::has_static_or_class_method(env, class_name, method)
             {
                 return class::resolve_static_or_class_method_call(
-                    env, class_name, method, &arg_tys,
+                    env, class_name, method, args, &arg_tys,
                 );
             }
-            class::resolve_method_call(env, &base_ty, method, &arg_tys)
+            class::resolve_method_call(env, &base_ty, method, args, &arg_tys)
         }
         // PEP 695 (#387): `C[type_arg](args)` — a generic class
         // instantiation. The result type is `Ty::Instance(class)` — the

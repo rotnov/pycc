@@ -130,9 +130,9 @@ fn an_argument_error_in_a_call_of_a_local_object_binding_propagates() {
 }
 
 /// A function-local binding keeps the name's type fixed exactly like a
-/// module-level one (`binding_tests.rs`), so mixing `object` with another
-/// type is the ordinary redefinition refusal in either order and against an
-/// annotation.
+/// module-level one (`binding_tests.rs`): an `object` value into a native
+/// name is the ordinary redefinition refusal, also against an annotation,
+/// and the other order boxes the native value (#1475).
 #[test]
 fn a_function_local_type_change_is_refused_like_any_other() {
     let def = "def g() -> None:\n";
@@ -141,11 +141,10 @@ fn a_function_local_type_change_is_refused_like_any_other() {
         "T0023",
         "cannot assign `object` to `x`, previously inferred as `int`",
     );
-    refused(
-        &format!("{IMPORT}{def}    x = json.loads(\"1\")\n    x = 1\n"),
-        "T0023",
-        "cannot assign `int` to `x`, previously inferred as `object`",
-    );
+    // #1475: a native value is boxed into the `object` name.
+    admitted(&format!(
+        "{IMPORT}{def}    x = json.loads(\"1\")\n    x = 1\n"
+    ));
     refused(
         &format!("{IMPORT}{def}    x: int = json.loads(\"1\")\n"),
         "T0025",

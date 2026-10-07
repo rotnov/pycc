@@ -41,8 +41,9 @@ pub(crate) fn check_module_object_loop(
     // code minted: a `for` target *is* an assignment in Python, and
     // the message ("cannot assign ... previously inferred as ...")
     // describes this rebinding exactly. The mirror case -- the loop
-    // first, then `x = 5` -- already reports `T0023` from
-    // `check_assignment`, so this makes the pair symmetric.
+    // first, then `x = 5` -- is a plain rebinding of an `object` name,
+    // which since #1475 boxes the `5` into that same `PyObject *` slot
+    // (`check_assignment_boxing`), so it has a representable lowering.
     // A *declared but never assigned* target is the other half of
     // the same rule, and `lookup_any` does not see it: `x: int`
     // puts `x` in `declared`, not `bindings`. `check_assignment`
