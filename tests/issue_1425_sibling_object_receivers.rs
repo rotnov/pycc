@@ -132,9 +132,8 @@ fn every_position_in_the_importer_passes_check() {
 }
 
 /// Inherited admission covers the importer's whole body, so a function
-/// defined above the import that binds the object passes too -- unlike a
-/// module's own foreign import, which admits only from its statement down
-/// (#1482).
+/// defined above the import that binds the object passes too -- as it does
+/// above a module's own foreign import since #1482.
 #[test]
 fn inherited_admission_covers_code_above_the_import() {
     assert_passes(
@@ -213,30 +212,6 @@ fn native_containers_beside_a_sibling_import_keep_their_diagnostics() {
         message(&sibling)
     );
     assert_eq!(message(&sibling), message(&own));
-}
-
-/// Issue #1482 (out of scope here): a call lowered above the module's
-/// *own* first foreign import is still refused, although the program is
-/// valid CPython. The fix for #1482 flips this test.
-#[test]
-fn issue_1482_a_call_above_the_module_s_own_foreign_import_is_still_refused() {
-    for (tag, entry, needle) in [
-        (
-            "obj_1482_attr",
-            "def f() -> None:\n    gc.garbage.append(1)\n\n\nimport gc\n\nf()\n",
-            "error[I0404]: calling `.append()` on a CPython object's attribute is not supported yet",
-        ),
-        (
-            "obj_1482_name",
-            "def f() -> None:\n    g.append(1)\n\n\nimport gc\n\ng = gc\nf()\n",
-            "error[I0404]: using `g`, which is bound to a CPython object",
-        ),
-    ] {
-        let output = check(tag, &[], entry);
-        assert!(!output.status.success(), "{entry}");
-        let text = rendered(&output);
-        assert!(text.contains(needle), "{entry}: {text}");
-    }
 }
 
 /// The embedded program: deque `append`/`pop`, OrderedDict `get`,
