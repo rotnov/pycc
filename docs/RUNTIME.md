@@ -583,8 +583,8 @@ fresh module object), expose every export. Three residuals remain: a class
 that owns no compiled item of its own (`class E(Base): pass`) is published
 as soon as its bases' methods are bound, possibly before its own class
 statement (over-visibility, never a crash); the synthesized exception
-classes are still published before the body, as above (they carry no
-`fnptr_` slot); and a class the body never published is bound after it,
+classes are still created and added in `Py_mod_exec` before the body runs
+(they carry no `fnptr_` slot, so an early read is safe); and a class the body never published is bound after it,
 before the hooks, by a safety net that no ordinary program reaches. Every
 generated wrapper and `tp_init` now opens with a null guard on its
 `fnptr_` slot, so a call that still reaches an unbound slot raises a
