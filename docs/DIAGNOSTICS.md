@@ -195,7 +195,24 @@ nor a project package; a dotted `X` under a project root keeps the
 by its spelling is refused with the from form's own C0001 (``binding the
 CPython object `builtins.range` to `range`, a name pycc resolves by its
 spelling (...), is not supported yet``), against the same canonical lists --
-so `from os import List` is refused like `from os import range`.
+so `from os import List` is refused like `from os import range`. The two
+buffer-carrier pairs are the exception
+([#1380](https://github.com/rotnov/pycc/issues/1380), D-244): an absolute,
+unaliased `from numpy import ndarray` or `from numpy.typing import NDArray`
+is admitted and keeps the spelling's buffer-annotation meaning, while
+`from numpy import NDArray` or `from numpy.typing import ndarray` is still
+refused. In a module that writes a carrier import, every read of the
+spelling outside a type annotation is refused at the read with ``reading
+`NDArray` outside a type annotation is not supported yet: `from numpy.typing
+import NDArray` keeps the name's buffer-annotation meaning in pycc (D-244),
+so it may only annotate`` (a call `ndarray(n)`, `isinstance(a, ndarray)`,
+`x = NDArray`, a default value, a decorator or a base class, above or below
+the import), and every other binding of it (a `def`, a `class`, a parameter,
+an assignment, a second import, an `except ... as`, a match capture,
+`type NDArray = ...`) is refused at the binding with ``binding `ndarray` in a
+module that imports it with `from numpy import ndarray` is not supported yet:
+the import keeps the name's buffer-annotation meaning in pycc (D-244)``. Both
+are C0001.
 Every other from-import shape of such a module keeps its C0001: an aliased
 name (`from X import a as b`, [#963](https://github.com/rotnov/pycc/issues/963)),
 the wildcard, and a from-import inside a function, class, loop, `with` or
