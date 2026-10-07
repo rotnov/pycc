@@ -694,10 +694,11 @@ pub fn ext_thunk_symbol(name: &str) -> String {
 /// [`ext_thunk_required`], so a disagreement emits the wrong C declaration
 /// for a `tuple`-carrying method.
 ///
-/// Since #1467 the one name class this answers `true` for beyond that
-/// lexical verdict is the two PEP 562 module hooks, `__getattr__` and
-/// `__dir__`: the driver admits them through `is_module_hook`, not through
-/// `classify_export_name`, so the parity test compares this function with
+/// Two name classes are answered `true` beyond that lexical verdict: the
+/// PEP 562 module hooks `__getattr__` and `__dir__` (#1467), which the
+/// driver admits through `is_module_hook`, and `<Class>.<slot dunder>`
+/// (#1427), which it admits through `is_slot_dunder_method`, neither through
+/// `classify_export_name`. So the parity test compares this function with
 /// `classify_export_name(name).is_some() || is_module_hook(name) ||
 /// is_slot_dunder_method(name)` -- the last for #1427's comparison and
 /// `__hash__` slots, admitted for any non-empty class segment.

@@ -847,6 +847,17 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
             "predicates disagree on {name:?}"
         );
     }
+    // #1427: every slot dunder the driver installs, on a public and a
+    // private class, so the two crates' `SLOT_DUNDERS` lists cannot drift.
+    for dunder in SLOT_DUNDERS {
+        for name in [format!("Grid.{dunder}"), format!("_Grid.{dunder}")] {
+            assert!(is_slot_dunder_method(&name), "{name:?}");
+            assert!(
+                pycc_codegen::is_ext_exportable_name(&name),
+                "codegen does not export {name:?}"
+            );
+        }
+    }
     assert!(classify_export_name("Grid.scale.0super_Base.classmethod").is_none());
 }
 

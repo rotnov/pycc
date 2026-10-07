@@ -141,9 +141,25 @@ fn own_binding<'m>(def: &'m HirClassDef, name: &str) -> Option<Binding<'m>> {
     }
 }
 
-/// The `C0003` for a slot dunder the artifact cannot install. Span-less for
-/// the reason `capability_gap` gives.
+/// The `C0003` for a slot dunder the artifact cannot install, with the
+/// instance-method remedy. Span-less for the reason `capability_gap` gives.
 fn slot_dunder_gap(subject: &str, name: &str, class: &str, why: &str) -> Diagnostic {
+    let fix = format!(
+        "define it as an instance method `def {name}(self, ...)` whose signature the boundary \
+         carries ({CARRIABLE_TYPES})"
+    );
+    slot_dunder_gap_with(subject, name, class, why, &fix)
+}
+
+/// [`slot_dunder_gap`] with its own `fix`, for a refusal an instance
+/// method does not cure (a PEP 695 generic class).
+fn slot_dunder_gap_with(
+    subject: &str,
+    name: &str,
+    class: &str,
+    why: &str,
+    fix: &str,
+) -> Diagnostic {
     Diagnostic {
         code: EXT_CAPABILITY_CODE,
         severity: Severity::Error,
@@ -151,9 +167,7 @@ fn slot_dunder_gap(subject: &str, name: &str, class: &str, why: &str) -> Diagnos
             "--ext cannot install `{subject}` as the host-visible `{name}` of `{class}` \
              instances: {why} -- CPython calls `{name}` implicitly (for `==`, `<`, `in`, \
              `hash()` or a dict key), so leaving it out of the artifact would silently answer \
-             by identity instead -- define it as an instance method `def {name}(self, ...)` \
-             whose signature the boundary carries ({CARRIABLE_TYPES}), or build without --ext \
-             (#1427)"
+             by identity instead -- {fix}, or build without --ext (#1427)"
         ),
         span: None,
         label: None,
@@ -195,7 +209,8 @@ fn slot_export(
             "`{class}` is or derives from a PEP 695 generic class, whose specializations all \
              cross as one carrier type"
         );
-        return Err(slot_dunder_gap(&subject, name, class, &why));
+        let fix = "declare the class with an erased `Generic[T]` base instead of PEP 695 syntax";
+        return Err(slot_dunder_gap_with(&subject, name, class, &why, fix));
     }
     let item = inherited::receiver_exact_member(module, class, name, mangled);
     // The wrapper's call form must match codegen's: an item this predicate

@@ -222,7 +222,9 @@ fn a_generic_class_and_an_uncarriable_signature_are_refused() {
     assert!(
         generic
             .iter()
-            .any(|message| message.contains("PEP 695 generic class")),
+            .any(|message| message.contains("PEP 695 generic class")
+                && message.contains("erased `Generic[T]` base")
+                && !message.contains("define it as an instance method")),
         "{generic:?}"
     );
     let uncarriable = refusals(

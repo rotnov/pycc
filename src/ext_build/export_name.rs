@@ -75,11 +75,13 @@ pub(crate) enum ExportName {
 /// `extern`, so a disagreement emits the wrong C declaration for a
 /// `tuple`-carrying method rather than failing the build.
 ///
-/// The two PEP 562 module hooks (#1467) are deliberately **not** admitted
-/// here: the mirror admits `__getattr__` and `__dir__` lexically, the
-/// driver admits them through [`super::is_module_hook`] only when the entry
-/// module defines them, and the parity test compares the mirror with this
-/// verdict `|| is_module_hook(name)`.
+/// The two PEP 562 module hooks (#1467) and the comparison and hash slot
+/// dunders (#1427) are deliberately **not** admitted here: the mirror
+/// admits `__getattr__`, `__dir__` and `<Class>.<slot dunder>` lexically,
+/// the driver admits the hooks through [`super::is_module_hook`] only when
+/// the entry module defines them and the dunders through
+/// `super::collect_slot_dunders`, and the parity test compares the mirror
+/// with this verdict `|| is_module_hook(name) || is_slot_dunder_method(name)`.
 ///
 /// **Nothing outside `name` may enter this verdict.** The mirror receives a
 /// bare `&str` and cannot see `HirModule::class_defs`, so a verdict that
@@ -91,7 +93,9 @@ pub(crate) enum ExportName {
 /// thunk is emitted for a name no wrapper calls.
 ///
 /// **Refused as representation, here, lexically:** a monomorphized generic
-/// specialization (`0gen_`), a private class or method name, an empty
+/// specialization (`0gen_`), a private class or method name (a private
+/// class's slot dunder, `_Grid.__eq__`, is the mirror's one exception, per
+/// the paragraph above), an empty
 /// segment, a fourth segment, and `<Class>.<property>.setter` -- a
 /// `@property` is attribute syntax on the host side, not a method table
 /// entry. #1145 moved the *rest* of the old refusal list into the driver.

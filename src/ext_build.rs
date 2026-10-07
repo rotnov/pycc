@@ -426,9 +426,9 @@ pub(crate) use method_types::*;
 pub(crate) use module_hooks::{EntryHooks, is_module_hook};
 mod publication;
 mod richcompare;
-#[cfg(test)]
-pub(crate) use richcompare::is_slot_dunder_method;
 pub(crate) use richcompare::{ExtSlotDunders, collect_slot_dunders};
+#[cfg(test)]
+pub(crate) use richcompare::{SLOT_DUNDERS, is_slot_dunder_method};
 
 use publication::namespace_owner;
 pub(crate) use publication::{ExtPublishedClass, collect_class_publications};

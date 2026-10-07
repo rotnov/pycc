@@ -189,13 +189,14 @@ the entry module is in the export set although it is a dunder, and \
 renaming it would silently stop the host from calling it, so its fixes are \
 to change its signature or to build without `--ext`. The comparison and \
 hash dunders (`__eq__`, `__ne__`, `__lt__`, `__le__`, `__gt__`, `__ge__`, \
-`__hash__`) of any compiled class whose instances can reach the host are a \
-second such case (#1427): they become the carrier type's comparison and \
-hash slots, so one bound as a `@staticmethod`, `@classmethod`, `@property` \
-or class attribute, one with an uncarriable signature, or one on a PEP 695 \
-generic class is a C0003 whose fix is to make it an instance method the \
-boundary can carry, never to drop it, which would answer `==` and `hash()` \
-by identity.",
+`__hash__`) of every compiled class of the module, since an instance of \
+any class can reach the host, are a second such case (#1427): they become \
+the carrier type's comparison and hash slots, so one bound as a \
+`@staticmethod`, `@classmethod`, `@property` or class attribute, or one \
+with an uncarriable signature, is a C0003 whose fix is to make it an \
+instance method the boundary can carry, and one on a PEP 695 generic class \
+is a C0003 whose fix is an erased `Generic[T]` base instead of PEP 695 \
+syntax; never drop it, which would answer `==` and `hash()` by identity.",
         // The example has to name a signature the boundary still refuses
         // *and* that `native` mode compiles, since the explanation above
         // rests on exactly that contrast. It must be re-pointed whenever
