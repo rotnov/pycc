@@ -266,8 +266,9 @@ fn an_identical_from_import_twice_is_accepted() {
 
 #[test]
 fn shadowing_a_nested_from_import_follows_the_top_level_rule() {
+    // The `except ImportError: product = None` fallback is admitted since
+    // #1485 (`tests/fallback.rs`).
     for source in [
-        "try:\n    from itertools import product\nexcept ImportError:\n    product = None\n",
         "if c:\n    from itertools import product\nproduct = 1\n",
         "if c:\n    from itertools import product\nelse:\n    from functools import product\n",
         "import product\nif c:\n    from product import product\n",

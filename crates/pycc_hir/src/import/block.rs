@@ -18,6 +18,7 @@
 //! the guard or `try` rules here applies to both.
 
 use super::ResolvedImport;
+use super::fallback::IMPORT_ERROR_CATCHERS;
 use super::{FuturePosition, lower_import_stmt, statement_span};
 use crate::stmt::is_type_checking_guard;
 use crate::{ForeignImportSite, HirStmt, ImportBinding, ResolvedImports};
@@ -191,13 +192,6 @@ fn lower_nested_import(
         Err(diagnostic) => found.deferred.push((span, diagnostic)),
     }
 }
-
-/// The exception names whose handler catches a failed `import`: the
-/// `ModuleNotFoundError` pycc raises, its base `ImportError`, and
-/// `Exception`. `BaseException` is refused by type checking (`T0021`), and a
-/// module-level rebinding of any of these names is refused too, so matching
-/// by spelling is sound.
-const IMPORT_ERROR_CATCHERS: [&str; 3] = ["ImportError", "ModuleNotFoundError", "Exception"];
 
 /// Whether any of `handlers` catches a failed `import` (#1290): a bare
 /// `except:`, or a handler whose type is one of [`IMPORT_ERROR_CATCHERS`]

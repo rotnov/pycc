@@ -14,6 +14,7 @@ mod annotations_foreign;
 mod block;
 mod block_from;
 mod carrier;
+mod fallback;
 mod from_foreign;
 mod multi;
 mod object_receivers;

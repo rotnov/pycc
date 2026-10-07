@@ -248,7 +248,7 @@
 
 use crate::Environment;
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{ForeignImportSite, FromImport, HirExpr, ImportBinding, Ty};
+use pycc_hir::{ForeignImportSite, FromImport, HirExpr, HirStmt, ImportBinding, Ty};
 
 /// Whether a declared annotation is a fixed-arity tuple whose every
 /// element is `float` -- the one annotation a [`Ty::Object`] initializer
@@ -612,6 +612,34 @@ pub(crate) fn bind_block_import(
     }
 }
 
+/// Seeds `handler_env` for an `except ImportError` fallback (#1485): each
+/// name a foreign import written directly in the `try` body binds, and the
+/// handler body rebinds, is possibly bound as `object` on entry to the
+/// handler -- the import may have run before the failure, and a fallback
+/// rebinding stores into the same `object` slot. `check_assignment` then
+/// boxes the handler's `name = None` (D-258's #1475 amendment) rather than
+/// typing it as a fresh `None` binding the `try` join would refuse. A
+/// handler that only reads the name is not seeded, so its read stays the
+/// unbound `T0021`; a name already bound before the `try` keeps its type.
+/// HIR admits only the fallback shapes (`crate::import::fallback_groups` in
+/// `pycc_hir`); every other rebinding of a foreign import is refused there.
+pub(crate) fn seed_fallback_rebindings(
+    handler_env: &mut Environment,
+    body: &[HirStmt],
+    handler_body: &[HirStmt],
+) {
+    let rebound = pycc_hir::killed_names(handler_body);
+    for stmt in body {
+        if let HirStmt::ForeignImport { bindings, .. } = stmt {
+            for (local, _, _) in bindings {
+                if rebound.contains(local) && handler_env.lookup_any(local).is_none() {
+                    handler_env.bind_maybe(local.clone(), Ty::Object);
+                }
+            }
+        }
+    }
+}
+
 pub(crate) mod attr_store;
 pub(crate) mod compare;
 pub(crate) mod for_loop;
@@ -627,6 +655,8 @@ mod binding_tests;
 mod call_tests;
 #[cfg(test)]
 mod container_names_tests;
+#[cfg(test)]
+mod fallback_tests;
 #[cfg(test)]
 mod function_local_tests;
 #[cfg(test)]

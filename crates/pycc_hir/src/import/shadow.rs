@@ -3,6 +3,7 @@
 //! of #1080). Extracted from `import.rs` (#1291), which also exempted an
 //! identical foreign pair from the rule.
 
+use super::FallbackGroup;
 use crate::ImportBinding;
 use pycc_diag::{Diagnostic, Span};
 
@@ -20,7 +21,10 @@ pub(crate) fn import_local_name(binding: &ImportBinding) -> &str {
 }
 
 /// Refuses a module in which any other top-level binding spells the local
-/// name of a foreign import (Part 1 of #1026, PR 1c of #1080).
+/// name of a foreign import (Part 1 of #1026, PR 1c of #1080), except the
+/// #1485 `except ImportError` fallback of the import's own `try`
+/// (`super::fallback`, `docs/RUNTIME.md`), whose `N = None` is no
+/// definition and whose fallback import is an alternative to the body's.
 ///
 /// Part 1's containment invariant is that the single producer of a
 /// `Ty::Object` value is a read of a foreign binding, so refusing that read
@@ -61,12 +65,30 @@ pub(crate) fn import_local_name(binding: &ImportBinding) -> &str {
 /// objects to `copy`, so it is refused too, while `from copy import copy`
 /// written twice is the identical pair.
 ///
+/// The one other exemption is the optional-dependency fallback (#1485):
+/// `try: from A import N` / `except ImportError: N = None` (or `from B
+/// import N`). `fallback_groups` holds every such name with the span and
+/// arm of each of its `try`'s import statements
+/// ([`super::fallback_groups`]). The handler's `N = None` is never in
+/// `definition_spans` (`module::lower_top_level_item` skips a group name),
+/// and two foreign imports of `N` do not shadow each other when one group
+/// holds both *in different arms*: the body and a handler, or two
+/// handlers, are alternatives, so only one of them binds on any run. Two
+/// different imports in the same arm are still the sequential rebinding
+/// refused above, and so is an import of `N` anywhere outside the group's
+/// `try`, because the exemption is keyed by statement span, not by name.
+/// The invariant the rule protects survives: every runtime binding of a
+/// fallback name is a foreign import or a boxed `None` written in the same
+/// `try`, so its module global slot is `object` on every path, and the
+/// body's import keeps the name in `program::link`'s foreign table.
+///
 /// At most one diagnostic per name, so a duplicated import reports once. A
 /// definition's span is preferred over the import's when both exist: it is
 /// the statement that is unusual, the import being ordinary on its own.
 pub(crate) fn reject_shadowed_foreign_imports(
     imports: &[ImportBinding],
     definition_spans: &[(String, Span)],
+    fallback_groups: &[FallbackGroup],
 ) -> Vec<Diagnostic> {
     let mut reported: Vec<&str> = Vec::new();
     let mut diagnostics = Vec::new();
@@ -91,6 +113,10 @@ pub(crate) fn reject_shadowed_foreign_imports(
         let shadowed_by_import = imports.iter().enumerate().any(|(other, candidate)| {
             other != index
                 && import_local_name(candidate) == local_name
+                && !matches!(candidate, ImportBinding::Foreign { span: other_span, .. }
+                    if fallback_groups
+                        .iter()
+                        .any(|group| group.are_alternatives(local_name, *span, *other_span)))
                 && !matches!(
                     candidate,
                     ImportBinding::Foreign { module_path: other_path, from: other_from, .. }

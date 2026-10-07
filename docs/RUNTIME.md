@@ -1347,11 +1347,25 @@ foreign `from X import a, b`: the driver answers a nested from-import only
 when the top-level form would be foreign, so a project or `pycc_std` module
 named there keeps the block-body `C0001` and is never loaded, and every
 refusal of the top-level form is reported at the nested statement
-(`tests/issue_1383_block_from_import.rs`). The optional-dependency idiom
-`try: from X import a` / `except ImportError: a = None` is still refused,
-because the handler's assignment is a second definition of the foreign name
-(the shadowing rule below); a handler that does not rebind the name compiles,
-and a read of the name after the `try` is a may-be-unbound `T0041`. Since
+(`tests/issue_1383_block_from_import.rs`). Since
+[#1485](https://github.com/rotnov/pycc/issues/1485) the optional-dependency
+idiom compiles: when a module-level `try` body directly holds a foreign
+`from X import a` or `import X as a`, a handler of that `try` that catches a
+failed import (`except ImportError`, `ModuleNotFoundError`, `Exception`, a
+tuple naming one, or a bare `except:`) may rebind `a` with a direct `a = None`
+(also as one target of a chained `a = b = None`) or a direct fallback
+`from Y import a` / `import Y as a`. The name is whichever
+binding ran and is `object` on every path after the `try`: the handler runs
+through the #1293 bridge below, a `None` is boxed into the same `object` slot
+(D-258's #1475 amendment), so `if a is None:` behaves as in CPython. Every other
+rebinding is still the shadowing rule below (`else`, `finally`, a handler that
+does not catch a failed import, an assignment nested in the handler's own
+block, `except ... as a`, or a later top-level binding), and a qualifying
+handler that rebinds `a` to another value is a `C0001` of its own wording
+(`tests/issue_1485_import_fallback.rs`). A handler that does not mention the
+name compiles as before, and a read of the name after such a `try` is a
+may-be-unbound `T0041`; a handler that only reads the name without rebinding
+it is a `T0021` (the name is not defined there). Since
 [#1293](https://github.com/rotnov/pycc/issues/1293) such a failure can be
 caught. When the import raises an `ImportError`, the shim's
 `pycc_ext_import_error_bridge` translates it into a pending pycc exception
@@ -2508,7 +2522,16 @@ the second store simply overwrites the slot with a new reference, as the
 duplicate paragraph above describes for linked modules. Two foreign imports
 that bind one local name to *different* modules (`import a as x`, then
 `import b as x`) are refused like any other shadow, within one module and,
-since [#1291](https://github.com/rotnov/pycc/issues/1291), across linked modules too. A name is reported once however many
+since [#1291](https://github.com/rotnov/pycc/issues/1291), across linked modules too. The one exemption since
+[#1485](https://github.com/rotnov/pycc/issues/1485) is the `except ImportError` fallback described above: the
+handler's `N = None` is not a definition, and a fallback import in a qualifying
+handler is an alternative to the `try` body's import of `N`, not a rebinding
+of it: both store into the same `object` slot, and every read after the `try`
+is typed `object` whichever store ran last. The exemption is keyed
+by the two import statements and their arms of one `try`
+(`pycc_hir::import::fallback`), so two imports of `N` in one arm, or two `try`
+statements importing different objects, are still refused; across linked
+modules the name keeps the rule unchanged. A name is reported once however many
 statements bind it.
 The positional binding above is what makes the artifact honest about *when*
 the import runs; it is not enough to make the compiler honest about *which*

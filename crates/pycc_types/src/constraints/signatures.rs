@@ -319,7 +319,10 @@ pub(crate) fn infer_function_signatures_with_solver_all(
     // refused outright at lowering
     // (`pycc_hir::import::reject_shadowed_foreign_imports`), so no `def` or
     // assignment can precede or follow the import under that name and the
-    // seed can never be stale.
+    // seed can never be stale. The one admitted rebinding, an
+    // `except ImportError` fallback of the same `try` (#1485,
+    // `docs/RUNTIME.md`), stores a boxed `None` or another foreign object
+    // into the same `object` slot, so it keeps the seed right too.
     for (index, item) in hir.items.iter().enumerate() {
         match item {
             HirItem::TopLevelStmt(stmt) => {
