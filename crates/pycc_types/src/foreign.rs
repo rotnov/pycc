@@ -312,11 +312,12 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              positional or keyword arguments \
              (including a call of a subscript result), `len`, truth \
              testing, a \
-             scalar- or object-key subscript load, a slice load or deletion with scalar or object \
-             bounds, a rich comparison with an object or \
-             scalar operand, an identity test against an object or `None`, \
+             scalar-, object- or class-instance-key subscript load, a slice load or deletion \
+             with scalar or object bounds, a rich comparison with an object, scalar or \
+             class-instance operand, an identity test against an object or `None`, \
              a membership test of a scalar or object item in an object, \
-             a list display of scalar or object elements bound to an object slot, \
+             a list display of scalar, object or class-instance elements bound to an object \
+             slot, \
              `and`/`or` with an object or scalar operand, \
              `isinstance` against a foreign class, a plain pycc class or \
              `int`/`float`/`bool`/`str`/`list`/`dict`/`tuple`, `for` iteration, a list \
