@@ -21,7 +21,10 @@ pub(crate) fn import_local_name(binding: &ImportBinding) -> &str {
 }
 
 /// Refuses a module in which any other top-level binding spells the local
-/// name of a foreign import (Part 1 of #1026, PR 1c of #1080).
+/// name of a foreign import (Part 1 of #1026, PR 1c of #1080), except the
+/// #1485 `except ImportError` fallback of the import's own `try`
+/// (`super::fallback`, `docs/RUNTIME.md`), whose `N = None` is no
+/// definition and whose fallback import is an alternative to the body's.
 ///
 /// Part 1's containment invariant is that the single producer of a
 /// `Ty::Object` value is a read of a foreign binding, so refusing that read
