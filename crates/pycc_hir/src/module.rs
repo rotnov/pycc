@@ -372,7 +372,11 @@ pub fn lower_module(
     // #1380: the items that failed (reported or cascade-skipped), so the
     // carrier scan below never reports a second diagnostic for one.
     let mut failed_items: Vec<usize> = Vec::new();
+    // #1380: where each item's diagnostics begin, so the carrier scan's
+    // diagnostics can be spliced back into per-item source order.
+    let mut item_starts: Vec<usize> = Vec::with_capacity(module.body.len());
     for (index, stmt) in module.body.iter().enumerate() {
+        item_starts.push(diagnostics.len());
         let position = if index < prologue_len {
             FuturePosition::Prologue
         } else {
@@ -469,6 +473,7 @@ pub fn lower_module(
             ));
         }
     }
+    let loop_end = diagnostics.len();
     // Part 1 of #1026, PR 1c of #1080: the whole item list exists only
     // here, so this is the first point at which both orders of a shadowed
     // foreign import -- a `def`/assignment above it and one below it -- are
@@ -480,11 +485,17 @@ pub fn lower_module(
     ));
     // #1380: a buffer-carrier from-import binds a hidden name, so every
     // other use of its spelling -- above or below the import -- is refused
-    // here, where the whole module is visible at once.
-    diagnostics.extend(crate::import::reject_carrier_misuse(
+    // here, where the whole module is visible at once, then spliced in
+    // after the diagnostics of the item each refusal sits in, so the list
+    // keeps per-item source order.
+    let carrier_misuse = crate::import::reject_carrier_misuse(&module.body, &failed_items);
+    let mut diagnostics = crate::import::splice_by_item(
         &module.body,
-        &failed_items,
-    ));
+        &item_starts,
+        loop_end,
+        diagnostics,
+        carrier_misuse,
+    );
     // #1244: the module-level `del` late-binding rule, after the per-item
     // loop so an earlier per-item failure still reports first.
     let deleted_top_level =

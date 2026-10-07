@@ -84,6 +84,45 @@ pub(crate) fn reject_carrier_misuse(body: &[Stmt], failed: &[usize]) -> Vec<Diag
     diagnostics
 }
 
+/// Splices `carrier` -- [`reject_carrier_misuse`]'s diagnostics, sorted by
+/// span -- into the module's `diagnostics` right after those of the
+/// module-level item each one sits in, so the list keeps the per-item
+/// source order `docs/DIAGNOSTICS.md` documents (#1380). `item_starts[i]`
+/// is the length of `diagnostics` when item `i`'s turn began, and every
+/// diagnostic from `loop_end` on, collected after the item loop, stays
+/// last.
+pub(crate) fn splice_by_item(
+    body: &[Stmt],
+    item_starts: &[usize],
+    loop_end: usize,
+    mut diagnostics: Vec<Diagnostic>,
+    carrier: Vec<Diagnostic>,
+) -> Vec<Diagnostic> {
+    if carrier.is_empty() {
+        return diagnostics;
+    }
+    let after_loop = diagnostics.split_off(loop_end);
+    let mut collected = diagnostics.into_iter();
+    let mut carrier = carrier.into_iter().peekable();
+    let item_of = |diagnostic: &Diagnostic| {
+        let start = diagnostic.span.map_or(0, |span| span.start);
+        body.partition_point(|stmt| pycc_ast::stmt_range(stmt).end <= start)
+    };
+    let mut merged = Vec::with_capacity(collected.len() + carrier.len() + after_loop.len());
+    let mut taken = 0;
+    for index in 0..item_starts.len() {
+        let end = item_starts.get(index + 1).copied().unwrap_or(loop_end);
+        merged.extend(collected.by_ref().take(end - taken));
+        taken = end;
+        while let Some(diagnostic) = carrier.next_if(|diagnostic| item_of(diagnostic) == index) {
+            merged.push(diagnostic);
+        }
+    }
+    merged.extend(carrier);
+    merged.extend(after_loop);
+    merged
+}
+
 /// Appends the `(spelling, module)` of each carrier from-import `stmt`
 /// is, or holds in a nested `if`/`try` body (every clause, handler,
 /// `else` and `finally`), to `carriers`. A function or class body is not

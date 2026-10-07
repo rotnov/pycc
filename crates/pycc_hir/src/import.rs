@@ -22,7 +22,7 @@ mod spelling;
 mod type_alias;
 
 pub(crate) use block::{lower_block_imports, nested_foreign_import};
-pub(crate) use carrier::reject_carrier_misuse;
+pub(crate) use carrier::{reject_carrier_misuse, splice_by_item};
 pub use request::{ProjectImportRequest, project_import_requests};
 pub(crate) use shadow::{import_local_name, reject_shadowed_foreign_imports};
 pub(crate) use type_alias::{lower_legacy_type_alias_ann_assign, lower_type_alias_stmt};

@@ -6,7 +6,7 @@
 use super::from_foreign::lower_foreign;
 use super::*;
 use crate::FromImport;
-use crate::import::reject_carrier_misuse;
+use crate::import::{reject_carrier_misuse, splice_by_item};
 
 /// Every module a fixture may import, answered as foreign.
 const FOREIGN: &[&str] = &["numpy", "numpy.typing", "other", "ndarray"];
@@ -484,4 +484,55 @@ fn the_messages_name_the_import_and_the_decision() {
         "binding `ndarray` in a module that imports it with `from numpy import ndarray` is not \
          supported yet: the import keeps the name's buffer-annotation meaning in pycc (D-244)"
     );
+}
+
+/// The carrier scan runs after the item loop, but its diagnostics keep the
+/// per-item source order: a line-1 read precedes a later item's own
+/// lowering failure.
+#[test]
+fn a_carrier_diagnostic_keeps_its_item_order() {
+    let source = "x = NDArray\nasync def g() -> None:\n    pass\n\
+                  from numpy.typing import NDArray\n";
+    let diagnostics = lower_foreign(source, FOREIGN).expect_err("refused");
+    let starts: Vec<u32> = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.span.expect("spanned").start)
+        .collect();
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .starts_with("reading `NDArray` outside a type annotation"),
+        "{diagnostics:#?}"
+    );
+    assert!(starts[0] < starts[1], "{diagnostics:#?}");
+}
+
+/// Each carrier diagnostic lands after the diagnostics its item collected
+/// in the loop, and every diagnostic collected after the loop stays last.
+#[test]
+fn splice_by_item_places_each_diagnostic_after_its_item() {
+    let source = "a = 1\nb = 2\nc = 3\n";
+    let body = &parse(source).body;
+    let at = |message: &str, start: u32| crate::unsupported(message, start..start + 1);
+    let collected = vec![at("item 0", 0), at("item 2", 12), at("after loop", 0)];
+    let carrier = vec![at("carrier 0", 0), at("carrier 1", 6), at("carrier 2", 12)];
+    let merged = splice_by_item(body, &[0, 1, 1], 2, collected, carrier);
+    let messages: Vec<&str> = merged
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect();
+    assert_eq!(
+        messages,
+        [
+            "item 0",
+            "carrier 0",
+            "carrier 1",
+            "item 2",
+            "carrier 2",
+            "after loop"
+        ]
+    );
+    let untouched = splice_by_item(body, &[0, 1, 1], 2, vec![at("only", 0)], Vec::new());
+    assert_eq!(untouched.len(), 1);
 }
