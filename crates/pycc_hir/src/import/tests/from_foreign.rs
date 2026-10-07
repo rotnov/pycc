@@ -101,11 +101,13 @@ fn a_legacy_typing_container_alias_from_a_foreign_module_is_refused() {
 #[test]
 fn a_spelling_later_in_the_list_refuses_the_whole_statement() {
     let diagnostic = only_error(lower_foreign(
-        "from numpy import array, ndarray\n",
+        // `NDArray`, not `ndarray`: `from numpy import ndarray` is a
+        // buffer-carrier pair since #1380, while `numpy.NDArray` is not.
+        "from numpy import array, NDArray\n",
         &["numpy"],
     ));
     assert!(
-        diagnostic.message.contains("`numpy.ndarray` to `ndarray`"),
+        diagnostic.message.contains("`numpy.NDArray` to `NDArray`"),
         "{}",
         diagnostic.message
     );

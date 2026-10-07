@@ -349,15 +349,18 @@ fn an_alias_shadowing_a_resolved_spelling_is_refused() {
     }
 }
 
-/// The optional-dependency idiom, pinned so a later part of #1282 changes
-/// it deliberately: the `except` arm's assignment is a second top-level
-/// definition of the imported name.
+/// The optional-dependency idiom is admitted since #1485: the `except` arm's
+/// `colorsys = None` is the import's fallback, not a second definition.
+/// The other fallback shapes are in `tests/fallback.rs`.
 #[test]
-fn the_optional_dependency_idiom_is_a_shadowing_refusal_today() {
-    assert_eq!(
-        only_message("try:\n    import colorsys\nexcept Exception:\n    colorsys = None\n"),
-        "`colorsys` is bound both by a foreign `import` and by another top-level statement in \
-         this module; shadowing a foreign import is not supported yet"
+fn the_optional_dependency_idiom_is_admitted() {
+    let lowered = lower_ok("try:\n    import colorsys\nexcept Exception:\n    colorsys = None\n");
+    assert_eq!(nested_nodes(&lowered), vec![pair("colorsys", "colorsys")]);
+    assert!(
+        !lowered
+            .definition_spans
+            .iter()
+            .any(|(name, _)| name == "colorsys")
     );
 }
 

@@ -384,7 +384,12 @@ pub fn function_local_producer_spellings<'a>(
 /// `producer_assignment_ty`'s third arm, and the solver's
 /// `constraints::resolved_producer_call` declines on its `foreign_objects`
 /// table, which is seeded from the same
-/// `crate::foreign::foreign_object_names` this arm reads.
+/// `crate::foreign::foreign_object_names` this arm reads. A buffer-carrier
+/// from-import (`from numpy import ndarray`, `from numpy.typing import
+/// NDArray`, #1380) is *not* in this set: it binds a hidden local name that
+/// is never a producer spelling, and `pycc_hir`'s `import::carrier` refuses
+/// every producer call (and every other non-annotation use of the
+/// spelling) in such a module before this crate runs.
 /// `ImportBinding::Symbol` (`from math import sqrt as
 /// ndarray`) stays out: it is refused upstream with `C0001`.
 pub fn imported_producer_spellings(imports: &[pycc_hir::ImportBinding]) -> Vec<&str> {

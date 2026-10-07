@@ -173,7 +173,9 @@ pub(super) fn lower_expr(
             // provenances. For a foreign binding, the shadowing rule
             // (`crates/pycc_hir/src/import/shadow.rs`; see the eager foreign
             // bind in `build`, `lib.rs`) keeps any other top-level binding
-            // off a foreign name. For a loop target, `pycc_types`'
+            // off a foreign name, except the #1485 `except ImportError`
+            // fallback (`docs/RUNTIME.md`), which binds a boxed `None` or
+            // another foreign object, both `object`. For a loop target, `pycc_types`'
             // `HirStmt::ForObject` arm (`crates/pycc_types/src/lib.rs`)
             // refuses a target already bound to another type with `T0023`,
             // binds it `object` through `Environment::bind`, and downgrades

@@ -1874,8 +1874,11 @@ pub fn build(hir: &HirModule) -> MirModule {
     // `NameError` CPython raises there instead of trapping (`llvm.trap`,
     // rc 133). Part 1's shadowing rule (`C0001`, `docs/TYPE_SYSTEM.md`)
     // then guarantees no other top-level statement ever rebinds the name,
-    // so the eager bind answers every admitted read with the same type a
-    // positional one would. A function body reads it through the same
+    // except the one admitted rebinding, an `except ImportError` fallback
+    // of the same `try` (#1485), which stores a boxed `None` or another
+    // foreign object into the same `object` slot -- so the eager bind
+    // answers every admitted read with the same type a positional one
+    // would. A function body reads it through the same
     // outward `lookup` walk, matching the constraint solver's own
     // per-function `foreign_objects` copy.
     for import in &hir.imports {

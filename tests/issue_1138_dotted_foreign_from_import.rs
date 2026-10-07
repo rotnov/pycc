@@ -6,7 +6,8 @@
 //!
 //! The plain dotted `import a.b` keeps its `C0001` (#1381, Part 3 of
 //! #1138), and a name pycc resolves by its spelling keeps the spelling
-//! refusal (#1380, Part 2). The hosted tests are `#[ignore]`d, compare the
+//! refusal, except the two buffer-carrier pairs #1380 (Part 2) admits
+//! (`tests/issue_1380_buffer_carrier_from_import.rs`). The hosted tests are `#[ignore]`d, compare the
 //! built extension against the host interpreter's own run of the same
 //! source, and contribute no line coverage; the changed driver lines are
 //! covered by the unit tests in `src/modules/tests.rs`.
@@ -78,17 +79,19 @@ fn check_accepts_a_dotted_foreign_from_import() {
     );
 }
 
-/// The shapes outside Part 1 keep a `C0001`: the spelling refusal (Part 2,
-/// #1380), the plain dotted `import` (Part 3, #1381), and the aliased and
+/// The shapes outside Part 1 keep a `C0001`: the spelling refusal for a
+/// spelling that is not one of #1380's exact carrier pairs (Part 2), the plain dotted `import` (Part 3, #1381), and the aliased and
 /// wildcard from forms, whose refusal is now the from form's own message
 /// rather than the module's, exactly as for an undotted module.
 #[test]
 fn the_shapes_outside_part_1_keep_their_c0001() {
     for (tag, body, needle) in [
         (
+            // `numpy.typing` exports no `ndarray`; only the exact pairs
+            // `numpy.ndarray` and `numpy.typing.NDArray` are carriers.
             "dotted_from_spelling",
-            "from numpy.typing import NDArray\n",
-            "binding the CPython object `numpy.typing.NDArray` to `NDArray`",
+            "from numpy.typing import ndarray\n",
+            "binding the CPython object `numpy.typing.ndarray` to `ndarray`",
         ),
         (
             "dotted_plain_import",

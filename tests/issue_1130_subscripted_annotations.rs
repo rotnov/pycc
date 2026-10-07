@@ -29,7 +29,8 @@
 //! the #1039 census's 19 array-parameter occurrences compile -- every one of
 //! them also needs a name binding that does not exist yet: attribute bases
 //! are #889, `import numpy as np` is #883, and `from numpy.typing import ...`
-//! is refused by the foreign-import path. (`NDArray` itself was unregistered
+//! was refused by the foreign-import path until #1380 admitted
+//! `from numpy.typing import NDArray` as a buffer-carrier import. (`NDArray` itself was unregistered
 //! when this file was written; #1134 has since registered it as a third
 //! source spelling of the buffer carrier, which is why the undefined-base
 //! regression guard below now names `Nonexistent` instead.)
