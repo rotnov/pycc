@@ -305,6 +305,30 @@ fn a_nested_import_raising_a_non_import_error_is_catchable() {
     );
 }
 
+/// The #1485 optional-dependency fallback agrees with this routing: an
+/// import that raises `ValueError` skips the `except ImportError` fallback
+/// and escapes the module as the original object. (A fallback `try` nested
+/// in another `try` is not an admitted #1485 shape, so the caught variant
+/// is `a_nested_import_raising_a_non_import_error_is_catchable`'s.)
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_non_import_error_skips_the_import_error_fallback() {
+    let raises = [("pycc_raises_1096", "raise ValueError('boom')\n")];
+    assert_matches_cpython(
+        "mx1096_fallback_escapes",
+        "pycc_mx1096_fallback_escapes",
+        "try:\n\
+         \x20   import pycc_raises_1096 as m\n\
+         except ImportError:\n\
+         \x20   m = None\n\
+         \x20   print(\"wrong fallback\")\n\
+         print(m is None)\n",
+        &[],
+        &raises,
+        "escaped builtins ValueError ValueError('boom') None True\n",
+    );
+}
+
 /// A failure inside an `except` handler is caught by a `try` nested in
 /// that handler.
 #[test]
