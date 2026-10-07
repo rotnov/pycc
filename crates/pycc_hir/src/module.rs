@@ -464,6 +464,13 @@ pub fn lower_module(
         &state.imports,
         &state.definition_spans,
     ));
+    // #1380: a buffer-carrier from-import binds a hidden name, so every
+    // other use of its spelling -- above or below the import -- is refused
+    // here, where the whole module is visible at once.
+    diagnostics.extend(crate::import::reject_carrier_misuse(
+        &module.body,
+        &state.imports,
+    ));
     // #1244: the module-level `del` late-binding rule, after the per-item
     // loop so an earlier per-item failure still reports first.
     let deleted_top_level =

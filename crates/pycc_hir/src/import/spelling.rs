@@ -42,6 +42,46 @@ pub(super) fn shadows_a_resolved_spelling(local_name: &str) -> bool {
         || pycc_std::resolve_module(local_name).is_some()
 }
 
+/// The two exact `from <module> import <name>` pairs whose name keeps its
+/// buffer-carrier annotation meaning (#1129/#1134) when imported (#1380,
+/// Part 2 of #1138, D-244): numpy's own array class and its `numpy.typing`
+/// alias. Only these pairs qualify, unaliased and absolute; any other module
+/// binding either spelling (`from numpy import NDArray`, `from cupy import
+/// ndarray`) keeps [`shadows_a_resolved_spelling`]'s refusal, so an
+/// unrelated object never gains the buffer meaning.
+const CARRIER_FROM_IMPORTS: &[(&str, &str)] = &[("numpy", "ndarray"), ("numpy.typing", "NDArray")];
+
+/// The prefix of a carrier binding's hidden local name. `$` is not an
+/// identifier character, so no source name can equal a hidden one, and the
+/// prefix is disjoint from `pycc_mir`'s scope sentinels `$fn:` and
+/// `$narrowed:`.
+const CARRIER_PREFIX: &str = "$carrier:";
+
+/// Whether `from <module_path> import <name>` at relative `level` is one of
+/// the [`CARRIER_FROM_IMPORTS`] pairs (#1380). A relative import never is.
+pub(super) fn carrier_from_import(module_path: &str, name: &str, level: u32) -> bool {
+    level == 0 && CARRIER_FROM_IMPORTS.contains(&(module_path, name))
+}
+
+/// The local name a carrier from-import binds (#1380): a reserved
+/// non-identifier, so every consumer keyed on a source name -- the alias
+/// table, the type environment's object bindings, the class-collision and
+/// cross-module checks -- misses it by construction, while every consumer
+/// keyed on the binding itself (the MIR splice, the codegen module global,
+/// `I0402`/the lock) runs the import unchanged. The same device as
+/// `func::EXT_MODULE_MARKER`. Only the binding's `local_name` is hidden:
+/// [`crate::FromImport::name`] keeps the real name, which the host fetches
+/// and every diagnostic prints.
+pub(super) fn carrier_local_name(name: &str) -> String {
+    format!("{CARRIER_PREFIX}{name}")
+}
+
+/// The spelling a hidden [`carrier_local_name`] stands for, or `None` for an
+/// ordinary local name.
+pub(super) fn carrier_spelling(local_name: &str) -> Option<&str> {
+    local_name.strip_prefix(CARRIER_PREFIX)
+}
+
 /// Every name in CPython 3.14's `dir(builtins)` except the keywords `True`,
 /// `False` and `None` (which cannot be an alias), sorted by byte so
 /// [`shadows_a_resolved_spelling`] can binary-search it. Regenerate with
@@ -238,7 +278,10 @@ pub(super) const SPELLING_MARKERS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::{PYTHON_BUILTINS, SPELLING_MARKERS, shadows_a_resolved_spelling};
+    use super::{
+        PYTHON_BUILTINS, SPELLING_MARKERS, carrier_from_import, carrier_local_name,
+        carrier_spelling, shadows_a_resolved_spelling,
+    };
 
     /// Both tables must stay strictly sorted by byte, or the binary search
     /// silently misses a name.
@@ -265,5 +308,28 @@ mod tests {
     #[test]
     fn the_legacy_typing_container_aliases_are_resolved_spellings() {
         assert!(shadows_a_resolved_spelling("List"));
+    }
+
+    /// #1380: exactly the two absolute carrier pairs qualify.
+    #[test]
+    fn only_the_exact_absolute_carrier_pairs_qualify() {
+        assert!(carrier_from_import("numpy", "ndarray", 0));
+        assert!(carrier_from_import("numpy.typing", "NDArray", 0));
+        assert!(!carrier_from_import("numpy", "NDArray", 0));
+        assert!(!carrier_from_import("numpy.typing", "ndarray", 0));
+        assert!(!carrier_from_import("builtins", "range", 0));
+        assert!(!carrier_from_import("numpy", "ndarray", 1));
+    }
+
+    /// #1380: the hidden name is not an identifier and maps back to its
+    /// spelling; an ordinary name has no spelling.
+    #[test]
+    fn a_hidden_carrier_name_round_trips_to_its_spelling() {
+        for spelling in ["ndarray", "NDArray"] {
+            let hidden = carrier_local_name(spelling);
+            assert_ne!(hidden, spelling);
+            assert_eq!(carrier_spelling(&hidden), Some(spelling));
+        }
+        assert_eq!(carrier_spelling("ndarray"), None);
     }
 }
