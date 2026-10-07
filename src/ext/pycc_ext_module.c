@@ -4425,8 +4425,11 @@ static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const 
  * on this thread) is a `SystemError`.
  *
  * A function becomes a `builtin_function_or_method` bound to the module,
- * exactly what `PyModule_AddFunctions` would have made of the same row; a
- * redefinition publishes again and replaces it, as rebinding a name does.
+ * exactly what `PyModule_AddFunctions` would have made of the same row.
+ * Codegen publishes a redefined name only at its last definition, since
+ * every definition shares that one's wrapper
+ * (`crates/pycc_codegen/src/ext_publish.rs`); a second publish of one name
+ * would still just replace the binding.
  * A class is bound from its `pycc_ext_type_object_<Class>` static, which
  * `pycc_ext_register_method_types` filled before the body.
  *

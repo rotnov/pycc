@@ -574,21 +574,22 @@ published only at its last definition: every definition shares one
 the last definition's, so publishing an earlier one would let the host run
 its body through a wrapper that does not describe it -- a read-only buffer
 handed to a body that writes it -- and a function object captured then
-would follow the slot to the later body. Until its last definition runs, a
-redefined name reads as absent, where CPython would show the earlier
-definition: a residual over-hiding, pinned by
-`a_name_redefined_after_the_cycle_is_hidden_until_its_last_definition` in
-`tests/issue_1199_ext_reentrant_init.rs`. A class is published once the last compiled item
+would follow the slot to the later body. A class is published once the last compiled item
 its MRO owns is bound -- for a class that owns a compiled item (a method
 it declares, or the `__init__` D-225 synthesizes for a base-less class that
 declares none) that is its class statement's position, because a class's
 own items are lowered contiguously there (pinned by
-`src/ext_build_tests/publication_order.rs`). A name read before its
+`src/ext_build_tests/publication_order.rs`). A name read before its first
 definition runs therefore fails exactly as in CPython: `getattr` and
 `hasattr` see a partially initialized module's `AttributeError`, and
 `from my import late` a circular-import `ImportError`; a completed import,
 and a re-import after `del sys.modules[...]` (which re-runs the body on a
-fresh module object), expose every export. Three residuals remain: a class
+fresh module object), expose every export. Four residuals remain: a
+redefined function reads as absent between its first and last definitions,
+where CPython would show the earlier one (over-hiding, for the wrapper
+reason above; pinned by
+`a_name_redefined_after_the_cycle_is_hidden_until_its_last_definition` in
+`tests/issue_1199_ext_reentrant_init.rs`); a class
 that owns no compiled item of its own (`class E(Base): pass`) is published
 as soon as its bases' methods are bound, possibly before its own class
 statement (over-visibility, never a crash); the synthesized exception

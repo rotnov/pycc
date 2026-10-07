@@ -15,11 +15,15 @@
 //! directory that is on neither side's `PYTHONPATH` (a cwd holding the
 //! module changes CPython's circular-import wording).
 //!
-//! [`an_instance_escaping_before_its_class_statement_raises_name_error`]
-//! is the one case not compared with CPython: the null guard every
-//! generated wrapper now opens with turns what CPython reports inside the
-//! constructor's caller into a catchable `NameError` at the method call
-//! (`docs/RUNTIME.md`; the construction itself is #1490).
+//! Two cases are not compared with CPython, each pinning a residual
+//! `docs/RUNTIME.md` records.
+//! [`an_instance_escaping_before_its_class_statement_raises_name_error`]:
+//! the null guard every generated wrapper now opens with turns what
+//! CPython reports inside the constructor's caller into a catchable
+//! `NameError` at the method call (the construction itself is #1490).
+//! [`a_name_redefined_after_the_cycle_is_hidden_until_its_last_definition`]:
+//! a redefined function stays absent until its last definition runs,
+//! where CPython would show the earlier one.
 //!
 //! Every test here is `#[ignore]`d for the reason every `ext` and embedded
 //! test is: it builds against and runs an installed CPython with
