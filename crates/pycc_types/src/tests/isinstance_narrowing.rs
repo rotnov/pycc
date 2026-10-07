@@ -154,6 +154,44 @@ fn a_try_body_is_narrowed_up_to_its_rebinding_and_its_handlers_are_not() {
              finally:\n            print(o + 1)\n    return -1\n"
         ));
     }
+    // An `else` continues the body, after its last statement's rebinding.
+    still_object(
+        "def f(o: object, p: object) -> int:\n    if isinstance(o, int):\n        try:\n            \
+         o = p\n        except Exception:\n            return 0\n        else:\n            \
+         return o + 1\n    return -1\n",
+    );
+    // A handler's `as` name is the exception, not the narrowed value.
+    refused(
+        "def f(o: object) -> int:\n    if isinstance(o, int):\n        try:\n            \
+         pass\n        except Exception as o:\n            return o + 1\n    return -1\n",
+        "T0021",
+        "operator Add is not defined for `Exception` and `int`",
+    );
+}
+
+#[test]
+fn after_a_try_the_name_is_narrowed_on_every_fall_through_path() {
+    // A handler that rebinds the name and returns never reaches the read.
+    checks(
+        "def f(o: object, p: object) -> int:\n    if isinstance(o, int):\n        try:\n            \
+         pass\n        except Exception:\n            o = p\n            return 0\n        \
+         return o + 1\n    return -1\n",
+    );
+    // One that falls through does.
+    still_object(
+        "def f(o: object, p: object) -> int:\n    if isinstance(o, int):\n        try:\n            \
+         pass\n        except Exception:\n            o = p\n        return o + 1\n    return -1\n",
+    );
+    // A `finally` that rebinds the name ends the narrowing after it.
+    still_object(
+        "def f(o: object, p: object) -> int:\n    if isinstance(o, int):\n        try:\n            \
+         pass\n        finally:\n            o = p\n        return o + 1\n    return -1\n",
+    );
+    // A negated guard in a `finally` narrows nothing after the `try`.
+    still_object(
+        "def f(o: object) -> int:\n    try:\n        pass\n    finally:\n        \
+         if not isinstance(o, int):\n            raise ValueError()\n    return o + 1\n",
+    );
 }
 
 #[test]

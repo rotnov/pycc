@@ -98,6 +98,10 @@ pub(super) fn collect_try_constraints(
             henv.bindings
                 .insert(name.clone(), Ok(Ty::Instance(Box::new(binding_type))));
         }
+        // #1476: the `as` name holds the exception, never a narrowed value.
+        if let Some(name) = &handler.name {
+            henv.narrowed.remove(name);
+        }
         collect_block_constraints(
             signatures,
             parents,
@@ -134,8 +138,15 @@ pub(super) fn collect_try_constraints(
     let mut excluded = pre_existing;
     excluded.extend(shape.handlers.iter().filter_map(|h| h.name.clone()));
     solver::promote_try_fallthrough(env, &fallthrough, &excluded);
-    // #1476: the finally body runs after any path, so a name any path
-    // rebinds is not narrowed in it.
+    // #1476: after the `try`, a name stays narrowed only if every path that
+    // falls through still narrows it to the same type, as the check phase's
+    // `join_try_outcome` joins its exits.
+    let joined_narrowed = fallthrough.split_first().map(|(first, rest)| {
+        let rest: Vec<&HashMap<String, Ty>> = rest.iter().map(|exit| &exit.narrowed).collect();
+        crate::narrow::join_narrowed(&first.narrowed, &rest)
+    });
+    // The finally body runs after any path, so a name any path rebinds is
+    // not narrowed in it.
     let mut path_kills = body_kills;
     path_kills.extend(pycc_hir::killed_names(shape.orelse));
     for handler in shape.handlers {
@@ -152,5 +163,12 @@ pub(super) fn collect_try_constraints(
         env,
         shape.finalbody,
         return_term,
-    )
+    )?;
+    // With no path falling through, nothing after the `try` runs. Otherwise
+    // the fall-through join continues, less what the finally rebinds.
+    if let Some(mut narrowed) = joined_narrowed {
+        object_narrow::kill_names_in(&mut narrowed, &pycc_hir::killed_names(shape.finalbody));
+        env.narrowed = narrowed;
+    }
+    Ok(())
 }

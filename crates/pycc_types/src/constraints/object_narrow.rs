@@ -17,9 +17,10 @@
 //!   run after its own rebinding ([`before_statement`], the check phase's
 //!   `apply_kill_prescan`);
 //! - a `try` body is walked in order, each handler starts without the
-//!   names the body rebinds anywhere, and the `finally` without the names
-//!   any path rebinds ([`kill_names`]), as the check phase's
-//!   `check_try_stmt` and its path join do.
+//!   names the body rebinds anywhere, the `finally` without the names any
+//!   path rebinds ([`kill_names`]), and the statements after the `try`
+//!   keep what every fall-through path still narrows, as the check phase's
+//!   `check_try_stmt` and `join_try_outcome` do.
 //!
 //! The recognizer and the class gate are `pycc_hir`'s, shared with the
 //! check phase and the MIR lowering; only the scope lookups are this
@@ -109,7 +110,12 @@ pub(super) fn before_statement(env: &mut ConstraintEnvironment<'_, '_>, stmt: &H
 /// after any rebinding in the body, and a `finally` after any rebinding on
 /// any path, so those names are not narrowed there.
 pub(super) fn kill_names(env: &mut ConstraintEnvironment<'_, '_>, names: &HashSet<String>) {
-    env.narrowed.retain(|name, _| !names.contains(name));
+    kill_names_in(&mut env.narrowed, names);
+}
+
+/// [`kill_names`] on an overlay held apart from its environment.
+pub(super) fn kill_names_in(narrowed: &mut HashMap<String, Ty>, names: &HashSet<String>) {
+    narrowed.retain(|name, _| !names.contains(name));
 }
 
 /// After collecting `stmt`: a name it rebinds anywhere is no longer
@@ -120,7 +126,9 @@ pub(super) fn after_statement(
     env: &mut ConstraintEnvironment<'_, '_>,
     stmt: &HirStmt,
 ) {
-    if !env.narrowed.is_empty() {
+    // A `try` sets the overlay after it itself, from its fall-through paths
+    // (`try_stmt::collect_try_constraints`).
+    if !env.narrowed.is_empty() && !matches!(stmt, HirStmt::Try { .. } | HirStmt::TryStar { .. }) {
         kill(env, stmt);
     }
     if let HirStmt::If { test, body, .. } = stmt

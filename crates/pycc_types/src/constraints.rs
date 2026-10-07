@@ -3526,6 +3526,11 @@ pub(crate) fn collect_block_constraints(
             }
         }
     }
+    // The last statement's update, so a block's final environment (a `try`
+    // body's, which its `else` continues) reflects every rebinding in it.
+    if let Some(previous) = previous {
+        object_narrow::after_statement(signatures, env, previous);
+    }
     Ok(())
 }
 
