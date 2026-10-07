@@ -57,6 +57,13 @@ status: accepted
      Consequences), and `match` is not analyzed at all (also a scope cut,
      kept sound by omission rather than by an exhaustiveness heuristic that
      could be wrong).
+     - Amendment (2026-10-07, #1476): a terminating body is necessary but
+       not sufficient. The continuation is reached only through the
+       `else`, so `if x is None: return 0` followed by `else: x = None`
+       reaches it with `x` rebound. `pycc_hir::continuation_narrows` now
+       also requires that `killed_names(orelse)` leaves the name alone.
+       The check phase, the constraint solver's `isinstance` overlay and
+       MIR all share that predicate.
   4. **The syntactic recognizer and the termination predicate are shared via
      `pycc_hir`, not duplicated.** `pycc_mir` cannot depend on `pycc_types`
      (the dependency runs the other direction: `pycc_types` depends on

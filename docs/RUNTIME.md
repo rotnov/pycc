@@ -2203,7 +2203,12 @@ rich-comparison or membership operand, a subscript key or slice bound, an
 attribute store, a list element) and `object_box::emit_boxed` -- is
 evaluated as the object itself (`object_unbox::emit_pack_operand`), so no
 unbox, no re-pack and no `OverflowError` happen there, and the object's
-identity and class survive.
+identity and class survive. The peephole sees only the operand itself. A
+narrowed read inside a native expression, such as a conditional
+expression's arm or an annotated binding, has already been unboxed and is
+packed anew. A `str` subclass is therefore flattened there: D-258's
+documented deviation, described in TYPE_SYSTEM.md under "What a narrowed
+read is".
 
 **`and`/`or` boxes a selected native operand and leaks it.** Part 6 of
 [#1371](https://github.com/rotnov/pycc/issues/1371) types `n or o` and

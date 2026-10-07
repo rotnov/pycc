@@ -68,7 +68,9 @@
 //!   `pycc_hir::isinstance_test`, narrows an `object` name to a native type
 //!   under `isinstance(name, C)` (the body) or `not isinstance(name, C)`
 //!   (the `orelse`, and the continuation after a body that definitely
-//!   terminates). The same scope cuts apply: no `and`/`or`, no tuple of
+//!   terminates when the `orelse` does not rebind the name --
+//!   `pycc_hir::continuation_narrows`, which also governs the `Optional`
+//!   shape). The same scope cuts apply: no `and`/`or`, no tuple of
 //!   classes.
 //! - No narrowing-to-`None` shape: `if name is not None: ... else: <use
 //!   name as None>` is not implemented (there is no `Ty::None`-typed

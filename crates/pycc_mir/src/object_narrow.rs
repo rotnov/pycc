@@ -109,16 +109,17 @@ pub(super) fn object_operand(value: MirExpr) -> MirExpr {
 /// is known to be present (the `Optional`'s inner type) for every
 /// statement *after* `stmt` in the same sequential statement list --
 /// mirroring `pycc_types::narrow::apply_post_if_narrowing` one layer down,
-/// using the same shared `pycc_hir::optional_none_test` /
-/// `pycc_hir::definitely_terminates` recognizers that module's own doc
+/// using the same shared `pycc_hir::optional_none_test` recognizer and
+/// `pycc_hir::continuation_narrows` admission test that module's own doc
 /// comment explains in full. Unlike [`super::push_narrowing`]'s in-branch use in
 /// `stmt::lower_stmt`'s own `HirStmt::If` arm (which pairs every push with
 /// a [`super::kill_narrowing`] once that one branch finishes lowering), this
 /// sentinel is deliberately never popped by its own caller -- it is meant
 /// to persist for the rest of the enclosing sequence, exactly like
 /// `pycc_types::narrow`'s own overlay entry does when applied directly to
-/// (not a clone of) the real `env`. Only [`super::lower_stmt_sequence`]
-/// calls this, once per statement, immediately after lowering it.
+/// (not a clone of) the real `env`. [`super::lower_stmt_sequence`] and the
+/// module-level statement walk in `build` call this, once per statement,
+/// immediately after lowering it.
 ///
 /// Since #1476 the same holds for `if not isinstance(name, C): <body that
 /// definitely terminates>` on an `object` name.
