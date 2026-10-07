@@ -78,6 +78,7 @@ pub(super) fn carrier_local_name(name: &str) -> String {
 
 /// The spelling a hidden [`carrier_local_name`] stands for, or `None` for an
 /// ordinary local name.
+#[cfg(test)]
 pub(super) fn carrier_spelling(local_name: &str) -> Option<&str> {
     local_name.strip_prefix(CARRIER_PREFIX)
 }

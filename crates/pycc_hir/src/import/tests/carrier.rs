@@ -14,17 +14,11 @@ const FOREIGN: &[&str] = &["numpy", "numpy.typing", "other", "ndarray"];
 /// Both carrier imports, as lowering records them.
 const IMPORTS: &str = "from numpy import ndarray\nfrom numpy.typing import NDArray\n";
 
-fn carrier_imports() -> Vec<ImportBinding> {
-    lower_foreign(IMPORTS, FOREIGN)
-        .expect("the carrier imports lower")
-        .hir
-        .imports
-}
-
-/// The post-check alone over `IMPORTS` followed by `body`.
+/// The post-check alone over `IMPORTS` followed by `body`, with no item
+/// failed.
 fn misuse(body: &str) -> Vec<Diagnostic> {
     let source = format!("{IMPORTS}{body}");
-    reject_carrier_misuse(&parse(&source).body, &carrier_imports())
+    reject_carrier_misuse(&parse(&source).body, &[])
 }
 
 /// The span of `name` inside the first occurrence of `context` in `source`.
@@ -125,6 +119,90 @@ fn a_repeated_or_guarded_carrier_import_is_accepted() {
 fn a_module_without_a_carrier_import_is_not_scanned() {
     let source = "ndarray = 1\nx = NDArray\n";
     assert!(reject_carrier_misuse(&parse(source).body, &[]).is_empty());
+}
+
+/// A carrier import only inside `if TYPE_CHECKING:` never runs in CPython,
+/// so a call `ndarray(n)` there would raise `NameError`: the guarded import
+/// still declares the spelling, and the call is refused like any read.
+#[test]
+fn a_type_checking_only_carrier_import_still_refuses_a_read() {
+    let source = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    \
+                  from numpy import ndarray\n\
+                  def f(n: int) -> float:\n    a = ndarray(n)\n    return a[0]\n";
+    let diagnostic = super::from_foreign::only_error(lower_foreign(source, FOREIGN));
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.span,
+        Some(span_in(source, "= ndarray(n)", "ndarray"))
+    );
+    assert!(
+        diagnostic
+            .message
+            .starts_with("reading `ndarray` outside a type annotation"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+/// A carrier import is found in every nested `if`/`try` body: an `elif`,
+/// an `else`, a `try` body, a handler, a `try`'s `else` and `finally`.
+#[test]
+fn a_carrier_import_in_any_nested_module_level_body_is_found() {
+    for header in [
+        "if a:\n    pass\nelif b:\n    from numpy import ndarray\n",
+        "if a:\n    pass\nelse:\n    if b:\n        from numpy import ndarray\n",
+        "try:\n    from numpy import ndarray\nexcept ImportError:\n    pass\n",
+        "try:\n    pass\nexcept ImportError:\n    from numpy import ndarray\n",
+        "try:\n    pass\nexcept ImportError:\n    pass\nelse:\n    from numpy import ndarray\n",
+        "try:\n    pass\nfinally:\n    from numpy import ndarray\n",
+    ] {
+        let source = format!("{header}x = ndarray\n");
+        let diagnostics = reject_carrier_misuse(&parse(&source).body, &[]);
+        assert_eq!(diagnostics.len(), 1, "{source}: {diagnostics:#?}");
+    }
+}
+
+/// Neither an aliased carrier pair nor a carrier import inside a function
+/// declares the spelling: the first binds another name, and the second
+/// already fails its own item.
+#[test]
+fn an_aliased_or_function_level_carrier_import_declares_nothing() {
+    for source in [
+        "from numpy import ndarray as nd\nx = ndarray\n",
+        "def f() -> None:\n    from numpy import ndarray\nx = ndarray\n",
+    ] {
+        assert!(
+            reject_carrier_misuse(&parse(source).body, &[]).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+/// An item whose lowering already failed keeps its own diagnostic alone:
+/// `from other import ndarray` is the spelling refusal, not also a second
+/// binding of the carrier spelling.
+#[test]
+fn a_failed_import_item_is_reported_once() {
+    let source = "from numpy import ndarray\nfrom other import ndarray\n";
+    let diagnostic = super::from_foreign::only_error(lower_foreign(source, FOREIGN));
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        !diagnostic
+            .message
+            .starts_with("binding `ndarray` in a module"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+/// A failed item is neither scanned nor searched for a carrier import.
+#[test]
+fn a_failed_item_is_skipped_by_the_scan() {
+    let source = "from numpy import ndarray\nx = ndarray\n";
+    let body = &parse(source).body;
+    assert_eq!(reject_carrier_misuse(body, &[]).len(), 1);
+    assert!(reject_carrier_misuse(body, &[1]).is_empty());
+    assert!(reject_carrier_misuse(body, &[0]).is_empty());
 }
 
 #[test]

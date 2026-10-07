@@ -369,6 +369,9 @@ pub fn lower_module(
     // exactly the driver's answers whichever item first needs the frame.
     let pre_loop_imports = state.imports.len();
     let mut module_frame: Option<Vec<String>> = None;
+    // #1380: the items that failed (reported or cascade-skipped), so the
+    // carrier scan below never reports a second diagnostic for one.
+    let mut failed_items: Vec<usize> = Vec::new();
     for (index, stmt) in module.body.iter().enumerate() {
         let position = if index < prologue_len {
             FuturePosition::Prologue
@@ -398,6 +401,7 @@ pub fn lower_module(
                 }
             }
             Err(diagnostic) => {
+                failed_items.push(index);
                 // P2: a cascade-shaped error naming a poisoned binding is a
                 // consequence of the earlier skip, not a new gap -- skip
                 // this item silently (P4). Anything else is reported.
@@ -479,7 +483,7 @@ pub fn lower_module(
     // here, where the whole module is visible at once.
     diagnostics.extend(crate::import::reject_carrier_misuse(
         &module.body,
-        &state.imports,
+        &failed_items,
     ));
     // #1244: the module-level `del` late-binding rule, after the per-item
     // loop so an earlier per-item failure still reports first.

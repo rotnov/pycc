@@ -15,7 +15,7 @@
 
 use super::spelling;
 use super::type_alias::legacy_type_alias_parts;
-use crate::{ImportBinding, unsupported};
+use crate::unsupported;
 use pycc_ast::visitor::{self, Visitor};
 use pycc_ast::{
     Alias, ExceptHandler, Expr, ExprContext, Identifier, Parameters, Pattern, Stmt, TypeParam,
@@ -34,27 +34,34 @@ use pycc_diag::Diagnostic;
 /// an annotation (`list[NDArray]`) is still inside it. A quoted annotation
 /// was already unquoted by the parser (#889), so it is a name here too.
 ///
-/// The import itself is recognized by its shape wherever it appears, so a
-/// repeated identical import and one inside an `if TYPE_CHECKING:` block are
-/// both exempt. The walk does descend into a `TYPE_CHECKING` body the
-/// lowering folds away; a use there is refused too, which only fails
-/// closed.
+/// The carriers are found by the import's shape, not from the lowered
+/// import table: a module-level carrier import, or one nested in a
+/// module-level `if`/`try` body, declares its spelling even inside an
+/// `if TYPE_CHECKING:` block the lowering folds away, where CPython never
+/// runs it and a call `ndarray(n)` would raise `NameError` rather than reach
+/// pycc's producer. The import itself is exempt wherever it appears, so a
+/// repeated identical import and a guarded one are the same binding. The
+/// walk also descends into a folded `TYPE_CHECKING` body; a use there is
+/// refused too, which only fails closed.
 ///
-/// A module with no carrier binding (every module but the few that write
-/// the import) returns before walking anything.
-pub(crate) fn reject_carrier_misuse(body: &[Stmt], imports: &[ImportBinding]) -> Vec<Diagnostic> {
-    let carriers: Vec<(&str, &str)> = imports
-        .iter()
-        .filter_map(|binding| match binding {
-            ImportBinding::Foreign {
-                local_name,
-                module_path,
-                ..
-            } => spelling::carrier_spelling(local_name)
-                .map(|spelling| (spelling, module_path.as_str())),
-            _ => None,
-        })
-        .collect();
+/// `failed` holds the indices of the module-level items whose lowering
+/// already reported a diagnostic. Those items are neither scanned nor
+/// searched for a carrier import, so one source error is reported once
+/// (`from other import ndarray` keeps only its own spelling refusal).
+///
+/// A module with no carrier import (every module but the few that write
+/// it) returns before walking anything but its module-level imports.
+pub(crate) fn reject_carrier_misuse(body: &[Stmt], failed: &[usize]) -> Vec<Diagnostic> {
+    let live = || {
+        body.iter()
+            .enumerate()
+            .filter(|(index, _)| !failed.contains(index))
+            .map(|(_, stmt)| stmt)
+    };
+    let mut carriers = Vec::new();
+    for stmt in live() {
+        declared_carriers(stmt, &mut carriers);
+    }
     if carriers.is_empty() {
         return Vec::new();
     }
@@ -63,7 +70,7 @@ pub(crate) fn reject_carrier_misuse(body: &[Stmt], imports: &[ImportBinding]) ->
         annotation_depth: 0,
         diagnostics: Vec::new(),
     };
-    for stmt in body {
+    for stmt in live() {
         match legacy_type_alias_parts(stmt) {
             Some((target, value)) => {
                 scan.check_binding(&target.id, target.range);
@@ -77,9 +84,49 @@ pub(crate) fn reject_carrier_misuse(body: &[Stmt], imports: &[ImportBinding]) ->
     diagnostics
 }
 
+/// Appends the `(spelling, module)` of each carrier from-import `stmt`
+/// is, or holds in a nested `if`/`try` body (every clause, handler,
+/// `else` and `finally`), to `carriers`. A function or class body is not
+/// searched: an import there already fails its own item.
+fn declared_carriers<'a>(stmt: &'a Stmt, carriers: &mut Vec<(&'a str, &'a str)>) {
+    let bodies: Vec<&[Stmt]> = match stmt {
+        Stmt::ImportFrom(import) => {
+            let module = import.module.as_deref().unwrap_or("");
+            for alias in &import.names {
+                let name = alias.name.as_str();
+                if alias.asname.is_none()
+                    && spelling::carrier_from_import(module, name, import.level)
+                {
+                    carriers.push((name, module));
+                }
+            }
+            return;
+        }
+        Stmt::If(if_stmt) => std::iter::once(if_stmt.body.as_slice())
+            .chain(
+                if_stmt
+                    .elif_else_clauses
+                    .iter()
+                    .map(|clause| clause.body.as_slice()),
+            )
+            .collect(),
+        Stmt::Try(try_stmt) => std::iter::once(try_stmt.body.as_slice())
+            .chain(try_stmt.handlers.iter().map(|handler| {
+                let ExceptHandler::ExceptHandler(handler) = handler;
+                handler.body.as_slice()
+            }))
+            .chain([try_stmt.orelse.as_slice(), try_stmt.finalbody.as_slice()])
+            .collect(),
+        _ => return,
+    };
+    for inner in bodies.into_iter().flatten() {
+        declared_carriers(inner, carriers);
+    }
+}
+
 /// The [`Visitor`] behind [`reject_carrier_misuse`].
 struct CarrierScan<'i> {
-    /// Each imported carrier spelling with the module it came from.
+    /// Each declared carrier spelling with the module it comes from.
     carriers: Vec<(&'i str, &'i str)>,
     /// How many annotation positions enclose the current node.
     annotation_depth: u32,

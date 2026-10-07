@@ -1315,7 +1315,8 @@ from-import, so a missing `numpy.typing` or `ndarray` raises CPython's own
 error and the interop policy and the lock see it, but it binds a hidden
 name: the module's dict never holds it, and the spelling keeps the
 buffer-carrier meaning it has without any import. In a module that writes
-one, the spelling may only annotate; every other read or binding of it is a
+one, even only inside an `if TYPE_CHECKING:` block, the spelling may only
+annotate; every other read or binding of it is a
 `C0001` ([DIAGNOSTICS.md](./DIAGNOSTICS.md)), while a repeated or
 `if TYPE_CHECKING:`-guarded copy of the same carrier import is the same
 binding and is accepted. Each name is its own
