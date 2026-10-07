@@ -167,6 +167,7 @@ mod carrier_getsets;
 mod carrier_types;
 mod compiled_isinstance;
 mod exports;
+mod foreign_class_boundary;
 mod generated_c;
 mod getset;
 mod init_only_publication;
