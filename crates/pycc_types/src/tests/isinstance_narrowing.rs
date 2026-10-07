@@ -142,9 +142,14 @@ fn a_try_body_is_narrowed_up_to_its_rebinding_and_its_handlers_are_not() {
          o = p\n        except Exception:\n            return o + 1\n    return -1\n",
     );
     // The `finally` can run after any path's rebinding: the body's, a
-    // handler's, the `else`'s, or a handler's `as` name.
+    // handler's, the `else`'s, or a handler's `as` name -- also when that
+    // path narrows the name again before it ends, since a returning guard
+    // reaches the `finally` between the two.
     for rebinding in [
         "try:\n            o = p\n        except Exception:\n            pass\n",
+        "try:\n            o = p\n            if not isinstance(o, int):\n                return 0\n",
+        "try:\n            pass\n        except Exception:\n            o = p\n            \
+         if not isinstance(o, int):\n                return 0\n",
         "try:\n            pass\n        except Exception:\n            o = p\n",
         "try:\n            pass\n        except Exception:\n            pass\n        else:\n            o = p\n",
         "try:\n            pass\n        except Exception as o:\n            pass\n",

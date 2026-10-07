@@ -174,6 +174,24 @@ fn a_body_rebinding_ends_an_outer_narrowing_in_else_finally_and_after() {
     assert_eq!(reads(&body, 1), (false, false, false));
 }
 
+/// A body that rebinds the name and then guards it again ends `else` and the
+/// code after the `try` narrowed, but not `finally`, which runs between the
+/// rebinding and the guard's `return`.
+#[test]
+fn a_body_that_rebinds_and_guards_again_leaves_finally_unnarrowed() {
+    let body = lower(vec![
+        is_none_return(),
+        try_stmt(
+            false,
+            vec![rebind_x(), is_none_return()],
+            vec![],
+            vec![print_x()],
+        ),
+        print_x(),
+    ]);
+    assert_eq!(reads(&body, 1), (true, false, true));
+}
+
 /// A handler rebinding ends an outer narrowing in `finally`, and after the
 /// `try` only when that handler falls through.
 #[test]

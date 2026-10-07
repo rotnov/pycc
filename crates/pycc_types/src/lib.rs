@@ -24,7 +24,6 @@ mod not_implemented;
 mod object_box;
 mod object_none;
 mod redeclaration;
-mod return_coverage;
 mod set_element;
 mod solver;
 mod std_receiver;
@@ -35,7 +34,7 @@ mod unop;
 mod unpack;
 
 pub(crate) use local_binder::{bind_local_types_in_body, bind_local_types_in_stmt};
-use return_coverage::block_always_returns;
+use pycc_hir::block_always_returns;
 
 pub use buffer::{
     function_local_producer_spellings, imported_producer_spellings, is_buffer_producer_spelling,

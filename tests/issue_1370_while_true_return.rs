@@ -154,7 +154,7 @@ fn a_loop_that_may_not_run_still_reports_t0022() {
 /// The constant-true rule is sound only while `break` cannot be lowered:
 /// today a `break` inside a loop is a `C0001` capability gap, so no loop
 /// body can leave the loop normally. When `break` lowering lands, this test
-/// fails; the loop arms of `pycc_types::return_coverage` and
+/// fails; the loop arms of `pycc_hir::return_coverage` and
 /// `pycc_codegen::fallthrough` must then require that the body holds no
 /// `break` bound to that loop, and this test becomes the `T0022` case.
 #[test]

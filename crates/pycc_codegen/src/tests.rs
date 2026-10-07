@@ -2375,7 +2375,7 @@ fn a_while_loop_body_that_always_returns_skips_its_own_trailing_branch() {
     // ; `print(f())` -- must print `1`. The trailing `return 2` is
     // unreachable dead code. Since #1370 a bare `while True: return 1`
     // with nothing after it is accepted source too (the checker's
-    // `pycc_types` `return_coverage::block_always_returns` accepts it,
+    // `pycc_hir::block_always_returns` accepts it,
     // and `fallthrough::block_always_terminates` is the codegen
     // counterpart that ends the block with `unreachable`); this shape,
     // with an explicit trailing `return`, remains valid source as well.
