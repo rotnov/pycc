@@ -102,12 +102,15 @@ pub(crate) struct SignatureTable {
     container_method_names: BTreeSet<&'static str>,
     /// Issue #1095: the module can hold a CPython object (`Ty::Object`) --
     /// it is compiled into an `ext` artifact, where `Any`, `object` and an
-    /// object container annotation all spell one (D-258), or it has bound a
-    /// foreign import (D-244 rule 3). Then every one of the four container
-    /// method names lowers with both readings, so that `o.append(x)` on an
-    /// object receiver can take the foreign method-call reading. Kept apart
-    /// from `container_method_names`, which is exported to importers with
-    /// the narrower meaning "a class defines this method".
+    /// object container annotation all spell one (D-258), it has bound a
+    /// foreign import (D-244 rule 3), or (#1425) a direct project
+    /// dependency, or a package `__init__` on its path, can hold one (see
+    /// `ResolvedImports::inherit_object_receivers`). Then every one of the
+    /// four container method names lowers with both readings, so that
+    /// `o.append(x)` on an object receiver can take the foreign method-call
+    /// reading. Kept apart from `container_method_names`, which carries the
+    /// narrower meaning "a class defines this method"; importers inherit the
+    /// two separately (#1188, #1425).
     object_receivers: bool,
     /// Part 2a of #1371: the *class-like* names of the module -- each bound
     /// exactly once in module scope (the same [`rebound::binding_counts`]
@@ -216,6 +219,13 @@ impl SignatureTable {
     /// (see the `object_receivers` field).
     pub(crate) fn admit_object_receivers(&mut self) {
         self.object_receivers = true;
+    }
+
+    /// Issue #1425: whether the module can hold a CPython object (see the
+    /// `object_receivers` field). Read after the whole module is lowered, so
+    /// it is the module's final state, which importers inherit.
+    pub(crate) fn object_receivers(&self) -> bool {
+        self.object_receivers
     }
 
     /// Whether a call to `method` must be lowered with both readings, because

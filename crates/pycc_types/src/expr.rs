@@ -131,10 +131,12 @@ pub(crate) fn class_name_dispatch(
 /// implement it, so this refuses it with the #1026 `I0404` family instead.
 /// Since #1095 a module with its own foreign import (or an `ext` module)
 /// lowers such a call to a receiver-dispatched call whose object receiver
-/// takes the foreign method call, so the only shape that still reaches this
-/// arm is an object a native module imports from a sibling project module
-/// without a foreign import of its own (`from dep import g` then
-/// `g.garbage.append(1)`).
+/// takes the foreign method call, and since #1425 so does a module that
+/// imports an object from a sibling project module, for its whole body.
+/// The arm is still reached by the ordering gap `docs/TYPE_SYSTEM.md`
+/// states once (#1482): a call lowered above the module's *own* first
+/// foreign import, such as a `def` calling `gc.garbage.append(1)` written
+/// above `import gc`.
 fn infer_container_receiver(
     env: &Environment,
     local_names: &[&str],

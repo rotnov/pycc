@@ -1556,10 +1556,12 @@ other base it keeps a `C0001` located at the target. Since \
 an ordinary method call on the object too, whatever its arity \
 (`o.get(k)`, `o.attr.append(v)`): container lowering claims those four \
 spellings, but in a module that can hold an object it keeps the method \
-reading beside its own, and an object receiver takes that one. The one \
-exception is an object a module with no foreign import of its own imports \
-from a sibling project module (`from dep import g`): it keeps the container \
-reading and this code. In a module body every supported \
+reading beside its own, and an object receiver takes that one; since \
+#1425 that includes a module importing an object from a sibling project \
+module (`from dep import g`), for its whole body. The one exception is a \
+call lowered above the module's own first foreign import (a function \
+defined above `import gc`), which keeps the container reading and this \
+code (#1482; see `docs/TYPE_SYSTEM.md`). In a module body every supported \
 operation is admitted only *below the import*. Since #1316 and Part 1 of #1333 each \
 one except the `for` loop is also admitted inside a function body, and a \
 function may bind the object to a local name, return it and pass it to \
