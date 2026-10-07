@@ -296,9 +296,9 @@ fn every_wrapper_family_in_a_companion_opens_with_its_guard() {
         let rest = &inc[at + head.len()..];
         let symbol = &rest[..rest.find('(').expect("a parameter list")];
         let line_end = rest.find('\n').expect("a full line");
-        if rest[..line_end].ends_with(';') {
-            continue;
-        }
+        // Every mention of the head is a definition: the companion emits
+        // no wrapper prototypes.
+        assert!(rest[..line_end].ends_with(')'), "{inc}");
         let body = &rest[line_end + 1..];
         assert!(
             body.starts_with(&format!("{{\n    if (fnptr_{symbol} == NULL) {{\n")),
