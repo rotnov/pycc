@@ -1015,6 +1015,33 @@ fn check_range_operand_in(
 }
 
 fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), Diagnostic> {
+    check_assignment_of(env, target, ty, None)
+}
+
+/// [`check_assignment`] for a plain `name = value` rebinding, the one
+/// binding seam whose MIR lowering wraps the value in
+/// `MirExpr::ObjectBox` (Part 2 of #1387, #1475): rebinding a name already
+/// inferred as `object` to a native value boxes it, under
+/// [`object_box::admits_value`] (which also refuses a class method's own
+/// `cls`, `I0404`). Every other binder -- a `for` target, a walrus, a
+/// `match` capture, a comprehension variable, an annotation on a name
+/// already bound -- stores its value unboxed, so it keeps the strict
+/// [`check_assignment`] and a native value there stays `T0023`.
+fn check_assignment_boxing(
+    env: &mut Environment,
+    target: &str,
+    ty: Ty,
+    value: &HirExpr,
+) -> Result<(), Diagnostic> {
+    check_assignment_of(env, target, ty, Some(value))
+}
+
+fn check_assignment_of(
+    env: &mut Environment,
+    target: &str,
+    ty: Ty,
+    boxed_value: Option<&HirExpr>,
+) -> Result<(), Diagnostic> {
     // #1325 / Part 1 of #1333: binding a CPython object to a name is
     // admitted in both scopes, so no refusal sits here. The rest of this
     // function applies unchanged: rebinding the name to another type is
@@ -1087,9 +1114,11 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
     // retained -- `lookup` would return `None` for a `Maybe` binding, wrongly
     // treating the reassignment as a fresh first binding.
     if let Some(previous) = env.lookup_any(target) {
-        if !class::is_assignable_env(env, &ty, &previous)
-            && !object_box::admits(env, &ty, &previous)
-        {
+        let boxed = match boxed_value {
+            Some(value) => object_box::admits_value(env, value, &ty, &previous)?,
+            None => false,
+        };
+        if !class::is_assignable_env(env, &ty, &previous) && !boxed {
             // #380 (PR-20): if the mismatch involves a protocol,
             // produce a detailed T0046 conformance error.
             let diag = if matches!(previous, Ty::Protocol(_)) || matches!(ty, Ty::Protocol(_)) {
@@ -1977,7 +2006,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // module-level frame gets no owned-slot epilogue, so the
             // free-at-exit lifetime has no exit to run at.
             let ty = infer_expr(env, value)?;
-            check_assignment(env, target, ty)
+            check_assignment_boxing(env, target, ty, value)
         }
         HirStmt::AnnAssign {
             target,
@@ -3188,7 +3217,7 @@ fn check_stmt_in_function(
             }
             let ty = infer_expr_in(env, local_names, value)
                 .map_err(|d| empty_container::name_binding(d, target, value))?;
-            check_assignment(env, target, ty)
+            check_assignment_boxing(env, target, ty, value)
         }
         HirStmt::AnnAssign {
             target,

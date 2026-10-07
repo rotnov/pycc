@@ -55,10 +55,12 @@ pub(crate) fn admits(env: &Environment, from: &Ty, to: &Ty) -> bool {
 /// a class method's own `cls`, which is typed as an instance of its class
 /// but holds none ([`foreign::refuse_classmethod_cls`]).
 ///
-/// A call argument of a method, constructor, static, class or `super()`
-/// call reaches `class::check_call_args`, which sees only the argument
-/// types; a `cls` there reaches the shim's null guard and raises
-/// `SystemError` instead, exactly as an alias of `cls` already does.
+/// Every boxing seam with an expression in hand calls this one: an
+/// annotated binding, a plain rebinding, a `return`, an attribute store and
+/// every call shape's arguments (`class::check_call_args` takes the
+/// argument expressions too). Only an alias (`c = cls; f(c)`) is not
+/// traced; it reaches the shim's null guard and raises `SystemError`, as it
+/// already does at a foreign call.
 pub(crate) fn admits_value(
     env: &Environment,
     value: &HirExpr,

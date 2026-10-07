@@ -59,5 +59,5 @@ pub(crate) fn infer_receiver_class_call(
         .iter()
         .map(|arg| infer_expr_in(env, local_names, arg))
         .collect::<Result<Vec<_>, _>>()?;
-    resolve_instantiation(env, class.as_str(), &arg_tys)
+    resolve_instantiation(env, class.as_str(), args, &arg_tys)
 }

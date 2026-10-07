@@ -27,9 +27,10 @@ use super::check_call_args;
 /// default had been written at the call site. Two cases are refused:
 ///
 /// * `C0001`: an omitted parameter is an `object` parameter whose default
-///   is `None`. pycc has no conversion from `None` to an `object` argument
-///   yet, so that default can only be supplied at the `--ext` host
-///   boundary.
+///   is `None`. Boxing (#1475) happens on the call's own arguments; a
+///   default filled in here is appended unboxed, so an in-module call must
+///   pass that argument explicitly (an `--ext` host omitting it gets the
+///   default from the export wrapper).
 /// * `T0021`: the call omits a required parameter, or passes more
 ///   arguments than the method takes. When the method declares defaults,
 ///   the message gives the accepted range.
@@ -38,6 +39,7 @@ pub(super) fn check_method_call_args(
     owner: &HirClassDef,
     mangled: &str,
     method: &str,
+    args: &[HirExpr],
     arg_tys: &[Ty],
     param_tys: &[Ty],
 ) -> Result<(), Diagnostic> {
@@ -52,7 +54,7 @@ pub(super) fn check_method_call_args(
                 arg_tys.len(),
             ));
         }
-        return check_call_args(env, method, arg_tys, param_tys, true);
+        return check_call_args(env, method, args, arg_tys, param_tys, true);
     };
     let mut filled = arg_tys.to_vec();
     for default in omitted {
@@ -62,7 +64,7 @@ pub(super) fn check_method_call_args(
         }
         filled.push(crate::infer_expr(env, default)?);
     }
-    check_call_args(env, method, &filled, param_tys, true)
+    check_call_args(env, method, args, &filled, param_tys, true)
 }
 
 /// How many leading parameters of `owner`'s method `mangled` are required,
@@ -96,8 +98,8 @@ fn none_at_object(method: &str, position: usize) -> Diagnostic {
         Span::new(0, 0),
     )
     .with_help(format!(
-        "pass an `object` value as argument {position} explicitly; a `None` default reaches \
-         an `object` parameter only when an `--ext` host omits the argument"
+        "pass argument {position} explicitly (`None` boxes into an `object` argument); an \
+         in-module call does not fill an `object` parameter's `None` default yet"
     ))
 }
 

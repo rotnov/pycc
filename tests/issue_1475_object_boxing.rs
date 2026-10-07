@@ -65,7 +65,10 @@ fn run(script: &str, path_entry: &Path, cwd: &Path) -> Output {
 }
 
 /// Every boxing seam, each reached from a public function the driver calls.
-const MODULE: &str = r#"class C:
+const MODULE: &str = r#"import sys
+
+
+class C:
     def __init__(self, v: int) -> None:
         self.v = v
 
@@ -253,6 +256,26 @@ def eq_explicit_native() -> object:
     return Q(1).__eq__(3)
 
 
+class Pair:
+    def __init__(self, a: object, b: object) -> None:
+        self.a = a
+        self.b = b
+
+
+def twice() -> Pair:
+    c = C(4)
+    return Pair(c, c)
+
+
+for loop_item in sys.path:
+    pass
+loop_item = 5
+
+
+def mirror() -> object:
+    return loop_item
+
+
 def big() -> object:
     n = 2 ** 70
     return n
@@ -264,7 +287,7 @@ for name in [
     "call_int", "call_str", "call_bool", "call_none", "call_kw", "call_private",
     "branch_int", "branch_str", "rebound", "bind", "ret_float", "ret_bool",
     "ret_none_call", "ctor", "method", "static", "super_init", "classm",
-    "setter", "attr_store", "exc_ctor", "eq_explicit", "eq_explicit_native",
+    "setter", "attr_store", "exc_ctor", "eq_explicit", "eq_explicit_native", "mirror",
 ]:
     r = getattr(m, name)()
     print(name, type(r).__name__, r)
@@ -274,6 +297,8 @@ c = m.C(5)
 print(m.f(c) is c, m.f(None) is None)
 print(type(m.Prop().seen).__name__)
 print(m.Q(1) == m.Q(2), m.Q(0) == m.Q(0), m.Q(1) == 3)
+p = m.twice()
+print(p.a is p.b, type(p.a).__name__, p.a.v)
 "#;
 
 /// What CPython prints for [`DRIVER`] over [`MODULE`]; the extension must
@@ -284,8 +309,8 @@ const EXPECTED: &str = "call_int int 3\ncall_str str s\ncall_bool bool True\n\
                         ret_float float 2.5\nret_bool bool True\nret_none_call NoneType None\n\
                         ctor int 7\nmethod bool False\nstatic str t\nsuper_init float 2.5\n\
                         classm int 9\nsetter str set\nattr_store str z\nexc_ctor int 5\n\
-                        eq_explicit bool True\neq_explicit_native NotImplementedType NotImplemented\n\
-                        call_inst C 1\nTrue True\nint\nTrue False False\n";
+                        eq_explicit bool True\neq_explicit_native NotImplementedType NotImplemented\nmirror int 5\n\
+                        call_inst C 1\nTrue True\nint\nTrue False False\nTrue C 4\n";
 
 /// Builds [`MODULE`] as `boxing` in `out`, its source in `src`.
 fn build_module(dir: &Path) -> (PathBuf, PathBuf) {
@@ -511,6 +536,141 @@ fn boxing_a_class_methods_cls_is_refused() {
         "ext_1475_cls",
         "def f(x: object) -> object:\n    return x\n\n\nclass K:\n    @classmethod\n    \
          def m(cls) -> object:\n        return f(cls)\n",
+    );
+    assert!(
+        rendered.contains(
+            "error[I0404]: boxing a class method's `cls` into an `object` slot is not supported yet"
+        ),
+        "{rendered}"
+    );
+}
+
+/// Only a plain `name = value` rebinding boxes; a `for` loop over a `range` stores its value
+/// unboxed, so rebinding an `object` name there stays a mismatch.
+#[test]
+fn a_native_value_through_a_for_range_binder_is_refused() {
+    let rendered = refused(
+        "ext_1475_binder_for_range",
+        "def g() -> None:\n    y: object = 1\n    for y in range(3):\n        pass\n",
+    );
+    assert!(rendered.contains("error[T0023]"), "{rendered}");
+}
+
+/// Only a plain `name = value` rebinding boxes; a `for` loop over a list stores its value
+/// unboxed, so rebinding an `object` name there stays a mismatch.
+#[test]
+fn a_native_value_through_a_for_list_binder_is_refused() {
+    let rendered = refused(
+        "ext_1475_binder_for_list",
+        "def g(xs: list[int]) -> None:\n    y: object = 1\n    for y in xs:\n        pass\n",
+    );
+    assert!(rendered.contains("error[T0023]"), "{rendered}");
+}
+
+/// Only a plain `name = value` rebinding boxes; a walrus stores its value
+/// unboxed, so rebinding an `object` name there stays a mismatch.
+#[test]
+fn a_native_value_through_a_walrus_binder_is_refused() {
+    let rendered = refused(
+        "ext_1475_binder_walrus",
+        "def g() -> object:\n    y: object = 1\n    if (y := 5) > 0:\n        pass\n    return y\n",
+    );
+    assert!(rendered.contains("error[T0023]"), "{rendered}");
+}
+
+/// Only a plain `name = value` rebinding boxes; a `match` capture pattern stores its value
+/// unboxed, so rebinding an `object` name there stays a mismatch.
+#[test]
+fn a_native_value_through_a_match_capture_binder_is_refused() {
+    let rendered = refused(
+        "ext_1475_binder_match_capture",
+        "def g() -> object:\n    y: object = 1\n    match 3:\n        case y:\n            pass\n    return y\n",
+    );
+    assert!(rendered.contains("error[T0023]"), "{rendered}");
+}
+
+/// Only a plain `name = value` rebinding boxes; an annotation on a name already bound stores its value
+/// unboxed, so rebinding an `object` name there stays a mismatch.
+#[test]
+fn a_native_value_through_a_reannotation_binder_is_refused() {
+    let rendered = refused(
+        "ext_1475_binder_reannotation",
+        "def g() -> object:\n    y: object = 1\n    y: int = 5\n    return y\n",
+    );
+    assert!(rendered.contains("error[T0023]"), "{rendered}");
+}
+
+/// `cls` is refused as a constructor's boxed value too, not only as a plain
+/// function argument.
+#[test]
+fn boxing_cls_into_ctor_is_refused() {
+    let rendered = refused(
+        "ext_1475_cls_ctor",
+        "class H:\n    def __init__(self, x: object) -> None:\n        self.x = x\n\n\nclass K:\n    @classmethod\n    def m(cls) -> H:\n        return H(cls)\n",
+    );
+    assert!(
+        rendered.contains(
+            "error[I0404]: boxing a class method's `cls` into an `object` slot is not supported yet"
+        ),
+        "{rendered}"
+    );
+}
+
+/// `cls` is refused as a method's boxed value too, not only as a plain
+/// function argument.
+#[test]
+fn boxing_cls_into_method_is_refused() {
+    let rendered = refused(
+        "ext_1475_cls_method",
+        "class H:\n    def put(self, x: object) -> None:\n        pass\n\n\nclass K:\n    @classmethod\n    def m(cls, h: H) -> None:\n        h.put(cls)\n",
+    );
+    assert!(
+        rendered.contains(
+            "error[I0404]: boxing a class method's `cls` into an `object` slot is not supported yet"
+        ),
+        "{rendered}"
+    );
+}
+
+/// `cls` is refused as a static method's boxed value too, not only as a plain
+/// function argument.
+#[test]
+fn boxing_cls_into_static_is_refused() {
+    let rendered = refused(
+        "ext_1475_cls_static",
+        "class H:\n    @staticmethod\n    def st(x: object) -> None:\n        pass\n\n\nclass K:\n    @classmethod\n    def m(cls) -> None:\n        H.st(cls)\n",
+    );
+    assert!(
+        rendered.contains(
+            "error[I0404]: boxing a class method's `cls` into an `object` slot is not supported yet"
+        ),
+        "{rendered}"
+    );
+}
+
+/// `cls` is refused as another class method's boxed value too, not only as a plain
+/// function argument.
+#[test]
+fn boxing_cls_into_classmethod_is_refused() {
+    let rendered = refused(
+        "ext_1475_cls_classmethod",
+        "class K:\n    @classmethod\n    def take(cls, x: object) -> None:\n        pass\n\n    @classmethod\n    def m(cls) -> None:\n        K.take(cls)\n",
+    );
+    assert!(
+        rendered.contains(
+            "error[I0404]: boxing a class method's `cls` into an `object` slot is not supported yet"
+        ),
+        "{rendered}"
+    );
+}
+
+/// `cls` is refused as a rebinding's boxed value too, not only as a plain
+/// function argument.
+#[test]
+fn boxing_cls_into_rebinding_is_refused() {
+    let rendered = refused(
+        "ext_1475_cls_rebinding",
+        "class K:\n    @classmethod\n    def m(cls) -> object:\n        y: object = 1\n        y = cls\n        return y\n",
     );
     assert!(
         rendered.contains(

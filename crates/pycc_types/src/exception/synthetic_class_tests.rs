@@ -186,7 +186,7 @@ fn a_user_class_shadowing_a_builtin_exception_name_still_closes_the_gates() {
 #[test]
 fn instantiating_a_synthetic_builtin_exception_class_is_rejected() {
     let env = environment_for(SEEDED_SOURCE);
-    let err = crate::class::resolve_instantiation(&env, "ValueError", &[Ty::Str])
+    let err = crate::class::resolve_instantiation(&env, "ValueError", &[], &[Ty::Str])
         .expect_err("a builtin exception class must not be instantiable as a value");
     assert_eq!(err.code, "C0001");
     assert!(
@@ -201,7 +201,7 @@ fn instantiating_a_synthetic_builtin_exception_class_is_rejected() {
 fn every_synthetic_builtin_exception_class_is_rejected_the_same_way() {
     let env = environment_for(SEEDED_SOURCE);
     for name in pycc_hir::BUILTIN_EXCEPTION_CLASSES {
-        let err = crate::class::resolve_instantiation(&env, name, &[Ty::Str])
+        let err = crate::class::resolve_instantiation(&env, name, &[], &[Ty::Str])
             .expect_err("every builtin exception class must be uninstantiable");
         assert_eq!(err.code, "C0001");
     }

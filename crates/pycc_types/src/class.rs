@@ -445,12 +445,18 @@ fn t0047_super_instance_attr(attr: &str, declaring_class: &str) -> Diagnostic {
 /// assignment/conformance positions that already use it.
 ///
 /// Independently of `structural`, every site admits a native value boxed
-/// into an `object` parameter ([`crate::object_box::admits`], Part 2 of
-/// #1387): codegen's one argument-marshalling helper boxes it for every
-/// call shape, so no site needs a lowering of its own.
+/// into an `object` parameter ([`crate::object_box::admits_value`], Part 2
+/// of #1387): codegen's one argument-marshalling helper boxes it for every
+/// call shape, so no site needs a lowering of its own. `args` are the
+/// call's argument expressions, in `arg_tys` order, so a class method's
+/// own `cls` is refused (`I0404`) at every call shape. It is shorter than
+/// `arg_tys` when `method_defaults` filled trailing defaults in; a filled
+/// default is appended unboxed, so it never boxes here and must be
+/// assignable as it stands.
 pub(crate) fn check_call_args(
     env: &Environment,
     callee: &str,
+    args: &[HirExpr],
     arg_tys: &[Ty],
     param_tys: &[Ty],
     structural: bool,
@@ -472,7 +478,9 @@ pub(crate) fn check_call_args(
             is_assignable_env(env, arg_ty, param_ty)
         } else {
             is_assignable(arg_ty.clone(), param_ty.clone())
-        } || crate::object_box::admits(env, arg_ty, param_ty);
+        } || args.get(i).map_or(Ok(false), |arg| {
+            crate::object_box::admits_value(env, arg, arg_ty, param_ty)
+        })?;
         if !assignable {
             return Err(Diagnostic::error(
                 "T0021",

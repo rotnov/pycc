@@ -30,7 +30,7 @@
 
 use crate::Environment;
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{HirClassDef, HirModule, Ty};
+use pycc_hir::{HirClassDef, HirExpr, HirModule, Ty};
 
 use super::check_call_args;
 
@@ -98,6 +98,7 @@ pub(super) fn expect_class<'e>(env: &'e Environment, class_name: &str) -> &'e Hi
 pub(crate) fn resolve_instantiation(
     env: &Environment,
     class_name: &str,
+    args: &[HirExpr],
     arg_tys: &[Ty],
 ) -> Result<Ty, Diagnostic> {
     let class_def = env.lookup_class(class_name).unwrap_or_else(|| {
@@ -269,7 +270,7 @@ pub(crate) fn resolve_instantiation(
     // `param_tys[0]` is always `self`'s own `Ty::Instance(class_name)` --
     // never part of the argument list a caller actually supplies.
     let ctor_param_tys = &param_tys[1..];
-    check_call_args(env, class_name, arg_tys, ctor_param_tys, false)?;
+    check_call_args(env, class_name, args, arg_tys, ctor_param_tys, false)?;
     Ok(Ty::Instance(Box::new(class_name.to_string())))
 }
 
@@ -308,7 +309,7 @@ mod tests {
                 is_abstract: false,
             },
         );
-        let _ = super::resolve_instantiation(&env, "Ghost", &[]);
+        let _ = super::resolve_instantiation(&env, "Ghost", &[], &[]);
     }
 
     #[test]
@@ -320,7 +321,7 @@ mod tests {
         // error. This test bypasses the normal entry point and calls
         // `resolve_instantiation` directly with a bare `Environment`.
         let env = crate::Environment::new();
-        let _ = super::resolve_instantiation(&env, "Ghost", &[]);
+        let _ = super::resolve_instantiation(&env, "Ghost", &[], &[]);
     }
 
     #[test]
@@ -365,7 +366,7 @@ mod tests {
                 is_abstract: false,
             },
         );
-        let _ = super::resolve_instantiation(&env, "Ghost", &[]);
+        let _ = super::resolve_instantiation(&env, "Ghost", &[], &[]);
     }
 
     // -- #921 (PEP 435): calling an enum class is `C0001`, never a panic --
@@ -420,7 +421,7 @@ mod tests {
         // `is_enum` -- not the table -- must be what the guard keys on.
         env.bind_class("E".to_string(), enum_class_def("E", Vec::new()));
         for (class_name, arg_tys) in [("Color", vec![crate::Ty::Int]), ("E", Vec::new())] {
-            let err = super::resolve_instantiation(&env, class_name, &arg_tys)
+            let err = super::resolve_instantiation(&env, class_name, &[], &arg_tys)
                 .expect_err("calling an enum class must be rejected, never reach the MRO walk");
             assert_eq!(err.code, "C0001", "unexpected diagnostic: {err:?}");
             assert_eq!(err.message, pycc_hir::enum_class_call_message(class_name));
