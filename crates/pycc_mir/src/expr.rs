@@ -386,16 +386,14 @@ pub(super) fn lower_expr(
             // the guard's type included, so the native unbox is dropped.
             if callee == "type"
                 && let [base] = args.as_slice()
-                && matches!(
-                    super::object_narrow::object_operand(base.clone()).ty(),
-                    Ty::Object
-                )
+                && let base = super::object_narrow::object_operand(base.clone())
+                && base.ty() == Ty::Object
                 && !scopes
                     .iter()
                     .any(|scope| scope.contains_key(&format!("$fn:{callee}")))
             {
                 return MirExpr::ObjType {
-                    base: Box::new(super::object_narrow::object_operand(base.clone())),
+                    base: Box::new(base),
                 };
             }
             let ty = if callee == "print" {
