@@ -1482,8 +1482,10 @@ done:
  * Anything else -- a module body's own `ValueError`, a `SyntaxError`, a
  * `BaseException` -- is left exactly as CPython set it, and so is an
  * `ImportError` this function cannot translate (the table cannot grow, or
- * `str(exc)` fails): it returns 0, and the generated code keeps the direct
- * `-1` edge out of `Py_mod_exec` (the #1096 residual). Every fallible step
+ * `str(exc)` fails): it returns 0, and the generated code takes the module
+ * body's foreign failure edge (Part 1 of #1096): `pycc_ext_obj_error_bridge`
+ * inside a module-level `try`, and the direct `-1` edge out of
+ * `Py_mod_exec` outside every one. Every fallible step
  * runs before any pycc state is touched, so a 0 never leaves a pycc
  * exception pending, and a 1 never leaves a CPython one set.
  *
@@ -1586,8 +1588,9 @@ static unsigned char pycc_ext_obj_error_tag(PyObject *exc, const char **class_na
 #undef PYCC_EXT_OBJ_TAG
 
 /*
- * #1316: the foreign-operation bridge. Called by compiled code outside
- * module exec -- any function body -- when a foreign operation
+ * #1316: the foreign-operation bridge. Called by compiled code in any
+ * function body, and in the module body inside a module-level `try`
+ * (Part 1 of #1096), when a foreign operation
  * (`pycc_ext_obj_getattr`, `_call`, `_len`, ...) failed with CPython's
  * exception set. It translates that exception into a pending pycc one and
  * keeps the original in the bridge table, so an enclosing `try` in the
@@ -1843,7 +1846,7 @@ PyObject *pycc_ext_obj_pack_object(PyObject *value)
  * a second, synthetic error would overwrite the real one.
  *
  * A NULL `bound` is defence in depth: the caller's own NULL check on the
- * lookup already routed a failed attribute load to the module-exec failure
+ * lookup already routed a failed attribute load to the foreign failure
  * edge before this call is reached.
  */
 PyObject *pycc_ext_obj_call(PyObject *bound, PyObject **args, long long nargs)
@@ -1884,7 +1887,7 @@ PyObject *pycc_ext_obj_call(PyObject *bound, PyObject **args, long long nargs)
  * Every `args[i]` is CONSUMED on every path, exactly as for
  * `pycc_ext_obj_call`. Returns a new reference (never released, #1092) or
  * NULL with a Python exception set; the caller routes NULL to the
- * module-exec failure edge (#1096).
+ * foreign failure edge (`crates/pycc_codegen/src/foreign_fail.rs`).
  */
 PyObject *pycc_ext_obj_call_borrowed(PyObject *callee, PyObject **args,
                                      long long nargs)
@@ -1977,7 +1980,7 @@ PyObject *pycc_ext_obj_call_kw_borrowed(PyObject *callable, PyObject **args,
  * whole operation presents *one* failure edge to the caller: `PyObject_Size`
  * raises `TypeError` for an operand with no length, and the encode refuses a
  * value outside the inline range `[-2**62, 2**62-1]`. Two `-1` returns from
- * one symbol let `foreign_len.rs` emit a single branch to the module-exec
+ * one symbol let `foreign_len.rs` emit a single branch to the foreign
  * failure edge instead of two. The encode arm is unreachable for a real
  * container -- no object has 2**62 elements -- and exists as defence in
  * depth; `PyErr_NoMemory` is the honest report for a length that large.
@@ -1985,7 +1988,7 @@ PyObject *pycc_ext_obj_call_kw_borrowed(PyObject *callable, PyObject **args,
  * As with `pycc_ext_obj_getattr`, a NULL `o` is decided here as defence in
  * depth: `PyObject_Size` dereferences `Py_TYPE(o)` with no guard of its own,
  * and the caller's own NULL check already routed a failed producer to the
- * module-exec failure edge with its exception set, so returning `-1` without
+ * foreign failure edge with its exception set, so returning `-1` without
  * setting a second one leaves exactly one exception pending.
  */
 int pycc_ext_obj_len(PyObject *o, long long *out)
@@ -2070,7 +2073,7 @@ PyObject *pycc_ext_obj_type(PyObject *o)
  * argument `pycc_ext_obj_call`'s own NULL scan records. A NULL `o` is
  * defence in depth: `PyObject_GetItem` dereferences `Py_TYPE(o)` with no
  * guard of its own, and the caller's own NULL check already routed a failed
- * producer to the module-exec failure edge with its exception set, so
+ * producer to the foreign failure edge with its exception set, so
  * returning NULL without setting a second one leaves exactly one exception
  * pending.
  */
@@ -2482,7 +2485,7 @@ void pycc_ext_obj_raise(PyObject *o)
  * leak-only rule `docs/RUNTIME.md` records for the rest of this boundary.
  *
  * A non-iterable operand makes `PyObject_GetIter` set `TypeError` and
- * return NULL, which the caller routes to the module-exec failure edge, so
+ * return NULL, which the caller routes to the foreign failure edge, so
  * "this object cannot be iterated" needs no compile-time test: pycc knows
  * nothing about the pointee and could not perform one.
  *
@@ -2512,7 +2515,7 @@ PyObject *pycc_ext_obj_get_iter(PyObject *o)
  * in the code generator would put a second, independently maintained copy of
  * that convention in a place where it could silently drift. It is also what
  * keeps *exhaustion off the failure edge* -- a loop that simply ends is not
- * a module-exec failure, and fusing the two would have made every `for` loop
+ * a foreign failure, and fusing the two would have made every `for` loop
  * over a foreign object terminate the module body.
  *
  * Each item written through `*out` is a new reference that is never

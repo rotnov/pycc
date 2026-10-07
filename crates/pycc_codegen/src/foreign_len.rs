@@ -46,12 +46,11 @@
 //! **Failure** (`docs/RUNTIME.md`). Every helper here leaves *CPython's*
 //! error indicator set, which pycc's own pending-exception guard (D-173) cannot
 //! see, so each arm below emits its own check through
-//! `foreign_fail::route_negative`: inside `pycc_ext_module_exec` it returns
-//! [`EXT_MODULE_EXEC_FAILED`], and inside any other function it bridges the
-//! exception into pycc's pending state and branches to the innermost
-//! exception target (#1316). #1096 tracks the fact that the module-exec edge
-//! bypasses pycc's MIR exception target and so cannot be caught by a
-//! module-scope `try`.
+//! `foreign_fail::route_negative`: inside `pycc_ext_module_exec` with no
+//! module-level `try` enclosing it, it returns [`EXT_MODULE_EXEC_FAILED`];
+//! anywhere else it bridges the exception into pycc's pending state and
+//! branches to the innermost exception target (#1316, Part 1 of #1096), so
+//! a module-level `try` catches it.
 
 use super::*;
 use crate::foreign_attr::{expect_module_exec_entry, expect_object_pointer};
@@ -519,7 +518,7 @@ fn emit_text_conversion<'ctx>(
 /// [`EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL`] records. The runtime object's
 /// items are never type-checked by pycc; a bad item fails at run time with
 /// whatever exception CPython's own `PyNumber_Float` raises, on
-/// the module-exec failure edge together with a wrong
+/// the module body's foreign failure edge together with a wrong
 /// container type and a wrong arity.
 ///
 /// This emitter alone keeps the module-exec entry assertion: `pycc_types`

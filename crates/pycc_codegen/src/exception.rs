@@ -2,7 +2,7 @@
 
 use super::exception_value::emit_str_bytes_constant;
 use super::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 pub(super) struct ExceptionCodegenState<'ctx> {
     pub(super) reraise_values: RefCell<Vec<PointerValue<'ctx>>>,
@@ -19,6 +19,13 @@ pub(super) struct ExceptionCodegenState<'ctx> {
     /// hot loop reaches, which is what keeps that loop's codegen
     /// unchanged (see `guard_statement_effects`'s own doc comment).
     pub(super) pending_int_releases: RefCell<Vec<IntValue<'ctx>>>,
+    /// The `ext` module entry's own `top_exception_exit` while its body is
+    /// emitted, and `None` otherwise (Part 1 of #1096). When it is also the
+    /// innermost entry of `targets`, no module-level `try` encloses the
+    /// statement being emitted, and that target means "fail the import
+    /// directly": `foreign_fail::emit_failure` then keeps the direct
+    /// `EXT_MODULE_EXEC_FAILED` return instead of bridging a foreign failure.
+    pub(super) module_exec_exit: Cell<Option<inkwell::basic_block::BasicBlock<'ctx>>>,
 }
 
 impl ExceptionCodegenState<'_> {
@@ -27,6 +34,7 @@ impl ExceptionCodegenState<'_> {
             reraise_values: RefCell::new(Vec::new()),
             targets: RefCell::new(Vec::new()),
             pending_int_releases: RefCell::new(Vec::new()),
+            module_exec_exit: Cell::new(None),
         }
     }
 }
@@ -63,8 +71,9 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         //
         // So for both nodes the `true` answer is fail-closed conservatism
         // rather than a live dependency: the emitter's own check is
-        // immediate. In the module body it returns the `-1` status; in any
-        // other function (#1316) it calls `pycc_ext_obj_error_bridge`,
+        // immediate. In the module body outside every module-level `try` it
+        // returns the `-1` status; anywhere else (#1316, Part 1 of #1096) it
+        // calls `pycc_ext_obj_error_bridge`,
         // which moves CPython's exception into pycc's pending state, and
         // branches straight to the innermost exception target
         // (`foreign_fail.rs`). Either way the D-173 guard emitted after the

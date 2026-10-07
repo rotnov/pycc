@@ -7,10 +7,11 @@
 //! When the bridged exception escapes the module body unchanged through a
 //! plain `try` (unmatched, re-raised with a bare `raise`, or after
 //! `finally`), the shim re-raises CPython's *original* object, so the host
-//! still sees its `.name`. Two recorded deviations are pinned here as such:
-//! an escape through `except*` reaches the host as a rebuilt `Exception`,
-//! and an import that fails with anything other than an `ImportError` keeps
-//! the direct `-1` edge (the #1096 residual).
+//! still sees its `.name`. One recorded deviation is pinned here as such:
+//! an escape through `except*` reaches the host as a rebuilt `Exception`.
+//! An import that fails with anything other than an `ImportError` is
+//! bridged by the object bridge since Part 1 of #1096, so a matching
+//! `except` catches it too.
 //!
 //! Every test here is `#[ignore]`d and contributes no line coverage; the
 //! Tier-1 `native-build-test` leg runs them with
@@ -420,27 +421,23 @@ fn a_plain_import_error_bridges_to_tag_26() {
     assert_eq!(stdout_of(&cpython), "custom\n");
 }
 
-/// The #1096 residual: an import that fails with anything other than an
-/// `ImportError` is not bridged, so `except Exception` does not run and the
-/// host sees the module body's own `ValueError`.
+/// Part 1 of #1096: an import that fails with anything other than an
+/// `ImportError` is bridged by the object bridge, so `except Exception`
+/// runs as it does under CPython and the import completes. This test
+/// pinned the old direct `-1` edge until #1096 flipped it.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn a_non_import_error_is_not_bridged() {
+fn a_non_import_error_is_bridged_by_the_object_bridge() {
     let run = run_with_post_build_helper(
         "bridge_non_import_error",
         "pycc_bridge_non_ie_mod",
         "try:\n    import pycc_raises_1293\nexcept Exception:\n    print('handled')\n",
         "pycc_raises_1293",
         "raise ValueError('boom')\n",
-        "try:\n\
-         \x20   import pycc_bridge_non_ie_mod\n\
-         except ValueError as e:\n\
-         \x20   assert str(e) == 'boom', str(e)\n\
-         else:\n\
-         \x20   raise AssertionError('the import should have failed')\n",
+        "import pycc_bridge_non_ie_mod\n",
     );
     assert_ok(&run);
-    assert_eq!(stdout_of(&run), "");
+    assert_eq!(stdout_of(&run), "handled\n");
 }
 
 /// Builds `body` as a plain (embedded) executable and runs it and CPython on
