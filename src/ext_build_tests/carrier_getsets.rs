@@ -29,7 +29,8 @@ fn tables_and_inc(module: &HirModule) -> (Vec<ExtClassGetsets>, String) {
     let ctors = collect_constructors(module, &publications);
     let carriers = collect_carrier_classes(module);
     let getsets = collect_carrier_getsets(module, &carriers);
-    let slots = collect_slot_dunders(module, &carriers).expect("installable slots");
+    let slots =
+        collect_slot_dunders(module, &carriers, SlotArtifact::Ext).expect("installable slots");
     let inc = generate_exports_inc_with_slots(
         "m",
         &exports,

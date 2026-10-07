@@ -24,7 +24,7 @@ fn ext_module(tag: &str, source: &str) -> HirModule {
 }
 
 fn slots_of(module: &HirModule) -> Result<Vec<ExtSlotDunders>, Vec<Diagnostic>> {
-    collect_slot_dunders(module, &collect_carrier_classes(module))
+    collect_slot_dunders(module, &collect_carrier_classes(module), SlotArtifact::Ext)
 }
 
 fn entry<'s>(slots: &'s [ExtSlotDunders], class: &str) -> &'s ExtSlotDunders {
@@ -357,4 +357,77 @@ fn an_unpublished_class_gets_a_hidden_carrier_type_registered_up_front() {
     let bare = generate_exports_inc("m", &exports, &[], &publications, &ctors, &carriers);
     assert!(!bare.contains("Py_tp_richcompare"));
     assert!(!bare.contains("pycc_ext_carrier_spec_"));
+}
+
+/// #1470: the embedded executable's refusals name it instead of `--ext`,
+/// whose text keeps #1427's remedy byte for byte.
+#[test]
+fn an_embedded_refusal_names_the_embedded_executable() {
+    let module = ext_module(
+        "rc-embed-wording",
+        "class S:\n    @staticmethod\n    def __eq__(a: int, b: int) -> bool:\n        return True\n",
+    );
+    let carriers = collect_carrier_classes(&module);
+    let embedded = collect_slot_dunders(&module, &carriers, SlotArtifact::Embedded)
+        .expect_err("a static `__eq__` is refused in an embedded executable");
+    assert_eq!(embedded.len(), 1, "{embedded:?}");
+    assert_eq!(embedded[0].code, EXT_CAPABILITY_CODE);
+    assert!(
+        embedded[0].message.starts_with(
+            "an embedded executable cannot install `S.__eq__` as the host-visible `__eq__` of \
+             `S` instances: it is bound as a `@staticmethod`"
+        ),
+        "{}",
+        embedded[0].message
+    );
+    assert!(
+        embedded[0].message.ends_with(" (#1427, #1470)"),
+        "{}",
+        embedded[0].message
+    );
+    assert!(
+        !embedded[0].message.contains("--ext"),
+        "{}",
+        embedded[0].message
+    );
+    let ext = slots_of(&module).expect_err("and in an `--ext` module");
+    assert!(
+        ext[0]
+            .message
+            .starts_with("--ext cannot install `S.__eq__`"),
+        "{}",
+        ext[0].message
+    );
+    assert!(
+        ext[0].message.ends_with(", or build without --ext (#1427)"),
+        "{}",
+        ext[0].message
+    );
+}
+
+/// #1470: an embedded executable is compiled without export thunks, so a
+/// slot dunder whose signature carries a `tuple` is refused there, while an
+/// `--ext` module installs it through its thunk.
+#[test]
+fn a_tuple_signature_slot_is_refused_only_in_an_embedded_executable() {
+    let module = ext_module(
+        "rc-embed-tuple",
+        "class T:\n    def __init__(self) -> None:\n        self.v = 1\n    \
+         def __eq__(self, other: tuple[int, int]) -> bool:\n        return True\n    \
+         def __hash__(self) -> int:\n        return 1\n",
+    );
+    let ext = slots_of(&module).expect("an `--ext` module installs a tuple-carrying slot");
+    assert_eq!(comparison_names(entry(&ext, "T")), ["__eq__"]);
+    let carriers = collect_carrier_classes(&module);
+    let embedded = collect_slot_dunders(&module, &carriers, SlotArtifact::Embedded)
+        .expect_err("an embedded executable refuses it");
+    assert_eq!(embedded.len(), 1, "{embedded:?}");
+    assert!(
+        embedded[0].message.contains(
+            "install `T.__eq__` as the host-visible `__eq__` of `T` instances: its signature \
+             carries a `tuple`, which an embedded executable's boundary does not carry"
+        ) && embedded[0].message.contains("take and return only scalars"),
+        "{}",
+        embedded[0].message
+    );
 }

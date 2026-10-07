@@ -122,7 +122,17 @@ fn an_unpackable_element_is_refused() {
         ),
         (
             "class A:\n    pass\n\n\ndef f() -> object:\n    x: object = [A(), [1]]\n    return x\n",
-            "A",
+            "list[int]",
+        ),
+        (
+            "from enum import Enum\n\n\nclass Color(Enum):\n    RED = 1\n\n\n\
+             def f() -> object:\n    x: object = [1, Color.RED]\n    return x\n",
+            "Color",
+        ),
+        (
+            "class E(Exception):\n    def __init__(self, n: int) -> None:\n        self.n = n\n\n\n\
+             def f() -> object:\n    x: object = [E(1)]\n    return x\n",
+            "E",
         ),
     ] {
         assert_refused(
@@ -131,6 +141,29 @@ fn an_unpackable_element_is_refused() {
             &format!("a `{ty}` element in a list display bound to a CPython object"),
         );
     }
+}
+
+/// #1470: an instance of a regular user class is an element, crossing as
+/// its carrier, beside scalars and objects and in a method's own `self`;
+/// a class method's `cls` holds no instance and stays refused.
+#[test]
+fn an_instance_element_is_admitted_and_cls_is_refused() {
+    assert_accepted(
+        "class A:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\n\n\
+         class B(A):\n    pass\n\n\n\
+         def f() -> object:\n    x: object = [A(1), 2, B(3), numpy.pi]\n    return x\n",
+        true,
+    );
+    assert_accepted(
+        "class A:\n    def go(self) -> object:\n        x: object = [self]\n        return x\n",
+        true,
+    );
+    assert_refused(
+        "class A:\n    @classmethod\n    def make(cls) -> object:\n        \
+         x: object = [1, cls]\n        return x\n",
+        "I0404",
+        "a class method's `cls` as an element of a list display bound to a CPython object",
+    );
 }
 
 /// What Part 2d leaves alone keeps its diagnostic: a dict display bound to

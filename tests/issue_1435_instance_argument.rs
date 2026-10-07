@@ -367,17 +367,21 @@ fn the_shapes_outside_issue_1435_are_refused() {
             "I0404",
             "passing a class method's `cls` argument to a CPython object's call",
         ),
+        // #1470 admits a regular instance as a key and a comparison
+        // operand; an enum member and a class method's `cls` stay refused.
         (
-            "inst_arg_key",
-            "x = builtins.__dict__[Q(1)]\n",
+            "inst_key_enum",
+            "from enum import Enum\n\n\nclass Color(Enum):\n    RED = 1\n\n\n\
+             x = builtins.__dict__[Color.RED]\n",
             "I0404",
-            "indexing a CPython object with a `Q` key",
+            "indexing a CPython object with a `Color` key",
         ),
         (
-            "inst_arg_compare",
-            "x = cb == Q(1)\n",
+            "inst_compare_cls",
+            "class K:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\n    \
+             @classmethod\n    def make(cls) -> None:\n        print(cb == cls)\n",
             "I0404",
-            "comparing a CPython object with a `Q` value",
+            "comparing a CPython object with a class method's `cls`",
         ),
         (
             "inst_arg_keyword_cls",

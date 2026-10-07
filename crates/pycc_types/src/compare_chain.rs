@@ -57,7 +57,9 @@ pub(crate) fn compare_link_ty(
     }
     // Part 1 of #1371: a rich comparison with a CPython object operand is
     // CPython's own `PyObject_RichCompare`, whose result is an object.
-    if let Some(result) = crate::foreign::compare::rich_compare_ty(left_ty, right_ty) {
+    if let Some(result) =
+        crate::foreign::compare::rich_compare_ty(env, (left, left_ty), (right, right_ty))
+    {
         return result;
     }
     // #378 (PR-18): `==`/`!=` between same-class dataclass instances

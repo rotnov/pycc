@@ -949,10 +949,19 @@ a comparison whose parameter has any other annotation the boundary checks
 (`other: int`) raises the boundary's ingress `TypeError` for an operand of
 another type where CPython runs the body (`c == "x"`); and a carrier no
 `tp_init` filled raises `TypeError: C.__hash__() called on an uninitialized
-instance` where CPython's body raises `AttributeError`. The embed launcher
-installs none of these slots (it publishes no type), which is why compiled code
-still may not use a pycc instance as a subscript key, comparison operand or
-list-display element ([#1470](https://github.com/rotnov/pycc/issues/1470)).
+instance` where CPython's body raises `AttributeError`. Since
+[#1470](https://github.com/rotnov/pycc/issues/1470) an embedded executable
+installs the same slots: it runs the same shim and companion, so every
+`__main__` carrier class that resolves one gets a hidden carrier type (with
+none of #1448's field descriptors), and a binding it cannot install is the same
+`C0003`, worded "an embedded executable cannot install ..." and answered before
+the interpreter is probed. An embedded executable is compiled without export
+thunks, so it also refuses a slot method whose signature carries a `tuple`.
+Compiled code may therefore use a pycc instance as a subscript key, a
+comparison operand or a list-display element opposite a CPython object in both
+artifacts ("A pycc instance argument crosses as a carrier of its run-time
+class" below); `tests/issue_1470_carrier_operands.rs` pins both against
+CPython.
 
 The table below is the canonical statement of what the `ext` boundary carries
 today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,
@@ -1564,8 +1573,10 @@ the whole operation: the helper tolerates a `NULL` key and answers `NULL`
 itself, so a failed key packer needs no branch of its own, the same fusing
 `pycc_ext_obj_len`'s encode arm uses for the same reason. The key is restricted
 to the packable operands -- the four scalars and, since Part 2a of #1371,
-another `object` (`pycc_ext_obj_pack_object`, below) -- so the packer choice is
-total. In a function
+another `object` (`pycc_ext_obj_pack_object`, below) -- and, since #1470, an
+instance of a regular pycc class (`pycc_ext_obj_pack_instance`, "A pycc
+instance argument crosses as a carrier of its run-time class" below), so the
+packer choice is total. In a function
 body the load takes the bridged edge (#1316).
 
 **A `for` loop fails on that same edge twice, and stays module-body only.**
@@ -1778,7 +1789,8 @@ Part 1 of [#1371](https://github.com/rotnov/pycc/issues/1371) adds
 `PyObject_RichCompare` and returns its new reference unreleased, so `o == 1`
 or `o < p` leaks one reference per evaluation on the same terms as an
 attribute load. An `object` operand is borrowed; a scalar operand is packed by
-the same four packers and the `owned` bit mask tells the helper which slots it
+the same four packers (a pycc instance, since #1470, by
+`pycc_ext_obj_pack_instance`) and the `owned` bit mask tells the helper which slots it
 received a new reference for, and the helper **consumes those on every
 path**, including the one where a packer already failed with `NULL` -- the
 key slot's rule once more. A `NULL` result routes to the operation's failure
@@ -1907,16 +1919,23 @@ above. Four rules fix what that carrier is.
   one instance are `is`-equal, and a host that drops every reference gets a
   fresh carrier for the next crossing -- the instance itself is never freed
   (D-107, as for a constructed instance above).
-- *Only the call-argument position is admitted.* The checker's
+- *A call argument, a subscript key, a comparison operand and a
+  list-display element are admitted.* The checker's
   `is_carriable_instance` (`crates/pycc_types/src/foreign.rs`) admits a
   `Ty::Instance` of a non-enum class with no exception type tag and no
   builtin exception on its MRO; a `Protocol`-typed value, an enum member and
-  an exception instance stay `I0404`. A subscript key, a comparison operand
-  and a list-display element stay refused: an `--ext` carrier type compares
-  and hashes through the class's own dunders since #1427 ("Comparing and
-  hashing through the carrier type" above), but the embed launcher's
-  carriers do not, and the checker does not know which artifact it compiles
-  for ([#1470](https://github.com/rotnov/pycc/issues/1470)). A `@classmethod`'s own
+  an exception instance stay `I0404`. Since
+  [#1470](https://github.com/rotnov/pycc/issues/1470) `is_object_operand`
+  admits the same instances as a subscript key, a rich-comparison operand on
+  either side, and an element of a list display bound to an object slot: the
+  carrier type compares and hashes through the class's own dunders in both
+  artifacts ("Comparing and hashing through the carrier type" above), and a
+  class that defines none of them compares and hashes by identity, as
+  CPython's `object` does. A membership item, an object comprehension's
+  element and a slice bound keep the narrower four-scalars-or-object rule.
+  A list display reaches an object slot only through an `object` or `Any`
+  annotation, which a native program cannot write, so that position is
+  `--ext`-only in practice. A `@classmethod`'s own
   `cls` is refused by name (`Environment::in_classmethod`): it is typed as
   an instance but is a null receiver, and an alias that slips past the
   syntactic check reaches the packer's `NULL` guard, which raises
@@ -1931,7 +1950,8 @@ above. Four rules fix what that carrier is.
   carrier of a non-constructible published type or of an unpublished class
   (`tests/issue_1448_carrier_getsets.rs`). A carrier on the on-demand type
   -- a class with nothing to describe, or any class in an embedded
-  executable -- and one of a class with a PEP 695 generic in its MRO
+  executable (whose hidden carrier type, since #1470, adds only the
+  comparison and hash slots) -- and one of a class with a PEP 695 generic in its MRO
   (other than a constructible published template, which keeps #1442's
   table) expose exactly their type's exported methods and the shared `__copy__`
   (#1455, "Copying an instance through `copy.copy`" above), so no attribute
@@ -2087,7 +2107,8 @@ deltas become CPython's.
 [#1371](https://github.com/rotnov/pycc/issues/1371) builds `x: object = [a,
 b]` (and an empty `[]` assigned to a name bound to an object elsewhere, see
 `TYPE_SYSTEM.md` "Object slots") as a fresh CPython `list`. The elements are
-evaluated left to right, each packed by one of the five packers into an array
+evaluated left to right, each packed by one of the five packers (or, since
+#1470, a pycc instance by `pycc_ext_obj_pack_instance`) into an array
 hoisted into the entry block, and handed to
 `pycc_ext_obj_build_list(items, n)`. The helper **consumes every packed
 element on every path**: when a packer already failed with `NULL` it builds

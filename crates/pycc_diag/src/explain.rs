@@ -196,7 +196,12 @@ the carrier type's comparison and hash slots, so one bound as a \
 with an uncarriable signature, is a C0003 whose fix is to make it an \
 instance method the boundary can carry, and one on a PEP 695 generic class \
 is a C0003 whose fix is an erased `Generic[T]` base instead of PEP 695 \
-syntax; never drop it, which would answer `==` and `hash()` by identity.",
+syntax; never drop it, which would answer `==` and `hash()` by identity. \
+Since #1470 an embedded executable -- a plain build of a program that \
+imports CPython -- installs the same slots, so the same bindings are a \
+C0003 there too, worded for the embedded executable, as is a slot method \
+whose signature carries a `tuple`, which an embedded executable, compiled \
+without export thunks, cannot call.",
         // The example has to name a signature the boundary still refuses
         // *and* that `native` mode compiles, since the explanation above
         // rests on exactly that contrast. It must be re-pointed whenever
