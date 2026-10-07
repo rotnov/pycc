@@ -260,7 +260,10 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // `truthy` helper), then inverts the resulting `i1` -- a compare
         // and an xor, both infallible. The wrapped operand is not
         // re-inspected here either, matching every other arm's own
-        // "classify only this node's operation" rule.
+        // "classify only this node's operation" rule. (Part 10 of #1371:
+        // an `object` operand's truth test raises through
+        // `foreign_len::emit_truthy`'s own failure edge, which branches
+        // immediately, as for `and`/`or` and `if` below.)
         | MirExpr::Not(_)
         // #1211 (Part 3 of #1018): `and`/`or` is a truth test, a branch
         // and a join, all infallible. Each operand is emitted through

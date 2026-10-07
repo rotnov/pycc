@@ -117,8 +117,9 @@
 //! positional bound changes: both operations read their operand through the
 //! same `HirExpr::Name` arm.
 //!
-//! `not o` is *not* part of this: `unop.rs`'s `Not` arm answers `T0021` for
-//! a non-`bool` operand, which it did before PR 3a and still does.
+//! `not o` was *not* part of this: `unop.rs`'s `Not` arm answered `T0021`
+//! for an object operand until Part 10 of #1371 admitted it as a native
+//! `bool` over the same truth test.
 //!
 //! **PR 3b of #1082 added another producer shape: a subscript load.**
 //! `o[k]` type-checks to [`Ty::Object`] (`expr.rs`'s `HirExpr::Subscript`
@@ -311,7 +312,7 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              object- or class-instance-argument method calls and direct calls with \
              positional or keyword arguments \
              (including a call of a subscript result), `len`, truth \
-             testing, a \
+             testing and `not`, a \
              scalar-, object- or class-instance-key subscript load, a slice load or deletion \
              with scalar or object bounds, a rich comparison with an object, scalar or \
              class-instance operand, an identity test against an object or `None`, \

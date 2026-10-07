@@ -530,19 +530,30 @@ fn the_operations_with_a_pre_existing_refusal_keep_it() {
             "x = -numpy.pi\n",
         ),
         (
-            "T0021",
-            "unary operator Not is not defined",
-            "if not numpy.pi:\n    print(1)\n",
-        ),
-        (
             "T0039",
             "tuple element type `object`",
             "t = (numpy.pi, 1)\n",
         ),
         // A slice load (`numpy.pi[0:2]`) left this list in Part 2b of
         // #1371; `foreign/slice/tests.rs` pins its admission.
+        // `not numpy.pi` left this list in Part 10 of #1371;
+        // `not_on_a_cpython_object_is_admitted` below pins its admission.
     ] {
         assert_refused("`numpy.pi`", snippet, code, phrase);
+    }
+}
+
+/// Part 10 of #1371: `not o` is the object's own truth test, negated into
+/// a native `bool`, in a condition, a value position and a `-> bool`
+/// return alike.
+#[test]
+fn not_on_a_cpython_object_is_admitted() {
+    for source in [
+        "if not numpy.pi:\n    print(1)\n",
+        "b = not numpy.pi\nprint(b)\n",
+        "def f() -> bool:\n    return not numpy.pi\n\nprint(f())\n",
+    ] {
+        assert!(check_foreign(source).is_none(), "{source}");
     }
 }
 

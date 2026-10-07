@@ -1516,7 +1516,8 @@ or `object` elements. Part 6 of #1371 admits `and`/`or` with an \
 object operand: as a condition the object's truth is `PyObject_IsTrue`, \
 and as a value the result is an `object` when the other operand is an \
 `object`, `int`, `float`, `bool` or `str`, a native operand boxed only \
-when it is the one selected. #1435 lets an instance of a regular pycc \
+when it is the one selected. Part 10 of #1371 admits `not o`: the \
+object's `PyObject_IsTrue`, negated into a native `bool`. #1435 lets an instance of a regular pycc \
 class (not an enum or an exception class) be a positional or keyword \
 argument of a method call, a direct call or a call of a subscript \
 result, crossing as a carrier of its run-time class. The loop is \

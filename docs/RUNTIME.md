@@ -1572,7 +1572,10 @@ than two, and the encode arm is unreachable for a real container.
 `__bool__` or `__len__` and so really can raise arbitrary user exceptions.
 `crates/pycc_codegen/src/foreign_len.rs` tests each status and returns `-1` from
 `Py_mod_exec`, exactly as `foreign_attr.rs` does for a `NULL`. In a function
-body both take the bridged edge (#1316).
+body both take the bridged edge (#1316). Since Part 10 of
+[#1371](https://github.com/rotnov/pycc/issues/1371), `not o` makes the same
+`pycc_ext_obj_truthy` call and inverts its `0`/`1` into a native `bool`, so
+it borrows the operand, creates no reference and fails on that same edge.
 
 **A subscript load fails on that same edge too.**
 PR 3b of [#1082](https://github.com/rotnov/pycc/issues/1082) added one more shim
