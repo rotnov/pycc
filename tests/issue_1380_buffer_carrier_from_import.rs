@@ -71,13 +71,23 @@ fn assert_clean(tag: &str, body: &str) {
 
 /// `pycc check` of `body` fails with exactly one `code` diagnostic whose
 /// text contains `needle`, located at `location` (`m.py:L:C`).
-fn assert_one_error(tag: &str, body: &str, extra: &[&str], code: &str, needle: &str, location: &str) {
+fn assert_one_error(
+    tag: &str,
+    body: &str,
+    extra: &[&str],
+    code: &str,
+    needle: &str,
+    location: &str,
+) {
     let (status, rendered) = check(tag, body, &[], extra);
     assert_eq!(status, Some(1), "{rendered}");
     assert_eq!(rendered.matches("error[").count(), 1, "{rendered}");
     assert!(rendered.contains(&format!("error[{code}]: ")), "{rendered}");
     assert!(rendered.contains(needle), "{rendered}");
-    assert!(rendered.contains(&format!(" --> {location}\n")), "{rendered}");
+    assert!(
+        rendered.contains(&format!(" --> {location}\n")),
+        "{rendered}"
+    );
 }
 
 const READ_REFUSAL: &str = "outside a type annotation is not supported yet: `from numpy";
@@ -225,7 +235,10 @@ fn a_sibling_cannot_import_the_spelling_from_a_carrier_module() {
 #[test]
 fn an_embedded_build_of_a_carrier_import_needs_the_lock() {
     let dir = ScratchDir::new("carrier_lock").expect("scratch");
-    write_files(&dir, &[("m.py", "from numpy.typing import NDArray\nprint(1)\n")]);
+    write_files(
+        &dir,
+        &[("m.py", "from numpy.typing import NDArray\nprint(1)\n")],
+    );
     let output = pycc()
         .arg("build")
         .arg(dir.join("m.py"))

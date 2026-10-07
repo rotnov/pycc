@@ -42,13 +42,23 @@ fn assert_refused(body: &str, context: &str, name: &str, kind: &str) {
     assert_eq!(diagnostics.len(), 1, "{body}: {diagnostics:#?}");
     let diagnostic = &diagnostics[0];
     assert_eq!(diagnostic.code, "C0001");
-    let spelling = if name.starts_with("ndarray") { "ndarray" } else { "NDArray" };
+    let spelling = if name.starts_with("ndarray") {
+        "ndarray"
+    } else {
+        "NDArray"
+    };
     assert!(
-        diagnostic.message.starts_with(&format!("{kind} `{spelling}`")),
+        diagnostic
+            .message
+            .starts_with(&format!("{kind} `{spelling}`")),
         "{body}: {}",
         diagnostic.message
     );
-    assert_eq!(diagnostic.span, Some(span_in(&source, context, name)), "{body}");
+    assert_eq!(
+        diagnostic.span,
+        Some(span_in(&source, context, name)),
+        "{body}"
+    );
 }
 
 fn assert_read_refused(body: &str, context: &str, name: &str) {
@@ -74,12 +84,22 @@ fn each_carrier_pair_binds_a_hidden_name_and_keeps_the_real_one_in_from() {
                 module_path,
                 from: Some(FromImport { name, index, .. }),
                 ..
-            } => (local_name.clone(), module_path.clone(), name.clone(), *index),
+            } => (
+                local_name.clone(),
+                module_path.clone(),
+                name.clone(),
+                *index,
+            ),
             other => panic!("unexpected binding {other:?}"),
         })
         .collect();
     let row = |local: &str, module: &str, name: &str, index| {
-        (local.to_string(), module.to_string(), name.to_string(), index)
+        (
+            local.to_string(),
+            module.to_string(),
+            name.to_string(),
+            index,
+        )
     };
     assert_eq!(
         rows,
@@ -124,14 +144,38 @@ fn each_read_outside_an_annotation_is_refused() {
     for (body, context, name) in [
         ("x = NDArray\n", "x = NDArray", "NDArray"),
         ("A = NDArray\n", "A = NDArray", "NDArray"),
-        ("def f(n: int) -> int:\n    a = ndarray(n)\n    return 0\n", "a = ndarray(n)", "ndarray"),
-        ("def f(a: object) -> bool:\n    return isinstance(a, ndarray)\n", "a, ndarray)", "ndarray"),
+        (
+            "def f(n: int) -> int:\n    a = ndarray(n)\n    return 0\n",
+            "a = ndarray(n)",
+            "ndarray",
+        ),
+        (
+            "def f(a: object) -> bool:\n    return isinstance(a, ndarray)\n",
+            "a, ndarray)",
+            "ndarray",
+        ),
         ("print(ndarray.__name__)\n", "print(ndarray", "ndarray"),
-        ("def f(a: int = NDArray) -> int:\n    return 0\n", "= NDArray", "NDArray"),
-        ("@ndarray\ndef f() -> int:\n    return 0\n", "@ndarray", "ndarray"),
+        (
+            "def f(a: int = NDArray) -> int:\n    return 0\n",
+            "= NDArray",
+            "NDArray",
+        ),
+        (
+            "@ndarray\ndef f() -> int:\n    return 0\n",
+            "@ndarray",
+            "ndarray",
+        ),
         ("class C(ndarray):\n    pass\n", "C(ndarray", "ndarray"),
-        ("def f[T: NDArray](a: T) -> T:\n    return a\n", "T: NDArray", "NDArray"),
-        ("class C:\n    x: NDArray = NDArray\n", "= NDArray", "NDArray"),
+        (
+            "def f[T: NDArray](a: T) -> T:\n    return a\n",
+            "T: NDArray",
+            "NDArray",
+        ),
+        (
+            "class C:\n    x: NDArray = NDArray\n",
+            "= NDArray",
+            "NDArray",
+        ),
         ("y: int = len(ndarray)\n", "len(ndarray", "ndarray"),
     ] {
         assert_read_refused(body, context, name);
@@ -147,8 +191,12 @@ fn a_producer_call_above_the_import_is_refused() {
     let diagnostics = lower_foreign(source, FOREIGN).expect_err("refused");
     let expected = span_in(source, "a = ndarray", "ndarray");
     assert!(
-        diagnostics.iter().any(|diagnostic| diagnostic.span == Some(expected)
-            && diagnostic.message.starts_with("reading `ndarray` outside a type annotation")),
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.span == Some(expected)
+                && diagnostic
+                    .message
+                    .starts_with("reading `ndarray` outside a type annotation")),
         "{diagnostics:#?}"
     );
 }
@@ -156,17 +204,53 @@ fn a_producer_call_above_the_import_is_refused() {
 #[test]
 fn each_definition_and_parameter_binding_is_refused() {
     for (body, context, name) in [
-        ("def ndarray() -> int:\n    return 0\n", "def ndarray", "ndarray"),
+        (
+            "def ndarray() -> int:\n    return 0\n",
+            "def ndarray",
+            "ndarray",
+        ),
         ("class NDArray:\n    pass\n", "class NDArray", "NDArray"),
-        ("def f(ndarray: int) -> int:\n    return 0\n", "(ndarray", "ndarray"),
-        ("def f(a: int, /, ndarray: int) -> int:\n    return 0\n", ", ndarray", "ndarray"),
-        ("def f(*ndarray: int) -> int:\n    return 0\n", "*ndarray", "ndarray"),
-        ("def f(*, ndarray: int) -> int:\n    return 0\n", ", ndarray", "ndarray"),
-        ("def f(**ndarray: int) -> int:\n    return 0\n", "**ndarray", "ndarray"),
+        (
+            "def f(ndarray: int) -> int:\n    return 0\n",
+            "(ndarray",
+            "ndarray",
+        ),
+        (
+            "def f(a: int, /, ndarray: int) -> int:\n    return 0\n",
+            ", ndarray",
+            "ndarray",
+        ),
+        (
+            "def f(*ndarray: int) -> int:\n    return 0\n",
+            "*ndarray",
+            "ndarray",
+        ),
+        (
+            "def f(*, ndarray: int) -> int:\n    return 0\n",
+            ", ndarray",
+            "ndarray",
+        ),
+        (
+            "def f(**ndarray: int) -> int:\n    return 0\n",
+            "**ndarray",
+            "ndarray",
+        ),
         ("g = lambda NDArray: 0\n", "lambda NDArray", "NDArray"),
-        ("def f[NDArray](a: int) -> int:\n    return 0\n", "[NDArray", "NDArray"),
-        ("def f[*NDArray](a: int) -> int:\n    return 0\n", "[*NDArray", "NDArray"),
-        ("def f[**NDArray](a: int) -> int:\n    return 0\n", "[**NDArray", "NDArray"),
+        (
+            "def f[NDArray](a: int) -> int:\n    return 0\n",
+            "[NDArray",
+            "NDArray",
+        ),
+        (
+            "def f[*NDArray](a: int) -> int:\n    return 0\n",
+            "[*NDArray",
+            "NDArray",
+        ),
+        (
+            "def f[**NDArray](a: int) -> int:\n    return 0\n",
+            "[**NDArray",
+            "NDArray",
+        ),
     ] {
         assert_binding_refused(body, context, name);
     }
@@ -175,8 +259,16 @@ fn each_definition_and_parameter_binding_is_refused() {
 #[test]
 fn each_statement_binding_is_refused() {
     for (body, context, name) in [
-        ("try:\n    pass\nexcept ValueError as ndarray:\n    pass\n", "as ndarray", "ndarray"),
-        ("def f() -> None:\n    global ndarray\n", "global ndarray", "ndarray"),
+        (
+            "try:\n    pass\nexcept ValueError as ndarray:\n    pass\n",
+            "as ndarray",
+            "ndarray",
+        ),
+        (
+            "def f() -> None:\n    global ndarray\n",
+            "global ndarray",
+            "ndarray",
+        ),
         (
             "def f() -> None:\n    x = 1\n    def g() -> None:\n        nonlocal NDArray\n",
             "nonlocal NDArray",
@@ -184,14 +276,34 @@ fn each_statement_binding_is_refused() {
         ),
         ("ndarray = 1\n", "ndarray = 1", "ndarray"),
         ("NDArray += 1\n", "NDArray +=", "NDArray"),
-        ("for ndarray in range(3):\n    pass\n", "for ndarray", "ndarray"),
-        ("with open('x') as NDArray:\n    pass\n", "as NDArray", "NDArray"),
-        ("y = [1 for ndarray in range(3)]\n", "for ndarray", "ndarray"),
+        (
+            "for ndarray in range(3):\n    pass\n",
+            "for ndarray",
+            "ndarray",
+        ),
+        (
+            "with open('x') as NDArray:\n    pass\n",
+            "as NDArray",
+            "NDArray",
+        ),
+        (
+            "y = [1 for ndarray in range(3)]\n",
+            "for ndarray",
+            "ndarray",
+        ),
         ("y = (NDArray := 1)\n", "(NDArray", "NDArray"),
-        ("def f() -> None:\n    del ndarray\n", "del ndarray", "ndarray"),
+        (
+            "def f() -> None:\n    del ndarray\n",
+            "del ndarray",
+            "ndarray",
+        ),
         ("type NDArray = int\n", "type NDArray", "NDArray"),
         ("type G[NDArray] = int\n", "[NDArray", "NDArray"),
-        ("ndarray: TypeAlias = int\n", "ndarray: TypeAlias", "ndarray"),
+        (
+            "ndarray: TypeAlias = int\n",
+            "ndarray: TypeAlias",
+            "ndarray",
+        ),
     ] {
         assert_binding_refused(body, context, name);
     }
@@ -201,10 +313,22 @@ fn each_statement_binding_is_refused() {
 fn each_second_import_binding_is_refused() {
     for (body, context, name) in [
         ("import ndarray\n", "\nimport ndarray", "ndarray"),
-        ("import ndarray.sub\n", "\nimport ndarray.sub", "ndarray.sub"),
+        (
+            "import ndarray.sub\n",
+            "\nimport ndarray.sub",
+            "ndarray.sub",
+        ),
         ("import json as NDArray\n", "as NDArray", "NDArray"),
-        ("from other import ndarray\n", "from other import ndarray", "ndarray"),
-        ("from numpy import NDArray\n", "from numpy import NDArray", "NDArray"),
+        (
+            "from other import ndarray\n",
+            "from other import ndarray",
+            "ndarray",
+        ),
+        (
+            "from numpy import NDArray\n",
+            "from numpy import NDArray",
+            "NDArray",
+        ),
     ] {
         assert_binding_refused(body, context, name);
     }
@@ -213,10 +337,26 @@ fn each_second_import_binding_is_refused() {
 #[test]
 fn each_match_capture_binding_is_refused() {
     for (body, context, name) in [
-        ("match 1:\n    case ndarray:\n        pass\n", "case ndarray", "ndarray"),
-        ("match [1]:\n    case [*ndarray]:\n        pass\n", "*ndarray", "ndarray"),
-        ("match {}:\n    case {**ndarray}:\n        pass\n", "**ndarray", "ndarray"),
-        ("match 1:\n    case int() as NDArray:\n        pass\n", "as NDArray", "NDArray"),
+        (
+            "match 1:\n    case ndarray:\n        pass\n",
+            "case ndarray",
+            "ndarray",
+        ),
+        (
+            "match [1]:\n    case [*ndarray]:\n        pass\n",
+            "*ndarray",
+            "ndarray",
+        ),
+        (
+            "match {}:\n    case {**ndarray}:\n        pass\n",
+            "**ndarray",
+            "ndarray",
+        ),
+        (
+            "match 1:\n    case int() as NDArray:\n        pass\n",
+            "as NDArray",
+            "NDArray",
+        ),
     ] {
         assert_binding_refused(body, context, name);
     }
@@ -230,8 +370,12 @@ fn a_try_except_fallback_rebinding_is_refused() {
     let diagnostics = lower_foreign(source, FOREIGN).expect_err("refused");
     let expected = span_in(source, "ndarray = None", "ndarray");
     assert!(
-        diagnostics.iter().any(|diagnostic| diagnostic.span == Some(expected)
-            && diagnostic.message.starts_with("binding `ndarray` in a module that imports it")),
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.span == Some(expected)
+                && diagnostic
+                    .message
+                    .starts_with("binding `ndarray` in a module that imports it")),
         "{diagnostics:#?}"
     );
 }

@@ -398,5 +398,8 @@ fn the_census_from_import_checks_cleanly_since_1380() {
         "from numpy.typing import NDArray\n\n\ndef f(a: NDArray) -> float:\n    return a[0]\n",
         "1380_from_import",
     );
-    assert!(ok, "`from numpy.typing import NDArray` should check cleanly: {text}");
+    assert!(
+        ok,
+        "`from numpy.typing import NDArray` should check cleanly: {text}"
+    );
 }
