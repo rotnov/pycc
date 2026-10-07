@@ -734,10 +734,13 @@ property itself, where CPython's getter body would name the slot it reads. A
 property is described only where it wins the namespace walk above, and each
 value is packed by the return-type row of the table below, so an `int` outside
 the inline range raises `OverflowError`. This is what lets compiled code read a
-field off an `Any` operand: `other.state_stack` in lark's
-`ParserState.__eq__(self, other)` lowers to `PyObject_GetAttr` (D-258), which
-finds the descriptor when `other` is a compiled instance, so the host's
-`obj.field` and the compiled `other.field` answer alike. Two limits are
+field off an `Any` operand: `obj.field` on an object name no `isinstance`
+guard narrows lowers to `PyObject_GetAttr` (D-258), which finds the descriptor
+when `obj` is a compiled instance, so the host's `obj.field` and the compiled
+`obj.field` answer alike. (Lark's `ParserState.__eq__(self, other)` reads
+`other.state_stack` after `if not isinstance(other, ParserState): return
+NotImplemented`, so since [#1476](https://github.com/rotnov/pycc/issues/1476)
+that read is a narrowed native field read instead, below.) Two limits are
 deliberate. A field whose type no row packs from one machine word (a
 `list[int]` slot, an enum- or exception-class-typed one, a `tuple`-returning
 getter) gets **no descriptor**, never a `C0003`: the table widens what a host

@@ -167,7 +167,8 @@ def relay(o: object) -> object:
 "#;
 
 /// A `str` subclass instance keeps its identity through every use that
-/// packs it back; a host-side class named `Token` is not the compiled one.
+/// packs it back; a host-side class named `Token` is not the compiled one;
+/// host `int` and `float` subclasses narrow like their bases.
 const DRIVER: &str = r#"import narrowing as m
 
 
@@ -177,6 +178,14 @@ class S(str):
 
 class Token:
     value = 99
+
+
+class I(int):
+    pass
+
+
+class F(float):
+    pass
 
 
 t = m.Token("name", 4)
@@ -192,6 +201,7 @@ w = m.wrap(s)
 print(type(w).__name__, w[0] is s, type(w[0]).__name__)
 print(m.shifted(2, 4), m.shifted("2", 4))
 print(m.keep(t), m.keep(3))
+print(m.as_int(I(5)), m.as_float(F(1.5)), m.int_then_bool(I(1)))
 "#;
 
 /// CPython 3.14.7's own output for [`DRIVER`] over [`MODULE`].
@@ -205,6 +215,7 @@ True S True False
 list True S
 14 -1
 4 -1
+6 3.0 11
 ";
 
 fn build_module(dir: &Path) -> (PathBuf, PathBuf) {
