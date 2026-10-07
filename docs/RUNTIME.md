@@ -893,7 +893,11 @@ that row's ingress `TypeError`.
 `tp_hash` follows the data model's rule: the first MRO class binding
 `__hash__` or `__eq__` decides, so a class whose nearest binding is `__eq__`
 alone is unhashable (`PyObject_HashNotImplemented`, published as
-`__hash__ = None`); a compiled `__hash__` is called through
+`__hash__ = None`; the slot row holds the `pycc_ext_unhashable` marker,
+which `pycc_ext_unhashable_slots` replaces at module exec before
+`PyType_FromSpec` reads it, because on Windows a static initializer
+naming a `python3.dll` function holds the import thunk's address and
+`PyType_Ready` publishes `None` only for the exact function); a compiled `__hash__` is called through
 `pycc_ext_finish_hash`, which refuses a non-`int` result with CPython's
 `TypeError`, maps `-1` to `-2` and hashes an `int` outside `Py_hash_t`
 CPython's way; and a class binding neither name but defining an ordering keeps

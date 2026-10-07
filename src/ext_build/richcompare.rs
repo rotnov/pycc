@@ -423,11 +423,27 @@ pub(crate) fn slot_rows(slots: &ExtSlotDunders) -> String {
     }
     let hash = match &slots.hash {
         SlotHash::Compiled(_) => format!("pycc_ext_hash_{class}"),
-        SlotHash::NotImplemented => "PyObject_HashNotImplemented".to_string(),
+        SlotHash::NotImplemented => "pycc_ext_unhashable".to_string(),
         SlotHash::Identity => "pycc_ext_identity_hash".to_string(),
     };
     out.push_str(&format!("    {{Py_tp_hash, {hash}}},\n"));
     out
+}
+
+/// The registration line that swaps the `pycc_ext_unhashable` marker in
+/// `array` for `PyObject_HashNotImplemented` before `PyType_FromSpec`
+/// reads it, empty unless `slots` makes the type unhashable.
+///
+/// `PyType_Ready` publishes `__hash__ = None` only when `tp_hash` *is*
+/// `PyObject_HashNotImplemented`, and on Windows a static initializer
+/// naming a function imported from `python3.dll` holds the import thunk's
+/// address instead, so the slot is filled at run time, where the address
+/// comes from the import table.
+pub(crate) fn unhashable_fixup(slots: &ExtSlotDunders, array: &str) -> String {
+    match slots.hash {
+        SlotHash::NotImplemented => format!("    pycc_ext_unhashable_slots({array});\n"),
+        SlotHash::Compiled(_) | SlotHash::Identity => String::new(),
+    }
 }
 
 /// The hidden carrier types (#1427) for the classes in `slots` that
@@ -464,6 +480,10 @@ pub(crate) fn hidden_carrier_types_c(
              Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION | \
              Py_TPFLAGS_IMMUTABLETYPE,\n    pycc_ext_carrier_slots_{class},\n}};\n\n",
             rows = slot_rows(entry)
+        ));
+        registration.push_str(&unhashable_fixup(
+            entry,
+            &format!("pycc_ext_carrier_slots_{class}"),
         ));
         registration.push_str(&format!(
             "    type = PyType_FromSpec(&pycc_ext_carrier_spec_{class});\n    \

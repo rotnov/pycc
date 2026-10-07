@@ -275,7 +275,7 @@ fn a_richcompare_renders_object_richcompare_around_the_defined_methods() {
     assert!(!eq.contains("pycc_ext_hash_Eq"));
     assert_eq!(
         slot_rows(entry(&slots, "Eq")),
-        "    {Py_tp_richcompare, pycc_ext_richcompare_Eq},\n    {Py_tp_hash, PyObject_HashNotImplemented},\n"
+        "    {Py_tp_richcompare, pycc_ext_richcompare_Eq},\n    {Py_tp_hash, pycc_ext_unhashable},\n"
     );
 
     // Without `__eq__`, `==` is identity; with `__ne__`, no inversion.
@@ -344,6 +344,14 @@ fn an_unpublished_class_gets_a_hidden_carrier_type_registered_up_front() {
     );
     assert!(inc.contains("    {Py_tp_richcompare, pycc_ext_richcompare_Eq},\n"));
     assert!(inc.contains("pycc_ext_carrier_register(\"_Private\", type)"));
+    // An unhashable type's marker is swapped for the real
+    // `PyObject_HashNotImplemented` before the spec is read; a hashable
+    // one's array is left alone.
+    assert!(inc.contains(
+        "    pycc_ext_unhashable_slots(pycc_ext_type_slots_Eq);\n    type = PyType_FromSpec(&pycc_ext_type_spec_Eq);"
+    ));
+    assert!(!inc.contains("pycc_ext_unhashable_slots(pycc_ext_carrier_slots__Private)"));
+    assert!(!inc.contains("pycc_ext_unhashable_slots(pycc_ext_type_slots_HashOnly)"));
     // Without slots the companion carries none of this.
     let bare = generate_exports_inc("m", &exports, &[], &publications, &ctors, &carriers);
     assert!(!bare.contains("Py_tp_richcompare"));

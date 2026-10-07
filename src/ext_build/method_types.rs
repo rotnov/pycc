@@ -249,6 +249,10 @@ pub(crate) fn method_types_c(
         // type. On success the local reference moves into the class's file
         // static (Part 7 of #1371), releasing the one a previous exec
         // stored there.
+        if let Some(entry) = slots.iter().find(|entry| entry.class == *class) {
+            let array = format!("pycc_ext_type_slots_{class}");
+            out.push_str(&richcompare::unhashable_fixup(entry, &array));
+        }
         out.push_str(&format!(
             "    type = PyType_FromSpec(&pycc_ext_type_spec_{class});\n    \
              if (type == NULL) {{\n        return -1;\n    }}\n    \

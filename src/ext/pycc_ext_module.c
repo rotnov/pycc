@@ -3407,6 +3407,29 @@ static Py_hash_t pycc_ext_identity_hash(PyObject *self)
     return base(self);
 }
 
+/*
+ * #1427: the `Py_tp_hash` row of a carrier type whose class binds `__eq__`
+ * without `__hash__`. It is a marker: `pycc_ext_unhashable_slots` swaps it
+ * for `PyObject_HashNotImplemented` before `PyType_FromSpec` reads the
+ * array, because `PyType_Ready` publishes `__hash__ = None` only for that
+ * exact address, and on Windows a static initializer naming a function
+ * imported from `python3.dll` holds the import thunk's address instead.
+ * Should it ever be called, it answers exactly as the real slot does.
+ */
+static Py_hash_t pycc_ext_unhashable(PyObject *self)
+{
+    return PyObject_HashNotImplemented(self);
+}
+
+static void pycc_ext_unhashable_slots(PyType_Slot *slots)
+{
+    for (; slots->slot != 0; ++slots) {
+        if (slots->slot == Py_tp_hash && slots->pfunc == (void *)pycc_ext_unhashable) {
+            slots->pfunc = (void *)PyObject_HashNotImplemented;
+        }
+    }
+}
+
 #include "pycc_ext_exports.inc"
 
 /*
