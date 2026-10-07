@@ -6,9 +6,10 @@
 //!
 //! What stays refused is pinned here too: a nested from-import of a project
 //! or `pycc_std` module keeps the block-body `C0001` (the project module is
-//! never even loaded), a function-body one keeps its own `C0001`, and the
-//! optional-dependency idiom `except ImportError: x = None` is the
-//! foreign-shadowing `C0001`.
+//! never even loaded), and a function-body one keeps its own `C0001`. The
+//! optional-dependency idiom `except ImportError: x = None`, once the
+//! foreign-shadowing `C0001`, is admitted since #1485
+//! (`tests/issue_1485_import_fallback.rs`).
 //!
 //! The hosted tests at the bottom are `#[ignore]`d and contribute no line
 //! coverage; the Tier-1 `native-build-test` leg runs them with
@@ -164,23 +165,15 @@ fn a_function_body_from_import_keeps_its_diagnostic() {
     );
 }
 
-/// The issue's own optional-dependency example: the handler's assignment
-/// is a second top-level definition of the imported name, which the
-/// foreign-shadowing rule refuses for the from form exactly as for the
-/// plain one (#1291). Pinned so a change to it is deliberate.
+/// The issue's own optional-dependency example. Refused as foreign
+/// shadowing until #1485, which admits an `except ImportError` handler's
+/// `N = None` as the fallback of the body's foreign import; the full
+/// matrix is `tests/issue_1485_import_fallback.rs`.
 #[test]
-fn the_optional_dependency_idiom_is_a_shadowing_refusal() {
-    let dir = ScratchDir::new("block_from_idiom").expect("scratch");
-    let rendered = one_error(
-        &dir,
+fn the_optional_dependency_idiom_is_admitted() {
+    assert_checks_clean(
+        "block_from_idiom",
         "try:\n    from itertools import product\nexcept ImportError:\n    product = None\n",
-        "C0001",
-    );
-    assert!(
-        rendered.contains(
-            "`product` is bound both by a foreign `import` and by another top-level statement"
-        ),
-        "{rendered}"
     );
 }
 

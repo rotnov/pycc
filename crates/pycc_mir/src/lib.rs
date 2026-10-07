@@ -784,7 +784,8 @@ pub enum MirExpr {
     /// A dedicated node rather than a coercion bolted onto the `AnnAssign`
     /// lowering's existing widening chain, for [`MirExpr::ObjLen`]'s reason:
     /// this one *can fail* -- a non-tuple, a wrong arity, or an item
-    /// `PyNumber_Float` refuses -- so it needs the module-exec failure edge
+    /// `PyNumber_Float` refuses -- so it needs the module body's foreign
+    /// failure edge
     /// that `IntBoundary` and `OptionalWrap` have no notion of.
     ///
     /// `arity` is carried rather than rediscovered, and is always at least
@@ -1755,8 +1756,9 @@ pub enum MirStmt {
     /// A failed import whose exception is an `ImportError` -- a missing
     /// name of a from-import included -- becomes a pycc raise of
     /// `ImportError`/`ModuleNotFoundError` (#1293), so an enclosing handler
-    /// runs; any other failure returns `-1` from `Py_mod_exec` directly (the
-    /// #1096 residual).
+    /// runs; any other failure is bridged by the object bridge inside a
+    /// module-level `try`, and returns `-1` from `Py_mod_exec` directly
+    /// outside every one (Part 1 of #1096).
     ForeignImport {
         bindings: Vec<(String, String, Option<FromImport>)>,
     },
@@ -1872,8 +1874,11 @@ pub fn build(hir: &HirModule) -> MirModule {
     // `NameError` CPython raises there instead of trapping (`llvm.trap`,
     // rc 133). Part 1's shadowing rule (`C0001`, `docs/TYPE_SYSTEM.md`)
     // then guarantees no other top-level statement ever rebinds the name,
-    // so the eager bind answers every admitted read with the same type a
-    // positional one would. A function body reads it through the same
+    // except the one admitted rebinding, an `except ImportError` fallback
+    // of the same `try` (#1485), which stores a boxed `None` or another
+    // foreign object into the same `object` slot -- so the eager bind
+    // answers every admitted read with the same type a positional one
+    // would. A function body reads it through the same
     // outward `lookup` walk, matching the constraint solver's own
     // per-function `foreign_objects` copy.
     for import in &hir.imports {

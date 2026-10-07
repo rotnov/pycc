@@ -161,8 +161,9 @@ pub const EXT_IMPORT_ERROR_BRIDGE_SYMBOL: &str = "pycc_ext_import_error_bridge";
 /// exception and keeps the original for the host. Unlike
 /// [`EXT_IMPORT_ERROR_BRIDGE_SYMBOL`] it is total: it always returns `1`
 /// with a pycc exception pending and CPython's indicator clear, so a
-/// function body's failure edge branches straight to its innermost
-/// handler. Module exec keeps its direct `-1` edge instead (#1096).
+/// failure edge branches straight to its innermost handler. Module exec
+/// calls it too inside a module-level `try`, and keeps its direct `-1`
+/// edge only outside every one (Part 1 of #1096, `foreign_fail.rs`).
 pub const EXT_OBJ_ERROR_BRIDGE_SYMBOL: &str = "pycc_ext_obj_error_bridge";
 
 /// The fixed C shim's read-before-import error (#1316): `void
@@ -269,7 +270,7 @@ pub const EXT_OBJ_PACK_INSTANCE_SYMBOL: &str = "pycc_ext_obj_pack_instance";
 ///
 /// The `PyObject_Size` call and the `pycc_rt_ext_int_encode` call are fused
 /// inside the shim deliberately: either can fail, and folding both into one
-/// `-1` return lets codegen emit exactly *one* module-exec failure edge for
+/// `-1` return lets codegen emit exactly *one* foreign failure edge for
 /// `len` instead of two. (The encode failure is unreachable for a real
 /// container -- a length never leaves D-141's inline range -- so the second
 /// branch exists only as defence in depth.) Spelled once here for exactly
@@ -307,7 +308,7 @@ pub const EXT_OBJ_TYPE_SYMBOL: &str = "pycc_ext_obj_type";
 /// produce, so the packer contract stays one rule rather than two: whatever
 /// a packer creates is handed to a shim helper and is that helper's to
 /// release. Folding the failed-packer test into the helper as well is what
-/// leaves this operation with exactly *one* module-exec failure edge, for
+/// leaves this operation with exactly *one* foreign failure edge, for
 /// the reason [`EXT_OBJ_LEN_SYMBOL`] records for its own fused encode.
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].

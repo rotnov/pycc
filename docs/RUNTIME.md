@@ -1347,9 +1347,22 @@ function, class, loop, `with` or `match` body keep their `C0001` (a relative imp
 and never reaches this channel, except the entry module's relative
 from-imports under `pycc build --ext --foreign-relative-imports`, #1366, below), and so does a name pycc
 already resolves by its spelling (`from builtins import range`,
-`from numpy import ndarray`, `from numpy.typing import NDArray`;
-[#1380](https://github.com/rotnov/pycc/issues/1380)), because binding it to a CPython object would
-change what every later use of that spelling means. Each name is its own
+`from numpy import NDArray`), because binding it to a CPython object would
+change what every later use of that spelling means. The exception is the two
+buffer-carrier pairs, absolute and unaliased: `from numpy import ndarray` and
+`from numpy.typing import NDArray`
+([#1380](https://github.com/rotnov/pycc/issues/1380), Part 2 of #1138, D-244).
+Such an import runs in the host at its position like any other foreign
+from-import, so a missing `numpy.typing` or `ndarray` raises CPython's own
+error and the interop policy and the lock see it, but it binds a hidden
+name: the module's dict never holds it, and the spelling keeps the
+buffer-carrier meaning it has without any import. In a module that writes
+one, even only inside an `if TYPE_CHECKING:` block, the spelling may only
+annotate; every other read or binding of it is a
+`C0001` ([DIAGNOSTICS.md](./DIAGNOSTICS.md)), while a repeated or
+`if TYPE_CHECKING:`-guarded copy of the same carrier import is the same
+binding and is accepted. Only an import resolved as foreign is a carrier
+import: a project `numpy.py` keeps its own `ndarray`. Each name is its own
 foreign binding, whose identity is the module *and* the name, so
 `import copy` followed by `from copy import copy` is the same shadowing refusal
 as any other rebinding of a foreign name.
@@ -1376,11 +1389,25 @@ foreign `from X import a, b`: the driver answers a nested from-import only
 when the top-level form would be foreign, so a project or `pycc_std` module
 named there keeps the block-body `C0001` and is never loaded, and every
 refusal of the top-level form is reported at the nested statement
-(`tests/issue_1383_block_from_import.rs`). The optional-dependency idiom
-`try: from X import a` / `except ImportError: a = None` is still refused,
-because the handler's assignment is a second definition of the foreign name
-(the shadowing rule below); a handler that does not rebind the name compiles,
-and a read of the name after the `try` is a may-be-unbound `T0041`. Since
+(`tests/issue_1383_block_from_import.rs`). Since
+[#1485](https://github.com/rotnov/pycc/issues/1485) the optional-dependency
+idiom compiles: when a module-level `try` body directly holds a foreign
+`from X import a` or `import X as a`, a handler of that `try` that catches a
+failed import (`except ImportError`, `ModuleNotFoundError`, `Exception`, a
+tuple naming one, or a bare `except:`) may rebind `a` with a direct `a = None`
+(also as one target of a chained `a = b = None`) or a direct fallback
+`from Y import a` / `import Y as a`. The name is whichever
+binding ran and is `object` on every path after the `try`: the handler runs
+through the #1293 bridge below, a `None` is boxed into the same `object` slot
+(D-258's #1475 amendment), so `if a is None:` behaves as in CPython. Every other
+rebinding is still the shadowing rule below (`else`, `finally`, a handler that
+does not catch a failed import, an assignment nested in the handler's own
+block, `except ... as a`, or a later top-level binding), and a qualifying
+handler that rebinds `a` to another value is a `C0001` of its own wording
+(`tests/issue_1485_import_fallback.rs`). A handler that does not mention the
+name compiles as before, and a read of the name after such a `try` is a
+may-be-unbound `T0041`; a handler that only reads the name without rebinding
+it is a `T0021` (the name is not defined there). Since
 [#1293](https://github.com/rotnov/pycc/issues/1293) such a failure can be
 caught. When the import raises an `ImportError`, the shim's
 `pycc_ext_import_error_bridge` translates it into a pending pycc exception
@@ -1407,9 +1434,10 @@ most the entries one top-level host call created and a caught bridged
 exception's original is released when that call returns. That bound is per
 top-level call, not per catch, and it is a known limitation: a long-running
 call that repeatedly catches a bridged exception -- a loop around a failing
-foreign operation in one exported function, or in the module body -- keeps
-every caught exception's original, and its traceback, alive until the call
-returns. An embedded executable (D-248) runs the whole program inside one
+foreign operation in one exported function, or in the module body, where since
+Part 1 of [#1096](https://github.com/rotnov/pycc/issues/1096) every *caught*
+module-body foreign failure is bridged too -- keeps every caught exception's
+original, and its traceback, alive until the call returns. An embedded executable (D-248) runs the whole program inside one
 `pycc_ext_exec_module` mark/release pair, so it is one top-level call and
 the table there grows for the program's lifetime. This sits next to, and is
 smaller than, the pycc exception objects' own leak-only rule
@@ -1419,20 +1447,21 @@ finalizer that bridges again cannot observe a released entry. The table is per
 thread (a `Py_tss_t` key created once by `pycc_ext_exec_module`), because
 pycc's pending exception is thread-local and a foreign call may release the
 GIL: one thread's wrapper exit must never release another thread's live
-entries. Two bounds remain. An escape through an `except*`
+entries. One bound remains: an escape through an `except*`
 statement re-raises the exception group pycc wrapped the exception in, which is
 not in the table, so the host receives a rebuilt `Exception` carrying the
-import's message (a recorded deviation). And an import that fails with anything
+import's message (a recorded deviation). An import that fails with anything
 other than an `ImportError` -- the imported module body's own `ValueError`, a
-`SyntaxError`, a `BaseException` such as `KeyboardInterrupt` -- is not bridged:
-`Py_mod_exec` returns `-1` directly with CPython's exception untouched, so an
-enclosing `except` or `finally` body does **not** run for it (the remaining
-[#1096](https://github.com/rotnov/pycc/issues/1096) deviation). A top-level
-foreign import has no enclosing handler and keeps that direct edge too.
-`tests/issue_1080_foreign_object.rs` asserts
-that against a real host interpreter, and
-`crates/pycc_codegen/src/foreign_import.rs`'s own tests assert it at the
-emission layer.
+`SyntaxError`, a `BaseException` such as `KeyboardInterrupt` -- takes the
+module body's foreign failure edge (Part 1 of #1096, the rule the attribute-load paragraphs below state): inside a module-level `try` the foreign-operation bridge carries it to
+the enclosing handler, so `except ValueError` or `finally` runs as under
+CPython and an escape still reaches the host as the original object; outside
+every `try`, `Py_mod_exec` returns `-1` directly with CPython's exception
+untouched. A top-level foreign import has no enclosing handler and keeps that
+direct edge. `tests/issue_1080_foreign_object.rs` and
+`tests/issue_1096_module_exec_catch.rs` assert both against a real host
+interpreter, and `crates/pycc_codegen/src/foreign_import.rs`'s own tests assert
+them at the emission layer.
 
 **Failure.** The emitted call is `pycc_ext_obj_import`, which wraps
 `PyImport_ImportModule`. A failure leaves CPython's own exception set — a
@@ -1530,15 +1559,41 @@ output and final traceback line for every case.
 
 An attribute load fails the same way and takes the same edge.
 `pycc_ext_obj_getattr` returns `NULL` with CPython's error indicator set, and
-`crates/pycc_codegen/src/foreign_attr.rs` tests that result and returns `-1`
-from `Py_mod_exec` immediately, leaving the exception untouched, so a missing
-attribute surfaces to the host as the real `AttributeError` and the remaining
-module-body statements never run. That check is what pycc's *own*
+`crates/pycc_codegen/src/foreign_attr.rs` tests that result and, outside every
+module-level `try`, returns `-1` from `Py_mod_exec` immediately, leaving the
+exception untouched, so a missing attribute surfaces to the host as the real
+`AttributeError` and the remaining module-body statements never run. That check is what pycc's *own*
 pending-exception guard (D-173) cannot do: the two failure protocols are
 separate, and pycc's state is unset while CPython's is set, so before PR 2a of
 [#1081](https://github.com/rotnov/pycc/pull/1093) the body ran to completion and
 CPython reported `SystemError: execution of module <name> raised unreported
 exception` instead.
+
+**Inside a module-level `try` the failure is bridged.** Since Part 1 of
+[#1096](https://github.com/rotnov/pycc/issues/1096) the direct `-1` return is
+taken only when no module-level `try` encloses the failing operation, that is,
+when the innermost exception target is the module body's own exit. Inside a
+module-level `try` body, handler, `else` or `finally`, every module-body
+foreign failure edge this section and the ones below describe -- an attribute
+load, a call, a subscript, `len` and a truth test, a `for` loop, an unpack, a
+comparison, `type()`, an unbox, a string conversion, and a nested import's
+non-`ImportError` -- takes the bridged edge the next paragraph describes. The
+matching `except` or `finally` then runs as under CPython, the statements after
+a `try` that caught the failure run, and an exception that escapes the module
+body reaches the host as the original object.
+`crates/pycc_codegen/src/foreign_fail.rs` owns the rule, and
+`tests/issue_1096_module_exec_catch.rs` compares it with CPython running the
+same source. Wherever this document says a module-body failure returns `-1`
+from `Py_mod_exec` or stops the module body, that is the edge outside every
+module-level `try`. Four consequences follow the function-body terms rather
+than CPython's. A failure inside a handler does not set `__context__` on the
+new exception, as for every pycc raise. The bridge calls `str(exc)`, and so a
+user `__str__`, as it does in a function body (#1316). A reference the #1092
+leak-only rule already leaks on a failing operation (an iterator, an item, a
+call result) now leaks once per *caught* failure rather than at most once per
+import. And the D-208 pending `int` temporaries a failing statement holds are
+released on the bridged edge before it branches, as in a function body, while
+the direct edge still leaves them to the failed import.
 
 **Inside a function body a failure is bridged into a pycc exception.** Only the
 module-body entry point may return `-1`, so
@@ -1570,9 +1625,9 @@ setting an exception bridges a `SystemError` saying so, and an allocation or
 and drops the original. A function reading a module-level foreign name the
 module body has not bound yet — `f()` called above `import copy`, or an import
 inside a block that has not run — raises `NameError: name 'copy' is not
-defined` through `pycc_ext_name_error`, which bridges it the same way. The
-module body keeps its direct `-1` edge, so what this section says about the
-module body is unchanged. `tests/issue_1316_foreign_in_function.rs` compares
+defined` through `pycc_ext_name_error`, which bridges it the same way. Inside
+a module-level `try` the module body takes this same bridged edge (the
+paragraph above). `tests/issue_1316_foreign_in_function.rs` compares
 each of these against CPython running the same source. The type checker
 admits a foreign name read in a function body on the terms
 [TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s `object` row states. Since Part 1 of
@@ -1632,7 +1687,7 @@ than two, and the encode arm is unreachable for a real container.
 `__bool__` or `__len__` and so really can raise arbitrary user exceptions.
 `crates/pycc_codegen/src/foreign_len.rs` tests each status and returns `-1` from
 `Py_mod_exec`, exactly as `foreign_attr.rs` does for a `NULL`. In a function
-body both take the bridged edge (#1316). Since Part 10 of
+body or a module-level `try` both take the bridged edge (#1316, #1096). Since Part 10 of
 [#1371](https://github.com/rotnov/pycc/issues/1371), `not o` makes the same
 `pycc_ext_obj_truthy` call and inverts its `0`/`1` into a native `bool`, so
 it borrows the operand, creates no reference and fails on that same edge.
@@ -1677,8 +1732,9 @@ switches `-1` to `foreign_iter_next_fail`, `0` to `foreign_iter_after` and `1`
 to `foreign_iter_body`; `foreign_iter_body`; `foreign_iter_after`; and
 `foreign_iter_next_fail`. **Exhaustion is not a failure edge**: an empty iterable runs the body zero
 times and the module body continues. The loop therefore adds exactly **two**
-new `-1` returns from `Py_mod_exec` — one for a non-iterable, one for an
-iterator that raises mid-iteration — and no more.
+new failure edges — one for a non-iterable, one for an
+iterator that raises mid-iteration — and no more; each returns `-1` from
+`Py_mod_exec` outside every module-level `try` and is bridged inside one.
 The out-parameter the item is written through is a single pointer slot hoisted
 into the module-exec entry block, so a loop does not grow the host's stack. The
 loop is still admitted only in a module body: #1316 did not extend it, because
@@ -1749,7 +1805,8 @@ runs them: `print` evaluates every argument first and converts an object
 argument only while writing it, after the separator before it, and an
 f-string converts each part as it reaches it. Both take the same failing edge
 as every other object operation, so a raising `__str__` or `__format__` fails
-the module body or, inside a function, is bridged to a catchable exception.
+the module body outside every module-level `try`, and is otherwise bridged to a
+catchable exception.
 Compiled `print` writes through Rust's own line-buffered stdout, which is
 separate from CPython's `sys.stdout`, so `print` calls
 `pycc_rt_print_flush` immediately before converting an object argument: the
@@ -1778,9 +1835,9 @@ the element half converts for the reason the rule-7 paragraph above states,
 so the items are never type-checked and a non-numeric one surfaces CPython's
 own exception. The arity is a `long long` **parameter**, never a constant, so
 one helper serves every admitted arity. Failure is reported as `-1` with a
-CPython exception set, on the same unconditional `Py_mod_exec` edge every
-helper in this section uses, so the unpack adds exactly **three** new `-1`
-returns — a non-tuple operand, a wrong-length tuple, and an item CPython
+CPython exception set, on the same module-body failure edge every
+helper in this section uses, so the unpack adds exactly **three** new failure
+edges — a non-tuple operand, a wrong-length tuple, and an item CPython
 declines to convert — and no more. The out-parameter is an `[arity x double]`
 array hoisted as a single slot into the module-exec entry block, on the rule
 `len`'s `i64` slot follows, so a module-scope loop around one does not grow
@@ -1870,8 +1927,8 @@ the same four packers (a pycc instance, since #1470, by
 received a new reference for, and the helper **consumes those on every
 path**, including the one where a packer already failed with `NULL` -- the
 key slot's rule once more. A `NULL` result routes to the operation's failure
-edge (the module-exec `-1` in a module body, the bridged pycc exception in a
-function body), so a raising `__eq__` or `__lt__` surfaces CPython's own
+edge (the module-exec `-1` in a module body outside every `try`, the bridged
+pycc exception in a function body or a module-level `try`), so a raising `__eq__` or `__lt__` surfaces CPython's own
 exception. An identity test (`is`, `is not`) is a plain pointer comparison in
 compiled code with no failure edge; a `None` operand adds only the
 infallible `pycc_ext_obj_none` call, which returns the borrowed `Py_None`, so
@@ -2110,8 +2167,8 @@ differences remain: a heap type built from a `PyType_Spec` with a dotted spec
 name prints without its module, and CPython's 200-character truncation of a
 longer name is not applied. A `NULL`
 result routes to the operation's failure edge -- the module-exec `-1` in a
-module body, so the remaining module-body statements never run, and the
-bridged pycc exception in a function body, which a compiled `try`/`except`
+module body outside every `try`, so the remaining module-body statements never
+run, and otherwise the bridged pycc exception, which a compiled `try`/`except`
 catches -- before any target is bound. The returned tuple binds the unpacking
 temporary and is never released, and each target then reads it with
 `pycc_ext_obj_getitem`, whose new reference leaks on the same terms as any
@@ -2255,7 +2312,8 @@ lowers a read of a narrowed object name to `MirExpr::ObjectUnbox`, and codegen
 borrows `o`, writes the native value through an out-slot hoisted into the
 entry block, and answers `0`, or `-1` with a CPython exception set, which
 takes the function's foreign failure edge (the IR label
-`object_unbox_failed`; the module-exec `-1` at module scope). The scalar
+`object_unbox_failed`; the module-exec `-1` at module scope outside every
+`try`). The scalar
 helpers keep the closed D-244 rule-7 check of the matching argument
 unpacker rather than CPython's conversion protocol. The guard is CPython's
 own `isinstance`, which consults a `__class__` attribute, so an object whose
@@ -2324,9 +2382,9 @@ original object is kept for `pycc_ext_raise_pending` to restore. An uncaught
 copy. The operand is borrowed (an operand produced by a call is leaked on
 the same terms as any object call result). The statement ends its block
 exactly like a native `raise`, with `unreachable` that the body emitter
-replaces with a branch to the innermost exception target. It does not take
-the module-exec failure edge, so a module-level `try` still catches it
-(`crates/pycc_codegen/src/foreign_raise.rs`). Two shapes are refused at
+replaces with a branch to the innermost exception target, in the module body
+too, so a module-level `try` catches it as it now catches every other foreign
+failure (Part 1 of #1096; `crates/pycc_codegen/src/foreign_raise.rs`). Two shapes are refused at
 check time: `raise ... from ...` with an object as the exception or the
 cause (`C0001`), and an `except` clause naming a foreign class (`T0021`).
 `except Exception` and the builtin classes catch an object raise through
@@ -2382,7 +2440,8 @@ million calls passing an `int`, once the leaked result is accounted for. One arg
 raises rather than aborting: a D-141 heap-bigint `int` word reaching
 `pycc_ext_obj_pack_int` sets `OverflowError` naming the inline range and
 returns `NULL`, which the shim treats exactly as a failed call -- it skips the
-vectorcall, and the module body stops. That is the
+vectorcall and takes the call's failure edge, so the module body stops outside
+every module-level `try`. That is the
 same boundary narrowing the `ext` export ABI already applies to an `int`
 parameter or return, on the same terms and until the same issue
 ([#1040](https://github.com/rotnov/pycc/issues/1040)) widens it; the type
@@ -2537,7 +2596,16 @@ the second store simply overwrites the slot with a new reference, as the
 duplicate paragraph above describes for linked modules. Two foreign imports
 that bind one local name to *different* modules (`import a as x`, then
 `import b as x`) are refused like any other shadow, within one module and,
-since [#1291](https://github.com/rotnov/pycc/issues/1291), across linked modules too. A name is reported once however many
+since [#1291](https://github.com/rotnov/pycc/issues/1291), across linked modules too. The one exemption since
+[#1485](https://github.com/rotnov/pycc/issues/1485) is the `except ImportError` fallback described above: the
+handler's `N = None` is not a definition, and a fallback import in a qualifying
+handler is an alternative to the `try` body's import of `N`, not a rebinding
+of it: both store into the same `object` slot, and every read after the `try`
+is typed `object` whichever store ran last. The exemption is keyed
+by the two import statements and their arms of one `try`
+(`pycc_hir::import::fallback`), so two imports of `N` in one arm, or two `try`
+statements importing different objects, are still refused; across linked
+modules the name keeps the rule unchanged. A name is reported once however many
 statements bind it.
 The positional binding above is what makes the artifact honest about *when*
 the import runs; it is not enough to make the compiler honest about *which*

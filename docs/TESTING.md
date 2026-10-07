@@ -1482,6 +1482,14 @@ the sweep and the per-record shapes — and the third is independent of both:
    unmet, now for those two reasons rather than for the ones the third through
    sixth corrections state.
 
+   **Eighth note (2026-10-07, [#1380](https://github.com/rotnov/pycc/issues/1380)):
+   the from-import binding is no longer refused.** `from numpy.typing import
+   NDArray` and `from numpy import ndarray` are admitted as buffer-carrier
+   imports (D-244's #1380 amendment), so the "foreign-import path" refusal the
+   fifth correction attributes is gone for those two exact pairs. The census
+   was not re-measured for this change, so no count is claimed and the
+   seventh correction's measurement stands as taken.
+
 3. **The pre-registered machine pin no longer matched this host**, which
    would have refused a scored run on its own even with a subject in hand. The
    **Arms** bullet binds the run to the five fields

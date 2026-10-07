@@ -16,8 +16,9 @@
 //! condition's truth test, the element's own evaluation, packing, and the
 //! insertion itself (an unhashable set item) -- takes the current function's
 //! foreign failure edge ([`ForeignFailEdge::for_current`]): the
-//! `EXT_MODULE_EXEC_FAILED` return in the module body, the error bridge plus
-//! the enclosing handler in a compiled function.
+//! `EXT_MODULE_EXEC_FAILED` return in the module body outside every
+//! module-level `try`, and otherwise the error bridge plus the enclosing
+//! handler (Part 1 of #1096).
 //!
 //! # Ownership
 //!

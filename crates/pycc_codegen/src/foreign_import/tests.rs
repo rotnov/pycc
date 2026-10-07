@@ -4,7 +4,10 @@
 //! `level` argument.
 
 use super::*;
-use crate::{CompileOptions, EXT_MODULE_EXEC_SYMBOL, compile_to_object_with_observer};
+use crate::{
+    CompileOptions, EXT_MODULE_EXEC_SYMBOL, EXT_OBJ_ERROR_BRIDGE_SYMBOL,
+    compile_to_object_with_observer,
+};
 use inkwell::values::AnyValue;
 use pycc_mir::{MirExpr, MirItem, MirModule, MirStmt, Ty};
 
@@ -175,17 +178,24 @@ fn a_block_foreign_import_is_emitted_inside_its_branch() {
     );
 }
 
-/// The terminator of the block labelled `label` in `ir`: its last
-/// non-empty instruction line, trimmed.
-fn block_terminator<'a>(ir: &'a str, label: &str) -> &'a str {
+/// The instruction lines of the block labelled `label` in `ir`, trimmed.
+fn block_lines<'a>(ir: &'a str, label: &str) -> Vec<&'a str> {
     let header = format!("{label}:");
     let mut lines = ir.lines().skip_while(|line| !line.starts_with(&header));
     assert!(lines.next().is_some(), "no block `{label}`: {ir}");
     lines
         .take_while(|line| !line.is_empty() && !line.starts_with(|c: char| c.is_alphanumeric()))
+        .map(str::trim)
+        .collect()
+}
+
+/// The terminator of the block labelled `label` in `ir`: its last
+/// non-empty instruction line, trimmed.
+fn block_terminator<'a>(ir: &'a str, label: &str) -> &'a str {
+    block_lines(ir, label)
         .last()
+        .copied()
         .expect("a block has a terminator")
-        .trim()
 }
 
 /// The two labels of the conditional branch on the bridge's answer:
@@ -237,9 +247,10 @@ fn import_stmt(name: &str) -> MirStmt {
     }
 }
 
-/// #1293: an import in a `try` body bridges its failure to the
-/// handler dispatch, and falls back to the direct return only on the
-/// named unbridged edge.
+/// #1293: an import in a `try` body bridges an `ImportError` to the
+/// handler dispatch. Since Part 1 of #1096 the named unbridged edge --
+/// any other exception the imported module raises -- is bridged by the
+/// object bridge to the same dispatch, rather than returning directly.
 #[test]
 fn a_try_block_foreign_import_bridges_to_the_handler_dispatch() {
     let ir = entry_ir(
@@ -249,15 +260,23 @@ fn a_try_block_foreign_import_bridges_to_the_handler_dispatch() {
     let (raised, unbridged) = bridge_branch_labels(&ir);
     assert_eq!(raised, "try_handler_dispatch", "{ir}");
     assert_eq!(unbridged, "foreign_import_unbridged", "{ir}");
+    assert!(
+        block_lines(&ir, "foreign_import_unbridged")
+            .iter()
+            .any(|line| line.contains(&format!("call i32 @{EXT_OBJ_ERROR_BRIDGE_SYMBOL}()"))),
+        "{ir}"
+    );
     assert_eq!(
         block_terminator(&ir, "foreign_import_unbridged"),
-        "ret i64 -1",
+        "br label %try_handler_dispatch",
         "{ir}"
     );
 }
 
 /// With no enclosing `try`, the bridged exception goes where any other
-/// module-level raise goes.
+/// module-level raise goes, and the unbridged edge keeps the direct
+/// return: no handler could run, so the import fails with CPython's
+/// exception untouched (Part 1 of #1096).
 #[test]
 fn an_if_block_foreign_import_bridges_to_the_top_exception_exit() {
     let ir = entry_ir(
@@ -267,6 +286,17 @@ fn an_if_block_foreign_import_bridges_to_the_top_exception_exit() {
     let (raised, unbridged) = bridge_branch_labels(&ir);
     assert_eq!(raised, "top_exception_exit", "{ir}");
     assert_eq!(unbridged, "foreign_import_unbridged", "{ir}");
+    assert_eq!(
+        block_terminator(&ir, "foreign_import_unbridged"),
+        "ret i64 -1",
+        "{ir}"
+    );
+    assert!(
+        !block_lines(&ir, "foreign_import_unbridged")
+            .iter()
+            .any(|line| line.contains(EXT_OBJ_ERROR_BRIDGE_SYMBOL)),
+        "{ir}"
+    );
 }
 
 /// An import in a handler body is past the dispatch: its failure goes to

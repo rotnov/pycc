@@ -1,10 +1,13 @@
-//! #1316: a foreign `object` operation inside a function body.
+//! #1316: a foreign `object` operation inside a function body, and Part 1
+//! of #1096: the same operation inside a module-level `try`.
 //!
 //! Every test compiles real MIR as an `ext` object -- LLVM's verifier runs
 //! before any assertion here is believed -- and reads the LLVM text of the
-//! user function `f` (mangled `pyfn_f`). The module-exec edge keeps its own
-//! tests in `foreign_attr.rs`, `foreign_call.rs` and `foreign_len.rs`,
-//! which pin that it is emitted unchanged.
+//! user function `f` (mangled `pyfn_f`) or of the module-exec entry. The
+//! module-exec edge *outside* every `try` keeps its own tests in
+//! `foreign_attr.rs`, `foreign_call.rs` and `foreign_len.rs`, which pin
+//! that it is emitted unchanged; the tests at the end of this file pin
+//! where it changes.
 
 use crate::{
     CompileOptions, EXT_MODULE_EXEC_SYMBOL, EXT_NAME_ERROR_SYMBOL, EXT_OBJ_ERROR_BRIDGE_SYMBOL,
@@ -404,4 +407,260 @@ fn a_non_object_unbound_read_keeps_its_trap_and_the_module_body_is_unchanged() {
     assert!(!entry.contains(EXT_NAME_ERROR_SYMBOL), "{entry}");
     assert!(!entry.contains(EXT_OBJ_ERROR_BRIDGE_SYMBOL), "{entry}");
     assert!(entry.contains("ret i64 -1"), "{entry}");
+}
+
+/// The LLVM text of the module-exec entry after compiling `import copy`
+/// plus `items` as an `ext` object.
+fn entry_ir(label: &str, items: Vec<MirItem>) -> String {
+    let mut all = vec![import_copy()];
+    all.extend(items);
+    functions_ir(label, all, &[EXT_MODULE_EXEC_SYMBOL]).remove(0)
+}
+
+/// `copy.missing`, discarded: the foreign failure every module-body test
+/// below places somewhere different.
+fn missing_attr() -> MirStmt {
+    MirStmt::ExprStmt(MirExpr::ObjAttrGet {
+        base: copy_boxed(),
+        attr: "missing".to_string(),
+        ty: Ty::Object,
+    })
+}
+
+/// `print(<n>)`, so no block in the IR is empty.
+fn print_stmt(n: i64) -> MirStmt {
+    MirStmt::ExprStmt(MirExpr::Call {
+        callee: "print".to_string(),
+        args: vec![MirExpr::IntLiteral(n)],
+        ty: Ty::None,
+    })
+}
+
+/// A module-level `try` with one bare `except:` handler.
+fn module_try(
+    body: Vec<MirStmt>,
+    handler: Vec<MirStmt>,
+    orelse: Vec<MirStmt>,
+    finalbody: Vec<MirStmt>,
+) -> MirItem {
+    MirItem::TopLevelStmt(MirStmt::Try {
+        body,
+        handlers: vec![MirExceptHandler {
+            exc_type_tag: None,
+            binding_name: None,
+            binding_ty: None,
+            body: handler,
+        }],
+        orelse,
+        finalbody,
+    })
+}
+
+/// The label `{label}_fail` branches to after bridging, with LLVM's
+/// uniquing digits stripped; panics unless the block bridges and does not
+/// return the module-exec status.
+fn bridged_target(ir: &str, label: &str) -> String {
+    let fail = block(ir, &format!("{label}_fail"));
+    assert!(
+        fail.contains(&format!("call i32 @{EXT_OBJ_ERROR_BRIDGE_SYMBOL}()")),
+        "{label}_fail must bridge CPython's exception:\n{ir}"
+    );
+    assert!(!fail.contains("ret i64"), "{ir}");
+    let terminator = fail.trim_end().lines().last().unwrap_or_default().trim();
+    terminator
+        .strip_prefix("br label %")
+        .unwrap_or_else(|| panic!("{label}_fail must branch: {terminator}\n{ir}"))
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .to_string()
+}
+
+/// Part 1 of #1096: a foreign failure in a module-level `try` body is
+/// bridged to the handler dispatch, so the `except` runs as in CPython.
+#[test]
+fn a_module_try_body_foreign_failure_bridges_to_the_handler_dispatch() {
+    let ir = entry_ir(
+        "module_fail_try_body",
+        vec![module_try(
+            vec![missing_attr()],
+            vec![print_stmt(1)],
+            Vec::new(),
+            Vec::new(),
+        )],
+    );
+    assert_eq!(bridged_target(&ir, "foreign_attr"), "try_handler_dispatch");
+}
+
+/// In a handler body the innermost target is the `try`'s finally block.
+#[test]
+fn a_module_handler_body_foreign_failure_bridges_to_the_finally_block() {
+    let ir = entry_ir(
+        "module_fail_handler",
+        vec![module_try(
+            vec![print_stmt(1)],
+            vec![missing_attr()],
+            Vec::new(),
+            Vec::new(),
+        )],
+    );
+    assert_eq!(bridged_target(&ir, "foreign_attr"), "try_finally");
+}
+
+/// The `else` body is a distinct push site: it skips the same `try`'s
+/// handlers and goes to its finally block.
+#[test]
+fn a_module_else_body_foreign_failure_bridges_to_the_finally_block() {
+    let ir = entry_ir(
+        "module_fail_else",
+        vec![module_try(
+            vec![print_stmt(1)],
+            vec![print_stmt(2)],
+            vec![missing_attr()],
+            Vec::new(),
+        )],
+    );
+    assert_eq!(bridged_target(&ir, "foreign_attr"), "try_finally");
+}
+
+/// A `finally` body's failure goes to the finally-exception target.
+#[test]
+fn a_module_finally_body_foreign_failure_bridges_to_the_finally_exception_target() {
+    let ir = entry_ir(
+        "module_fail_finally",
+        vec![module_try(
+            vec![print_stmt(1)],
+            vec![print_stmt(2)],
+            Vec::new(),
+            vec![missing_attr()],
+        )],
+    );
+    assert_eq!(bridged_target(&ir, "foreign_attr"), "try_finally_exception");
+}
+
+/// With no enclosing `try` -- here inside a top-level `if` -- the edge is
+/// unchanged: the `_fail` block returns the module-exec status. Asserted
+/// on the block itself only, since another item could declare the bridge.
+#[test]
+fn a_module_failure_outside_every_try_keeps_the_direct_return() {
+    let ir = entry_ir(
+        "module_fail_if",
+        vec![MirItem::TopLevelStmt(MirStmt::If {
+            test: MirExpr::BoolLiteral(true),
+            body: vec![missing_attr()],
+            orelse: Vec::new(),
+        })],
+    );
+    let fail = block(&ir, "foreign_attr_fail");
+    assert!(!fail.contains(EXT_OBJ_ERROR_BRIDGE_SYMBOL), "{ir}");
+    assert!(fail.trim_end().ends_with("ret i64 -1"), "{ir}");
+}
+
+/// After the `try` closes, a later top-level failure is back on the
+/// direct edge: the recorded exit is innermost again.
+#[test]
+fn a_module_failure_after_a_try_keeps_the_direct_return() {
+    let ir = entry_ir(
+        "module_fail_after_try",
+        vec![
+            module_try(
+                vec![print_stmt(1)],
+                vec![print_stmt(2)],
+                Vec::new(),
+                Vec::new(),
+            ),
+            MirItem::TopLevelStmt(missing_attr()),
+        ],
+    );
+    let fail = block(&ir, "foreign_attr_fail");
+    assert!(fail.trim_end().ends_with("ret i64 -1"), "{ir}");
+}
+
+/// A foreign `for` inside a module-level `try`: both of the loop's
+/// failure blocks -- `iter()` and a raising `__next__` -- bridge to the
+/// handler dispatch.
+#[test]
+fn a_module_try_foreign_for_loop_bridges_both_failure_points() {
+    let ir = entry_ir(
+        "module_fail_for",
+        vec![module_try(
+            vec![MirStmt::ForObject {
+                var: "x".to_string(),
+                iter: copy_name(),
+                body: vec![print_stmt(1)],
+            }],
+            vec![print_stmt(2)],
+            Vec::new(),
+            Vec::new(),
+        )],
+    );
+    assert_eq!(
+        bridged_target(&ir, "foreign_iter_get"),
+        "try_handler_dispatch"
+    );
+    let next_fail = block(&ir, "foreign_iter_next_fail");
+    assert!(
+        next_fail.contains(&format!("call i32 @{EXT_OBJ_ERROR_BRIDGE_SYMBOL}()")),
+        "{ir}"
+    );
+    assert!(
+        next_fail
+            .trim_end()
+            .ends_with("br label %try_handler_dispatch"),
+        "{ir}"
+    );
+}
+
+/// A live bigint temporary in a module-level `try` is released on the
+/// bridged edge before the branch, exactly as in a function body.
+#[test]
+fn a_module_try_foreign_failure_releases_a_pending_bigint_temporary() {
+    let int_name = |name: &str| {
+        Box::new(MirExpr::Name {
+            name: name.to_string(),
+            ty: Ty::Int,
+        })
+    };
+    let assign = |name: &str| {
+        MirItem::TopLevelStmt(MirStmt::Assign {
+            target: name.to_string(),
+            value: MirExpr::IntLiteral(4_611_686_018_427_387_903),
+        })
+    };
+    let ir = entry_ir(
+        "module_fail_bigint",
+        vec![
+            assign("a"),
+            assign("b"),
+            module_try(
+                vec![MirStmt::ExprStmt(MirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(MirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: int_name("a"),
+                        right: int_name("b"),
+                        ty: Ty::Int,
+                    }),
+                    right: Box::new(MirExpr::ObjLen { base: copy_boxed() }),
+                    ty: Ty::Int,
+                })],
+                vec![print_stmt(1)],
+                Vec::new(),
+                Vec::new(),
+            ),
+        ],
+    );
+    let start = ir
+        .find("\nforeign_len_fail:")
+        .unwrap_or_else(|| panic!("no foreign_len_fail block:\n{ir}"));
+    let unwind = &ir[start..];
+    let unwind = &unwind[..unwind
+        .find("br label %try_handler_dispatch")
+        .unwrap_or_else(|| panic!("the unwind must reach the handler dispatch:\n{ir}"))];
+    let bridge = unwind
+        .find(&format!("call i32 @{EXT_OBJ_ERROR_BRIDGE_SYMBOL}()"))
+        .unwrap_or_else(|| panic!("the failure must be bridged:\n{ir}"));
+    let release = unwind
+        .find("call void @pycc_rt_bigint_release")
+        .unwrap_or_else(|| panic!("the pending temporary must be released:\n{ir}"));
+    assert!(bridge < release, "bridge first, then unwind:\n{ir}");
+    assert!(!unwind.contains("ret i64"), "{ir}");
 }

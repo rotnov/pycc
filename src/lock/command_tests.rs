@@ -309,3 +309,24 @@ fn split_roots_classifies_optional_roots_and_required_wins() {
         ["bothpkg", "fastpkg", "plainpkg"]
     );
 }
+
+/// #1485: an `except ImportError` fallback import is classified by the
+/// guard *enclosing* its `try`, as every handler-level import is (#1290):
+/// at module level it is required, while the body's import is optional.
+/// Pinned so a change to the fallback's lock classification is deliberate.
+#[test]
+fn a_fallback_import_in_an_import_error_handler_is_a_required_root() {
+    let source = "try:\n    import fastpkg as speed\nexcept ImportError:\n    \
+                  import slowpkg as speed\n";
+    let module = pycc_parser::parse(source).unwrap();
+    let mut resolved = pycc_hir::ResolvedImports::default();
+    for request in pycc_hir::project_import_requests(&module) {
+        resolved.insert(request.span, pycc_hir::ResolvedImport::Foreign);
+    }
+    let hir = pycc_hir::lower_module(&module, &resolved, None)
+        .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"))
+        .hir;
+    let split = split_roots(&hir);
+    assert_eq!(split.required(), ["slowpkg"]);
+    assert_eq!(split.optional(), ["fastpkg"]);
+}

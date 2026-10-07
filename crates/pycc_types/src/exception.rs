@@ -116,6 +116,8 @@ pub(super) fn check_try_stmt(
                 handler_env.narrowed.remove(name);
             }
         }
+        // #1485: the `except ImportError` fallback of a foreign import.
+        super::foreign::seed_fallback_rebindings(&mut handler_env, body, &handler.body);
         check_stmt_sequence_shared(&mut handler_env, local_names, &handler.body, return_ty)?;
         handler_envs.push(handler_env);
     }
