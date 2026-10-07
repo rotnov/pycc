@@ -10,7 +10,7 @@
 //! * the per-platform shared-object link argv, [`ExtLinkPlatform`] and
 //!   [`ext_link_args`];
 //! * the export set and its `C0003` capability gaps, [`collect_exports_with_hooks`];
-//! * the generated C companion to the fixed shim, [`generate_exports_inc`]
+//! * the generated C companion to the fixed shim, [`generate_exports_inc_with_slots`]
 //!   and [`SHIM_C`].
 //!
 //! Every item here except [`ExtToolchain::probe`] is a pure function of its
@@ -411,7 +411,9 @@ mod defaults;
 pub(crate) use carrier::*;
 mod export_name;
 mod exports_inc;
-pub(crate) use exports_inc::{generate_exports_inc, generate_exports_inc_with_slots};
+#[cfg(test)]
+pub(crate) use exports_inc::generate_exports_inc;
+pub(crate) use exports_inc::generate_exports_inc_with_slots;
 mod getset;
 #[cfg(test)]
 pub(crate) use getset::ExtGetset;
@@ -428,7 +430,7 @@ pub(crate) use method_types::*;
 pub(crate) use module_hooks::{EntryHooks, is_module_hook};
 mod publication;
 mod richcompare;
-pub(crate) use richcompare::{ExtSlotDunders, collect_slot_dunders};
+pub(crate) use richcompare::{ExtSlotDunders, SlotArtifact, collect_slot_dunders};
 #[cfg(test)]
 pub(crate) use richcompare::{SLOT_DUNDERS, is_slot_dunder_method};
 

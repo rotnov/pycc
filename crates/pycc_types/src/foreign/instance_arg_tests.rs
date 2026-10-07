@@ -1,6 +1,9 @@
 //! #1435: an instance of a regular user class as a positional argument of
 //! a call on a CPython object -- a method call, a direct call and a call of
 //! a subscript result -- and the positions and classes that stay refused.
+//! Since #1470 it also pins the same instances as a subscript key and a
+//! rich-comparison operand, and the enum member, exception instance and
+//! class method's `cls` those positions still refuse.
 //!
 //! Kept apart from `foreign/tests.rs` (see #1314); the fixture helpers are
 //! copied from `call_tests.rs` because a sibling module cannot reach them.
@@ -102,22 +105,75 @@ fn enum_and_exception_instances_are_refused() {
     );
 }
 
-/// The instance is admitted as a call argument only: a subscript key and a
-/// comparison operand keep their refusals. (A list-display element bound to
-/// an object slot is pinned by `an_unpackable_element_is_refused` in
-/// `foreign/list_display/tests.rs`, whose `[A(), [1]]` case names `A`.)
+/// #1470: an instance is a subscript key and a rich-comparison operand on
+/// either side of a CPython object, in a module body, a function and a
+/// method passing its own `self`. (The list-display element is pinned in
+/// `foreign/list_display/tests.rs`, whose display needs an `--ext`
+/// annotation.)
 #[test]
-fn an_instance_outside_a_call_argument_is_refused() {
+fn an_instance_key_and_comparison_operand_are_admitted() {
+    admitted("x = product[Q(1)]\n");
+    admitted("x = product == Q(1)\n");
+    admitted("x = Q(1) != product\n");
+    admitted("x = product < Q(1)\n");
+    admitted("def f(q: Q) -> None:\n    print(product[q], q == product, product >= q)\n");
+    admitted(
+        "class P:\n    def go(self) -> None:\n        print(product[self], self == product)\n",
+    );
+    admitted("class R(Q):\n    pass\n\n\nx = product[R(1)] == R(2)\n");
+}
+
+/// The key and comparison positions keep every refusal the call argument
+/// keeps: an enum member, an exception instance and a class method's `cls`.
+#[test]
+fn a_refused_instance_key_or_comparison_operand_is_refused() {
+    const COLOR: &str = "from enum import Enum\n\n\nclass Color(Enum):\n    RED = 1\n\n\n";
+    const EXC: &str =
+        "class E(Exception):\n    def __init__(self, n: int) -> None:\n        self.n = n\n\n\n";
     refused(
-        "x = product[Q(1)]\n",
+        &format!("{COLOR}x = product[Color.RED]\n"),
         "I0404",
-        "indexing a CPython object with a `Q` key",
+        "indexing a CPython object with a `Color` key",
     );
     refused(
-        "x = product == Q(1)\n",
+        &format!("{EXC}x = product[E(1)]\n"),
         "I0404",
-        "comparing a CPython object with a `Q` value",
+        "indexing a CPython object with a `E` key",
     );
+    refused(
+        &format!("{COLOR}x = Color.RED == product\n"),
+        "I0404",
+        "comparing a CPython object with a `Color` value",
+    );
+    refused(
+        &format!("{EXC}x = product == E(1)\n"),
+        "I0404",
+        "comparing a CPython object with a `E` value",
+    );
+    for (expr, phrase) in [
+        (
+            "product[cls]",
+            "indexing a CPython object with a class method's `cls`",
+        ),
+        (
+            "product == cls",
+            "comparing a CPython object with a class method's `cls`",
+        ),
+        (
+            "cls != product",
+            "comparing a CPython object with a class method's `cls`",
+        ),
+    ] {
+        refused(
+            &format!(
+                "class K:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\n    \
+                 @classmethod\n    def make(cls) -> None:\n        print({expr})\n"
+            ),
+            "I0404",
+            phrase,
+        );
+    }
+    admitted("def g(cls: Q) -> None:\n    print(product[cls], product == cls)\n");
 }
 
 /// A class method's `cls` is a null instance (`Environment::in_classmethod`)

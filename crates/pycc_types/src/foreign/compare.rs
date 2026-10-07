@@ -11,8 +11,11 @@
 //!   compared against. Two native non-`None` operands keep the `C0001` the
 //!   HIR gate gives a literal operand (`pycc_hir::compare_chain`).
 //! * **Rich comparison** (`==`, `!=`, `<`, `<=`, `>`, `>=`) is admitted
-//!   when one operand is an object and the other is an object or one of the
-//!   four packable scalars (`int`, `float`, `bool`, `str`). Its type is the
+//!   when one operand is an object and the other is an object, one of the
+//!   four packable scalars (`int`, `float`, `bool`, `str`) or, since #1470,
+//!   an instance of a regular user class, which crosses as its carrier and
+//!   compares through the class's own dunders (`super::is_object_operand`;
+//!   a class method's own `cls` stays refused). Its type is the
 //!   **object** CPython's `PyObject_RichCompare` returns, not `bool`: the
 //!   comparison's own result is an arbitrary object (an array, say, or one
 //!   whose `__bool__` raises), and a truth context truth-tests it exactly as
@@ -46,13 +49,6 @@ use crate::infer_expr_in;
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{CmpOpKind, HirClassDef, HirExpr, Ty, is_builtin_type_name};
 
-/// Whether `ty` can sit opposite a CPython object in a rich comparison:
-/// another object, or a scalar one of the `pycc_ext_obj_pack_*` helpers
-/// boxes.
-fn is_comparable_with_object(ty: &Ty) -> bool {
-    matches!(ty, Ty::Object | Ty::Int | Ty::Float | Ty::Bool | Ty::Str)
-}
-
 /// Types an `is`/`is not` between two operands neither of which is the
 /// `None` literal (see the module doc).
 pub(crate) fn general_identity_ty(
@@ -77,12 +73,28 @@ pub(crate) fn general_identity_ty(
 
 /// Types a rich comparison when either operand is a CPython object, and
 /// answers `None` when neither is, so the caller's native rules apply.
-pub(crate) fn rich_compare_ty(left_ty: &Ty, right_ty: &Ty) -> Option<Result<Ty, Diagnostic>> {
-    let other = match (left_ty, right_ty) {
-        (Ty::Object, other) | (other, Ty::Object) => other,
+///
+/// The non-object operand must be one the shim can box
+/// ([`super::is_object_operand`]); `left` and `right` are the operand
+/// expressions, consulted only to refuse a class method's own `cls`.
+pub(crate) fn rich_compare_ty(
+    env: &Environment,
+    (left, left_ty): (&HirExpr, &Ty),
+    (right, right_ty): (&HirExpr, &Ty),
+) -> Option<Result<Ty, Diagnostic>> {
+    let (other_expr, other) = match (left_ty, right_ty) {
+        (Ty::Object, _) => (right, right_ty),
+        (_, Ty::Object) => (left, left_ty),
         _ => return None,
     };
-    Some(if is_comparable_with_object(other) {
+    if let Err(diagnostic) = super::refuse_classmethod_cls(
+        env,
+        other_expr,
+        "comparing a CPython object with a class method's `cls`",
+    ) {
+        return Some(Err(diagnostic));
+    }
+    Some(if super::is_object_operand(env, other) {
         Ok(Ty::Object)
     } else {
         Err(object_operation_unsupported(&format!(

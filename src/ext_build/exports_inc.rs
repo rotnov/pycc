@@ -35,10 +35,10 @@ use super::*;
 ///
 /// This form installs no comparison or hash slot (#1427) and no attribute
 /// descriptor (#1442, #1448): it is [`generate_exports_inc_with_slots`] with
-/// neither. The `--ext` build passes
-/// its slots through that variant; the embed launcher, which publishes no
-/// type and whose carriers the checker keeps out of comparison and key
-/// positions (#1470), uses this one.
+/// neither, kept for the generated-text tests that predate #1427. Both
+/// builds call that variant: the `--ext` build with its descriptors and
+/// slots, and since #1470 the embedded build with its slots only.
+#[cfg(test)]
 pub(crate) fn generate_exports_inc(
     module_name: &str,
     exports: &[ExtExport],
@@ -59,13 +59,15 @@ pub(crate) fn generate_exports_inc(
     )
 }
 
-/// [`generate_exports_inc`] for a program whose carrier classes resolve
+/// The generated companion for a program whose carrier classes resolve
 /// comparison or hash dunders (#1427) or carry attribute descriptors
-/// (#1448): `getsets` is [`super::collect_carrier_getsets`]' output and
+/// (#1448), as the test-only `generate_exports_inc` is for one with
+/// neither: `getsets` is [`super::collect_carrier_getsets`]' output and
 /// `slots` is [`super::collect_slot_dunders`]', both of which
 /// `method_types_c` installs.
-/// The build driver calls this form; the embedded build and the
-/// generated-text tests that predate #1427 call the slot-free one.
+/// The `--ext` build driver and (#1470, with no descriptors) the embedded
+/// build call this form; the generated-text tests that predate #1427 call
+/// the slot-free one.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn generate_exports_inc_with_slots(
     module_name: &str,

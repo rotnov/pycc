@@ -312,11 +312,12 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              positional or keyword arguments \
              (including a call of a subscript result), `len`, truth \
              testing, a \
-             scalar- or object-key subscript load, a slice load or deletion with scalar or object \
-             bounds, a rich comparison with an object or \
-             scalar operand, an identity test against an object or `None`, \
+             scalar-, object- or class-instance-key subscript load, a slice load or deletion \
+             with scalar or object bounds, a rich comparison with an object, scalar or \
+             class-instance operand, an identity test against an object or `None`, \
              a membership test of a scalar or object item in an object, \
-             a list display of scalar or object elements bound to an object slot, \
+             a list display of scalar, object or class-instance elements bound to an object \
+             slot, \
              `and`/`or` with an object or scalar operand, \
              `isinstance` against a foreign class, a plain pycc class or \
              `int`/`float`/`bool`/`str`/`list`/`dict`/`tuple`, `for` iteration, a list \
@@ -338,11 +339,49 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
 /// which has a `pycc_ext_obj_pack_*` helper in the shim
 /// (`pycc_ext_obj_pack_object` takes one new reference to the operand).
 ///
-/// The one statement of the operand rule [`check_object_call_args`], the
-/// `Ty::Object` subscript arm in `expr.rs` and a list display's elements
-/// ([`list_display`], Part 2d of #1371) share.
+/// The narrow operand rule a membership item, an object comprehension's
+/// element and a slice bound keep; [`check_object_call_args`] and
+/// [`is_object_operand`] widen it.
 pub(crate) fn is_packable_operand(ty: &Ty) -> bool {
     matches!(ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Object)
+}
+
+/// Whether a value of type `ty` can be boxed opposite a CPython object as a
+/// subscript key (`expr.rs`'s `Ty::Object` arm), a rich-comparison operand
+/// ([`compare::rich_compare_ty`]) or a list-display element
+/// ([`list_display`]): a packable operand ([`is_packable_operand`]) or,
+/// since #1470, an instance of a regular user class
+/// ([`is_carriable_instance`]), which crosses as its `PyccExtInstance`
+/// carrier (`pycc_ext_obj_pack_instance`).
+///
+/// The carrier makes the instance a key, an operand and an element CPython
+/// treats as the program's own object: since #1427 its type compares and
+/// hashes through the class's `__eq__`/`__hash__` and siblings, and since
+/// #1470 an embedded executable's carriers get the same slots as an
+/// `--ext` module's, so the one rule holds in both artifacts. A class that
+/// defines none of them compares and hashes by identity, as CPython's
+/// `object` does. Each site also refuses a class method's own `cls`
+/// ([`refuse_classmethod_cls`]), which this type-level test cannot see.
+pub(crate) fn is_object_operand(env: &Environment, ty: &Ty) -> bool {
+    is_packable_operand(ty) || is_carriable_instance(env, ty)
+}
+
+/// `Err(I0404)` naming `operation` when `expr` is a class method's own
+/// `cls`, which is typed as an instance of its class but holds none (see
+/// `Environment::in_classmethod`). CPython would hand over the class object,
+/// which pycc has no boundary representation for.
+///
+/// The check is syntactic: an alias of `cls` that slips past it reaches the
+/// shim's null guard and raises `SystemError` instead.
+pub(crate) fn refuse_classmethod_cls(
+    env: &Environment,
+    expr: &HirExpr,
+    operation: &str,
+) -> Result<(), Diagnostic> {
+    if env.in_classmethod && matches!(expr, HirExpr::Name(name) if name == "cls") {
+        return Err(object_operation_unsupported(operation));
+    }
+    Ok(())
 }
 
 /// `Err(I0404)` unless every argument of a call on a CPython object is
@@ -359,40 +398,28 @@ pub(crate) fn is_packable_operand(ty: &Ty) -> bool {
 /// `"attribute store"`), checked as a single argument; `args` are the argument
 /// expressions whose types are `arg_tys`, the keyword values for a keyword
 /// call. `None` is admitted since Part 8 too, as an argument only: codegen
-/// passes CPython's own `Py_None` for it. Subscript keys and comparison
-/// operands keep the narrower [`is_packable_operand`] rule. Anything else
+/// passes CPython's own `Py_None` for it. Subscript keys, comparison
+/// operands and list-display elements keep the narrower
+/// [`is_object_operand`] rule, which has no `None`. Anything else
 /// -- a container, an enum member or an exception instance -- has no
 /// boundary representation yet and is refused here rather than reaching
 /// codegen, naming the first offending argument's type.
 ///
-/// The instance arm (#1435) is deliberately *not* part of
-/// [`is_packable_operand`]: a call argument, positional or keyword, crosses
-/// as the instance's `PyccExtInstance` carrier (`pycc_ext_obj_pack_instance`).
-/// Since #1427 an `--ext` carrier type compares and hashes through the
-/// class's own dunders, but the embed launcher's carriers still inherit
-/// `object`'s identity hash and equality and this checker does not know
-/// which artifact it compiles for, so a subscript key, a comparison operand
-/// and a list-display element stay refused (#1470).
+/// The instance arm (#1435) crosses as the instance's `PyccExtInstance`
+/// carrier (`pycc_ext_obj_pack_instance`), exactly as it does in the three
+/// positions [`is_object_operand`] admits since #1470.
 ///
-/// A `@classmethod`'s own `cls` is typed as an instance of its class but
-/// holds none (see `Environment::in_classmethod`), so it is refused by name
-/// here; CPython would pass the class object, which pycc has no boundary
-/// representation for. An alias of `cls` that slips past this syntactic
-/// check reaches the shim's null guard and raises `SystemError` instead.
+/// A `@classmethod`'s own `cls` is refused by name
+/// ([`refuse_classmethod_cls`]).
 pub(crate) fn check_object_call_args<'a>(
     env: &Environment,
     args: impl IntoIterator<Item = &'a HirExpr>,
     arg_tys: &[Ty],
     what: &str,
 ) -> Result<(), Diagnostic> {
-    if env.in_classmethod
-        && args
-            .into_iter()
-            .any(|arg| matches!(arg, HirExpr::Name(name) if name == "cls"))
-    {
-        return Err(object_operation_unsupported(&format!(
-            "passing a class method's `cls` argument to a CPython object's {what}"
-        )));
+    let operation = format!("passing a class method's `cls` argument to a CPython object's {what}");
+    for arg in args {
+        refuse_classmethod_cls(env, arg, &operation)?;
     }
     for arg_ty in arg_tys {
         if !is_packable_operand(arg_ty)

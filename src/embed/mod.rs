@@ -435,6 +435,23 @@ pub(crate) fn check_shared(enable_shared: bool, framework: &str) -> bool {
     enable_shared || !framework.is_empty()
 }
 
+/// The comparison and hash slots of the program's carrier types (#1470),
+/// or every `C0003` refusing one, worded for an embedded executable.
+///
+/// The embedded executable runs the `--ext` shim and companion, so its
+/// `__main__` carriers get #1427's slots exactly as an `--ext` module's do,
+/// and `pycc_types` can admit a carrier as a subscript key, comparison
+/// operand and list-display element in both artifacts. `try_build` calls
+/// this before [`plan_embed`], whose first probe needs an interpreter, so
+/// the refusal needs none; [`plan_embed`] calls it again for the slots it
+/// renders.
+pub(crate) fn embed_slot_dunders(
+    typed_hir: &pycc_hir::HirModule,
+) -> Result<Vec<ext_build::ExtSlotDunders>, Vec<pycc_diag::Diagnostic>> {
+    let carriers = ext_build::collect_carrier_classes(typed_hir);
+    ext_build::collect_slot_dunders(typed_hir, &carriers, ext_build::SlotArtifact::Embedded)
+}
+
 /// What `try_build`'s single link site adds for an embedded executable.
 #[derive(Debug)]
 pub(crate) struct EmbedPlan {
@@ -475,6 +492,10 @@ pub(crate) struct EmbedPlan {
 /// natives are copied into `OUT.pycc\natives\`; it compiles without `-fPIC`,
 /// links the program DLL into the sidecar as [`EmbedPlan::artifact`], and
 /// describes the stub `OUT` linked after it as [`EmbedPlan::stub`].
+///
+/// Precondition (#1470): [`embed_slot_dunders`] accepts `typed_hir`. The
+/// build driver checks it first, so an uninstallable slot dunder is a
+/// `C0003` before the probe; a caller that skips the check panics here.
 pub(crate) fn plan_embed(
     out: &Path,
     entry: &Path,
@@ -524,8 +545,19 @@ pub(crate) fn plan_embed(
     let launcher = obj_path.with_file_name(LAUNCHER_C_NAME);
     let classes = ext_build::collect_user_exception_classes(typed_hir);
     let carriers = ext_build::collect_carrier_classes(typed_hir);
-    let exports_inc =
-        ext_build::generate_exports_inc("__main__", &[], &classes, &[], &[], &carriers);
+    // #1470: the slots only, never #1448's descriptors. A refused slot was
+    // already reported by `try_build` through `embed_slot_dunders`.
+    let slots = embed_slot_dunders(typed_hir).expect("try_build refuses an uninstallable slot");
+    let exports_inc = ext_build::generate_exports_inc_with_slots(
+        "__main__",
+        &[],
+        &classes,
+        &[],
+        &[],
+        &carriers,
+        &[],
+        &slots,
+    );
     write_source(&shim, ext_build::SHIM_C)?;
     let exports_path = obj_path.with_file_name(ext_build::EXPORTS_INC_NAME);
     write_source(&exports_path, &exports_inc)?;

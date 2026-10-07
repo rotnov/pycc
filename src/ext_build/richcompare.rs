@@ -34,6 +34,12 @@
 //! than creating a slotless one on demand. Since #1448 the same hidden type
 //! also carries the class's field descriptors (`super::getset`), and a
 //! class with descriptors but no slot gets one too.
+//!
+//! **Both artifacts (#1470).** The embedded executable runs the same shim
+//! and companion, so its `__main__` carriers get the same slots (but none of
+//! the #1448 descriptors). It compiles with no export thunks, so a slot
+//! dunder whose wrapper would call one is refused there too
+//! ([`SlotArtifact::Embedded`]).
 
 use pycc_diag::{Diagnostic, Severity};
 use pycc_hir::{HirClassDef, HirItem, HirModule};
@@ -76,6 +82,18 @@ pub(crate) fn is_slot_dunder_method(name: &str) -> bool {
         && !class.starts_with("0gen_")
         && segments.next().is_none()
         && SLOT_DUNDERS.contains(&method)
+}
+
+/// Which artifact the slots are installed in (#1470): the refusal text
+/// names it, and an embedded executable additionally refuses a slot whose
+/// wrapper would call an export thunk, because it is compiled without them
+/// (`pycc_codegen::CompileOptions::suppress_export_thunks`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlotArtifact {
+    /// A `pycc build --ext` extension module.
+    Ext,
+    /// An embedded executable's `__main__` (Part 1 of #1028).
+    Embedded,
 }
 
 /// What a carrier type's `Py_tp_hash` slot is.
@@ -146,31 +164,46 @@ fn own_binding<'m>(def: &'m HirClassDef, name: &str) -> Option<Binding<'m>> {
 
 /// The `C0003` for a slot dunder the artifact cannot install, with the
 /// instance-method remedy. Span-less for the reason `capability_gap` gives.
-fn slot_dunder_gap(subject: &str, name: &str, class: &str, why: &str) -> Diagnostic {
+fn slot_dunder_gap(
+    artifact: SlotArtifact,
+    subject: &str,
+    name: &str,
+    class: &str,
+    why: &str,
+) -> Diagnostic {
     let fix = format!(
         "define it as an instance method `def {name}(self, ...)` whose signature the boundary \
          carries ({CARRIABLE_TYPES})"
     );
-    slot_dunder_gap_with(subject, name, class, why, &fix)
+    slot_dunder_gap_with(artifact, subject, name, class, why, &fix)
 }
 
 /// [`slot_dunder_gap`] with its own `fix`, for a refusal an instance
 /// method does not cure (a PEP 695 generic class).
+///
+/// The `--ext` text is #1427's, byte for byte. An embedded executable is
+/// built whenever the program imports CPython, so it has no `--ext` to
+/// drop and its text names itself instead (#1470).
 fn slot_dunder_gap_with(
+    artifact: SlotArtifact,
     subject: &str,
     name: &str,
     class: &str,
     why: &str,
     fix: &str,
 ) -> Diagnostic {
+    let (who, remedy) = match artifact {
+        SlotArtifact::Ext => ("--ext", ", or build without --ext (#1427)"),
+        SlotArtifact::Embedded => ("an embedded executable", " (#1427, #1470)"),
+    };
     Diagnostic {
         code: EXT_CAPABILITY_CODE,
         severity: Severity::Error,
         message: format!(
-            "--ext cannot install `{subject}` as the host-visible `{name}` of `{class}` \
+            "{who} cannot install `{subject}` as the host-visible `{name}` of `{class}` \
              instances: {why} -- CPython calls `{name}` implicitly (for `==`, `<`, `in`, \
              `hash()` or a dict key), so leaving it out of the artifact would silently answer \
-             by identity instead -- {fix}, or build without --ext (#1427)"
+             by identity instead -- {fix}{remedy}"
         ),
         span: None,
         label: None,
@@ -181,6 +214,7 @@ fn slot_dunder_gap_with(
 /// The instance export the slot `name` of `class_def` calls, `None` when no
 /// class of its MRO binds the name, or the `C0003` refusing it.
 fn slot_export(
+    artifact: SlotArtifact,
     module: &HirModule,
     class_def: &HirClassDef,
     name: &str,
@@ -196,7 +230,7 @@ fn slot_export(
     let mangled = match binding {
         Binding::Other(kind) => {
             let why = format!("it is bound as {kind}, not as an instance method");
-            return Err(slot_dunder_gap(&subject, name, class, &why));
+            return Err(slot_dunder_gap(artifact, &subject, name, class, &why));
         }
         Binding::Method(mangled) => mangled,
     };
@@ -213,7 +247,9 @@ fn slot_export(
              cross as one carrier type"
         );
         let fix = "declare the class with an erased `Generic[T]` base instead of PEP 695 syntax";
-        return Err(slot_dunder_gap_with(&subject, name, class, &why, fix));
+        return Err(slot_dunder_gap_with(
+            artifact, &subject, name, class, &why, fix,
+        ));
     }
     let item = inherited::receiver_exact_member(module, class, name, mangled);
     // The wrapper's call form must match codegen's: an item this predicate
@@ -246,9 +282,9 @@ fn slot_export(
     {
         let why =
             format!("its {offender} is not a type this pycc version's CPython boundary can carry");
-        return Err(slot_dunder_gap(&subject, name, class, &why));
+        return Err(slot_dunder_gap(artifact, &subject, name, class, &why));
     }
-    Ok(Some(ExtExport {
+    let export = ExtExport {
         name: item.to_string(),
         class: Some(class.to_string()),
         method: Some(name.to_string()),
@@ -266,15 +302,36 @@ fn slot_export(
         defaults: defaults::carried_defaults(module, item, true),
         return_ty: return_ty.clone(),
         keyword_names: None,
-    }))
+    };
+    // #1470: an embedded executable is compiled without export thunks, so
+    // a wrapper that would call one (`wrappers::wrapper_for`'s own
+    // predicate) would name an undefined symbol.
+    let needs_thunk = pycc_codegen::ext_thunk_required(
+        item,
+        &export.params,
+        &export.return_ty,
+        export.returns_buffer_slice,
+    );
+    if artifact == SlotArtifact::Embedded && needs_thunk {
+        let why = "its signature needs an export thunk (it carries a `tuple` or returns a \
+                   slice of a `memoryview` argument), and an embedded executable is \
+                   compiled without one";
+        let fix = "take and return only scalars, instances of a class compiled in this program, \
+                   or `None`";
+        return Err(slot_dunder_gap_with(
+            artifact, &subject, name, class, why, fix,
+        ));
+    }
+    Ok(Some(export))
 }
 
 /// The comparison and hash slots of every carrier class in `carriers` that
 /// resolves at least one of [`SLOT_DUNDERS`], in `carriers` order, or every
-/// `C0003` refusing one.
+/// `C0003` refusing one, worded for `artifact`.
 pub(crate) fn collect_slot_dunders(
     module: &HirModule,
     carriers: &[ExtCarrierClass],
+    artifact: SlotArtifact,
 ) -> Result<Vec<ExtSlotDunders>, Vec<Diagnostic>> {
     let mut out = Vec::new();
     let mut gaps: Vec<Diagnostic> = Vec::new();
@@ -286,7 +343,7 @@ pub(crate) fn collect_slot_dunders(
         let mut comparisons = Vec::new();
         let mut refused = Vec::new();
         for (name, _) in COMPARISONS {
-            match slot_export(module, def, name) {
+            match slot_export(artifact, module, def, name) {
                 Ok(Some(export)) => comparisons.push((name, export)),
                 Ok(None) => {}
                 Err(gap) => refused.push(gap),
@@ -302,7 +359,7 @@ pub(crate) fn collect_slot_dunders(
                 .find(|name| own_binding(held, name).is_some())
         });
         let hash = match decider {
-            Some("__hash__") => match slot_export(module, def, "__hash__") {
+            Some("__hash__") => match slot_export(artifact, module, def, "__hash__") {
                 Ok(export) => export.map(|export| SlotHash::Compiled(Box::new(export))),
                 Err(gap) => {
                     refused.push(gap);

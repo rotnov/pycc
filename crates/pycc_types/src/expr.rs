@@ -1235,14 +1235,17 @@ pub(crate) fn infer_expr_in(
                 // diagnostic rather than this one, exactly as the
                 // `MethodCall` arm below orders the same two concerns.
                 //
-                // Only a packable operand can be marshalled into a key
-                // (`foreign::is_packable_operand`: the four scalars and,
-                // since Part 2a of #1371, a second `object`): each has a
-                // `pycc_ext_obj_pack_*` helper in the shim, and the packer
-                // contract is the same one a call's arguments use. Anything
-                // else -- a container, an instance or `None` -- has no
-                // boundary representation yet and is refused here rather
-                // than reaching codegen.
+                // Only an operand the shim can box is a key
+                // (`foreign::is_object_operand`: the four scalars, since
+                // Part 2a of #1371 a second `object`, and since #1470 an
+                // instance of a regular user class, which crosses as its
+                // carrier and hashes through the class's `__hash__`): each
+                // has a `pycc_ext_obj_pack_*` helper in the shim, and the
+                // packer contract is the same one a call's arguments use.
+                // Anything else -- a container, an enum member, an
+                // exception instance or `None` -- has no boundary
+                // representation yet and is refused here rather than
+                // reaching codegen.
                 //
                 // The *result* is `Ty::Object`: pycc knows nothing about
                 // what `o[k]` really is, exactly as it knows nothing about
@@ -1252,7 +1255,12 @@ pub(crate) fn infer_expr_in(
                 // `docs/TYPE_SYSTEM.md`'s `object` row records the
                 // asymmetry.
                 Ty::Object => {
-                    if !crate::foreign::is_packable_operand(&index_ty) {
+                    crate::foreign::refuse_classmethod_cls(
+                        env,
+                        index,
+                        "indexing a CPython object with a class method's `cls`",
+                    )?;
+                    if !crate::foreign::is_object_operand(env, &index_ty) {
                         return Err(crate::foreign::object_operation_unsupported(&format!(
                             "indexing a CPython object with a `{}` key",
                             index_ty.name()
