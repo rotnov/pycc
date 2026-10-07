@@ -163,6 +163,7 @@ fn probe(version: (u32, u32), include: &Path) -> ExtProbe {
 
 mod bridge_watermark;
 mod buffer_slice_parity;
+mod carrier_getsets;
 mod carrier_types;
 mod compiled_isinstance;
 mod exports;

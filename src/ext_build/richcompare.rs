@@ -31,12 +31,15 @@
 //! carrier type the generated registration creates and enters in the
 //! shim's carrier-type cache up front ([`hidden_carrier_types_c`]), so the
 //! first crossing of such an instance finds a type with the slots rather
-//! than creating a slotless one on demand.
+//! than creating a slotless one on demand. Since #1448 the same hidden type
+//! also carries the class's field descriptors (`super::getset`), and a
+//! class with descriptors but no slot gets one too.
 
 use pycc_diag::{Diagnostic, Severity};
 use pycc_hir::{HirClassDef, HirItem, HirModule};
 
 use super::export_name::ExtReceiver;
+use super::getset::{ExtClassGetsets, getset_c};
 use super::{
     CARRIABLE_TYPES, EXT_CAPABILITY_CODE, ExtCarrierClass, ExtExport, ExtPublishedClass,
     carrier_class_names, defaults, inherited, unsupported_boundary_ty, wrapper_for,
@@ -446,28 +449,54 @@ pub(crate) fn unhashable_fixup(slots: &ExtSlotDunders, array: &str) -> String {
     }
 }
 
-/// The hidden carrier types (#1427) for the classes in `slots` that
-/// `publications` does not publish, as `(definitions, registration)`.
+/// The hidden carrier types (#1427) for the classes in `getsets` (#1448)
+/// or `slots` that `publications` does not publish, as `(definitions,
+/// registration)`: the classes of `getsets` first, then those only `slots`
+/// names, so a program without descriptors keeps #1427's order.
 ///
 /// Each type is what the shim's `pycc_ext_carrier_type` would create on
 /// demand -- `<module>.<Class>`, the shared deallocator and `__copy__`,
-/// `Py_TPFLAGS_DISALLOW_INSTANTIATION` -- plus the class's slots. The
-/// registration enters it in the carrier-type cache under the class name
-/// and does not add it to the module: the class publishes nothing, so the
-/// host can only meet its instances, never name the class.
+/// `Py_TPFLAGS_DISALLOW_INSTANTIATION` -- plus the class's field
+/// descriptors and slots. The registration enters it in the carrier-type
+/// cache under the class name and does not add it to the module: the class
+/// publishes nothing, so the host can only meet its instances, never name
+/// the class. A class with neither still crosses on the on-demand type,
+/// whose shared slot array is exactly what it needs.
 pub(crate) fn hidden_carrier_types_c(
-    slots: &[ExtSlotDunders],
     publications: &[ExtPublishedClass],
+    getsets: &[ExtClassGetsets],
+    slots: &[ExtSlotDunders],
     emitted: &mut Vec<String>,
 ) -> (String, String) {
     let mut defs = String::new();
     let mut registration = String::new();
-    for entry in slots
-        .iter()
-        .filter(|entry| !publications.iter().any(|held| held.class == entry.class))
+    let mut classes: Vec<&str> = getsets.iter().map(|table| table.class.as_str()).collect();
+    for entry in slots {
+        if !classes.contains(&entry.class.as_str()) {
+            classes.push(&entry.class);
+        }
+    }
+    for class in classes
+        .into_iter()
+        .filter(|class| !publications.iter().any(|held| held.class == *class))
     {
-        let class = &entry.class;
-        defs.push_str(&slot_functions_c(entry, emitted));
+        let table = getsets.iter().find(|table| table.class == class);
+        let entry = slots.iter().find(|entry| entry.class == class);
+        let mut rows = String::new();
+        if let Some(table) = table {
+            defs.push_str(&getset_c(table, emitted));
+            rows.push_str(&format!(
+                "    {{Py_tp_getset, pycc_ext_type_getset_{class}}},\n"
+            ));
+        }
+        if let Some(entry) = entry {
+            defs.push_str(&slot_functions_c(entry, emitted));
+            rows.push_str(&slot_rows(entry));
+            registration.push_str(&unhashable_fixup(
+                entry,
+                &format!("pycc_ext_carrier_slots_{class}"),
+            ));
+        }
         defs.push_str(&format!(
             "static PyMethodDef pycc_ext_carrier_methods_{class}[] = {{\n    \
              {{\"__copy__\", (PyCFunction)(void (*)(void))pycc_ext_instance_copy, \
@@ -478,12 +507,7 @@ pub(crate) fn hidden_carrier_types_c(
              static PyType_Spec pycc_ext_carrier_spec_{class} = {{\n    \
              PYCC_EXT_MODULE_NAME_STR \".{class}\",\n    sizeof(PyccExtInstance),\n    0,\n    \
              Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION | \
-             Py_TPFLAGS_IMMUTABLETYPE,\n    pycc_ext_carrier_slots_{class},\n}};\n\n",
-            rows = slot_rows(entry)
-        ));
-        registration.push_str(&unhashable_fixup(
-            entry,
-            &format!("pycc_ext_carrier_slots_{class}"),
+             Py_TPFLAGS_IMMUTABLETYPE,\n    pycc_ext_carrier_slots_{class},\n}};\n\n"
         ));
         registration.push_str(&format!(
             "    type = PyType_FromSpec(&pycc_ext_carrier_spec_{class});\n    \

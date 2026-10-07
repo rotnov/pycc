@@ -68,7 +68,9 @@ fn assert_one_error(tag: &str, body: &str, code: &str, needle: &str) {
 /// `ParserState` shape) and `Hidden` publishes nothing at all -- it has no
 /// method, and its `tuple` constructor parameter is one no generated
 /// constructor carries, so #1450's constructible-class publication does not
-/// reach it and it keeps exercising the on-demand carrier type; `_D` is a
+/// reach it and it crosses on a type the artifact never publishes (since
+/// #1448 a hidden carrier type carrying its `n` descriptor; the embedded
+/// test below still exercises the shim's on-demand type); `_D` is a
 /// private, so unpublished, subclass of the published `Q`. Compiled
 /// `isinstance` on a carrier that comes back from the host answers from its
 /// run-time class (`back_hidden`, `back_private`), and `kw`/`kwself` pass an
@@ -264,17 +266,18 @@ const DEVIATION_DRIVER: &str = "import pycc_inst_dev_mod as mod\n\
 /// `isinstance` against a base: CPython `True` (published carrier types are
 /// flat); attribute read through `R`'s carrier: CPython `True`, and since
 /// #1442 pycc's too (a constructible class's type carries a descriptor
-/// per field, writable for a slot since Part 1 of #1443); attribute read through `Same`'s on-demand
-/// carrier, which carries no descriptor table: CPython `True` (#1448) --
-/// `Same`'s `tuple` constructor parameter keeps it unpublished, since #1450
-/// publishes every constructible class and would give it descriptors;
+/// per field, writable for a slot since Part 1 of #1443); attribute read
+/// through `Same`'s carrier: CPython `True`, and since #1448 pycc's too --
+/// `Same`'s `tuple` constructor parameter keeps it unpublished, and its
+/// hidden carrier type now carries its field descriptors beside #1427's
+/// comparison slot;
 /// `__eq__` override: CPython `True`, and since #1427 pycc's too (the
 /// carrier type's `tp_richcompare` runs the compiled `__eq__`); `__repr__`
 /// override: CPython `Same!` (`__repr__` is not wired to a type slot); a
 /// `self` escaping during `__init__`:
 /// CPython `True True` (the escape is packed before `tp_init` links the
 /// host's object, so it gets its own carrier of the same type).
-const DEVIATION_PINNED: &str = "False\nTrue\nFalse\nTrue\nTrue\nFalse True\n";
+const DEVIATION_PINNED: &str = "False\nTrue\nTrue\nTrue\nTrue\nFalse True\n";
 
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]

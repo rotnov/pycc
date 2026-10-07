@@ -572,8 +572,8 @@ and discards it, passing the same null receiver every native
 `Class.method(...)` call site already passes. A `@property` getter or setter,
 and any method of a private class or of a user exception class, are **not**
 exported and are not `C0003`: they are excluded as representation, not as a
-capability gap. (Since #1442 a constructible class's getter is reachable as an
-attribute descriptor instead -- "Reading a field through the published type"
+capability gap. (Since #1442 a constructible class's getter, and since #1448
+any carrier class's, is reachable as an attribute descriptor instead -- "Reading a field through the published type"
 below -- and since #1458 its setter through that descriptor's store --
 "Storing a field through the published type" -- never as a callable method.) A public `@staticmethod` or `@classmethod` of a public class
 whose signature the boundary cannot carry *is* a `C0003`, where it was
@@ -710,9 +710,10 @@ by D-154, gives `pycc_rt` no ownership model, so the leak a `native` program
 bounds at process exit becomes linear in the host's call count.
 
 *Reading a field through the published type*
-([#1442](https://github.com/rotnov/pycc/issues/1442)). A constructible class's
-type object also carries a `Py_tp_getset` table: one descriptor per
-instance-attribute slot and one per `@property` whose declared type is `int`,
+([#1442](https://github.com/rotnov/pycc/issues/1442)). A carrier type also
+carries a `Py_tp_getset` table -- a constructible class's type object since
+#1442, every carrier type whose class has a descriptor since #1448 (below):
+one descriptor per instance-attribute slot and one per `@property` whose declared type is `int`,
 `float`, `bool`, `str`, in an `--ext` module the object (D-258), or -- since
 [#1453](https://github.com/rotnov/pycc/issues/1453) -- a regular class
 compiled in the same module, the classes the admissibility table's
@@ -744,10 +745,27 @@ can observe of an object it already holds, and refusing a build over one
 unobservable field
 would turn that into a regression. (An optional instance slot, `C | None`, never
 reaches the table: its annotation is still refused at compile time with
-`T0049`.) The table is a constructible class's only: a non-constructible
-published type and an on-demand carrier type (#1435) wrap an instance as well,
-but carry no descriptor yet, so a field read through one raises
-`AttributeError` ([#1448](https://github.com/rotnov/pycc/issues/1448)).
+`T0049`.) Since [#1448](https://github.com/rotnov/pycc/issues/1448) the table
+is not a constructible class's only: it is built per carrier class
+(`collect_carrier_getsets` in `src/ext_build/getset.rs`), so a
+non-constructible published type installs it on its own type object, and an
+unpublished class with at least one descriptor gets a hidden carrier type
+carrying it, registered in the shim's carrier-type cache at module exec as
+#1427's comparison slots are ("Comparing and hashing through the carrier
+type" below; a class with both gets one hidden type with both). The rules
+above apply to every such table, setters included. Only a class with nothing
+to describe still crosses on the shim's descriptor-less on-demand type, so a
+field read through it raises `AttributeError` (pinned by
+`tests/issue_1448_carrier_getsets.rs`'s `Bare`). A
+class no instance's run-time class can be -- an abstract or `Protocol` class,
+a monomorphized `0gen_` specialization -- gets no table, and neither does one
+with a PEP 695 generic class in its MRO: its specializations all cross as one
+carrier named after the template with per-specialization slot layouts, so no
+one table describes them, and a field read through such a carrier still
+raises `AttributeError` (silently partial, as above). The one exception is
+the table #1442 already gave a constructible published generic template
+(`class G[T]` whose `__init__` the boundary carries), which it keeps, so
+#1448 removes no descriptor #1442 published.
 
 *Storing a field through the published type* (Part 1 of
 [#1443](https://github.com/rotnov/pycc/issues/1443), D-244's #1443
@@ -909,7 +927,10 @@ slots on its own type object. Every other carrier class that resolves one --
 a private class, or one whose `__init__` keeps it unpublished -- gets a hidden
 carrier type, built like the on-demand one (#1435) plus the slots and entered
 in the carrier-type cache at module exec (`pycc_ext_carrier_register`), so no
-instance of it crosses on a slotless type. A binding the artifact cannot
+instance of it crosses on a slotless type. Since #1448 the same hidden type
+also carries the class's field descriptors ("Reading a field through the
+published type" above), and a class with descriptors but no slot gets one
+too. A binding the artifact cannot
 install is refused with `C0003` before any toolchain runs, on every class of
 the module, since an instance of any class can cross as `Any`: a
 `@staticmethod`, `@classmethod`, `@property` or class attribute under one of
@@ -926,11 +947,7 @@ identity answer (a body answering `True` for a non-instance makes `c == None`
 `True` in CPython and `False` here; a body reading `other.v` raises `AttributeError` in CPython);
 a comparison whose parameter has any other annotation the boundary checks
 (`other: int`) raises the boundary's ingress `TypeError` for an operand of
-another type where CPython runs the body (`c == "x"`); a carrier type with no field descriptors -- a hidden one or a
-non-constructible published one -- makes the compiled body's `other.v` on an
-`Any` operand raise `AttributeError`
-([#1448](https://github.com/rotnov/pycc/issues/1448)), where before #1427 the
-host answered by identity without running the body; and a carrier no
+another type where CPython runs the body (`c == "x"`); and a carrier no
 `tp_init` filled raises `TypeError: C.__hash__() called on an uninitialized
 instance` where CPython's body raises `AttributeError`. The embed launcher
 installs none of these slots (it publishes no type), which is why compiled code
@@ -1870,10 +1887,13 @@ above. Four rules fix what that carrier is.
   `Py_TPFLAGS_DISALLOW_INSTANTIATION` -- so the host can call the class's
   exported methods on what it received. Any other class (private, neither
   resolving a method nor constructible, or a monomorphized generic
-  specialization) gets a type carrying only the shared `__copy__` (#1455), named
-  `<module>.<Class>` (`__main__.<Class>` in an embedded executable), created
-  on first use with `Py_TPFLAGS_DISALLOW_INSTANTIATION` and cached by class
-  name for the module's lifetime. The cache key is the bare class name, which
+  specialization) gets a type named `<module>.<Class>` (`__main__.<Class>`
+  in an embedded executable) with `Py_TPFLAGS_DISALLOW_INSTANTIATION`,
+  cached by class name for the module's lifetime: in an `--ext` module a
+  class with comparison slots (#1427) or field descriptors (#1448) gets a
+  generated hidden carrier type registered at module exec, and any other
+  class -- and every class in an embedded executable -- one carrying only
+  the shared `__copy__` (#1455), created on first use. The cache key is the bare class name, which
   is unique per artifact because the project namespace is flat (a second
   top-level `Q` is a `C0001`); a generic class's specializations
   (`0gen_<Class>__...`) share their generic class's layout name and are
@@ -1907,11 +1927,16 @@ above. Four rules fix what that carrier is.
   "Reading a field through the published type" above), stores into its
   slots through their setters (Part 1 of #1443) and runs a property's
   compiled setter on a store (#1458), with the boundary refusals "Storing a
-  field through the published type" above lists. Any other carrier -- a non-constructible published type's, or an
-  on-demand carrier type's -- exposes exactly its type's exported methods and
-  the shared `__copy__` (#1455, "Copying an instance through `copy.copy`"
-  above): no attribute is readable, so `hasattr(x, 'n')` is `False` where CPython says
-  `True` ([#1448](https://github.com/rotnov/pycc/issues/1448)). Published types are
+  field through the published type" above lists; since #1448 so does a
+  carrier of a non-constructible published type or of an unpublished class
+  (`tests/issue_1448_carrier_getsets.rs`). A carrier on the on-demand type
+  -- a class with nothing to describe, or any class in an embedded
+  executable -- and one of a class with a PEP 695 generic in its MRO
+  (other than a constructible published template, which keeps #1442's
+  table) expose exactly their type's exported methods and the shared `__copy__`
+  (#1455, "Copying an instance through `copy.copy`" above), so no attribute
+  is readable and `hasattr(x, 'n')` is `False` where CPython says
+  `True`. Published types are
   flat, so the host's own `isinstance(derived, mod.Base)` is `False`; a
   compiled `isinstance(x, Base)` on a carrier that comes back answers from
   the run-time class's MRO instead (above), and matches CPython. Since #1427 a

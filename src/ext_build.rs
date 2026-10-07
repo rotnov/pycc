@@ -413,7 +413,9 @@ mod export_name;
 mod exports_inc;
 pub(crate) use exports_inc::{generate_exports_inc, generate_exports_inc_with_slots};
 mod getset;
+#[cfg(test)]
 pub(crate) use getset::ExtGetset;
+pub(crate) use getset::{ExtClassGetsets, collect_carrier_getsets};
 mod inherited;
 mod instance_copy;
 mod keywords;

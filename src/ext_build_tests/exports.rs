@@ -974,12 +974,13 @@ fn a_constructible_class_yields_one_constructor_descriptor_with_the_carried_tail
             params: vec![Ty::Int, Ty::Int],
             param_writable: vec![false; 2],
             slot_names: vec!["w".to_string(), "h".to_string()],
-            // #1442: both `int` slots are carriable, so both are descriptors,
-            // indexed in slot order (writable since Part 1 of #1443).
-            getsets: grid_slot_getsets(),
             keyword_names: None,
         }]
     );
+    // #1442: both `int` slots are carriable, so both are descriptors,
+    // indexed in slot order (writable since Part 1 of #1443); since #1448
+    // the table is keyed by carrier class rather than held by the ctor.
+    assert_eq!(grid_getsets(&hir), grid_slot_getsets());
 }
 
 /// Each row removes exactly one constructibility condition from
@@ -1167,12 +1168,13 @@ fn an_implicit_object_init_is_still_resolved_when_it_is_the_only_one() {
             params: Vec::new(),
             param_writable: Vec::new(),
             slot_names: vec!["w".to_string(), "h".to_string()],
-            // #1442: both `int` slots are carriable, so both are descriptors,
-            // indexed in slot order (writable since Part 1 of #1443).
-            getsets: grid_slot_getsets(),
             keyword_names: None,
         }]
     );
+    // #1442: both `int` slots are carriable, so both are descriptors,
+    // indexed in slot order (writable since Part 1 of #1443); since #1448
+    // the table is keyed by carrier class rather than held by the ctor.
+    assert_eq!(grid_getsets(&hir), grid_slot_getsets());
 }
 
 #[test]
@@ -2055,6 +2057,19 @@ fn a_constructors_buffer_parameter_carries_the_same_writability_flag() {
         ctors.iter().map(|c| &c.param_writable).collect::<Vec<_>>(),
         vec![&vec![true, false]]
     );
+}
+
+/// `Grid`'s descriptor table in `hir`, as the `--ext` build collects it
+/// (#1448).
+fn grid_getsets(hir: &HirModule) -> Vec<crate::ext_build::ExtGetset> {
+    let tables = collect_carrier_getsets(hir, &collect_carrier_classes(hir));
+    assert_eq!(tables.len(), 1, "only `Grid` has a table");
+    assert_eq!(tables[0].class, "Grid");
+    tables
+        .into_iter()
+        .next()
+        .map(|table| table.getsets)
+        .unwrap_or_default()
 }
 
 /// The two `int` slot descriptors [`constructible_module`]'s `Grid` exposes

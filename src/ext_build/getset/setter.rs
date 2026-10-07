@@ -1,5 +1,7 @@
 //! The setter of a slot descriptor (Part 1 of #1443): what a host
-//! `obj.x = v` and `del obj.x` run on a constructible published class.
+//! `obj.x = v` and `del obj.x` run on any carrier type with a descriptor
+//! table (a constructible published class's since #1443, every carrier
+//! type's since #1448).
 //!
 //! A store converts `v` by the *parameter row* of the boundary table for
 //! the slot's declared type (`docs/RUNTIME.md`), with the same

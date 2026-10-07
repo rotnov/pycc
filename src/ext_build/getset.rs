@@ -1,5 +1,5 @@
-//! The `Py_tp_getset` descriptors a constructible published class carries
-//! (#1442): one per carriable instance-attribute slot and one per carriable
+//! The `Py_tp_getset` descriptors a carrier type carries (#1442, every
+//! carrier type since #1448): one per carriable instance-attribute slot and one per carriable
 //! `@property`, so `instance.field` reads the compiled value on the CPython
 //! side, and (Part 1 of #1443) a slot's `instance.field = v` and
 //! `del instance.field` store into it, while (#1458) a property's
@@ -55,12 +55,25 @@
 //! instance slot (`C | None`) never reaches this table: its annotation is
 //! still refused at compile time with `T0049`.
 //!
-//! **Constructible classes only, for now.** The descriptors are part of
-//! [`super::ExtCtor`], so only a constructible class's type object carries
-//! them. Since #1435 every published type, and every on-demand carrier type
-//! `pycc_ext_carrier_type` creates for a class that publishes nothing, also
-//! wraps a live `inst`; those carry no table yet (#1448), so a field read
-//! through one still raises `AttributeError`.
+//! **Every carrier type (#1448).** The table is keyed by carrier class
+//! ([`collect_carrier_getsets`]), not by constructor, because since #1435
+//! every type that boxes an instance for the host -- a constructible
+//! published type, a non-constructible published one, and the carrier type
+//! of a class that publishes nothing -- wraps a live `inst`. A published
+//! class's type object installs the table ([`super::method_types_c`]); any
+//! other class with a table gets a hidden carrier type registered in the
+//! shim's carrier-type cache at module exec
+//! ([`super::richcompare::hidden_carrier_types_c`], #1427's mechanism), so
+//! no instance of it crosses on the shim's descriptor-less on-demand type.
+//! The rules above apply unchanged, setters included. A class no instance
+//! is ever an instance *of* -- an abstract or `Protocol` class, a
+//! monomorphized `0gen_` specialization -- gets no table, and neither does
+//! one with a PEP 695 generic in its MRO that #1442 did not already cover:
+//! its specializations all cross as one carrier named after the template
+//! with per-specialization layouts (the reason `richcompare` refuses slots
+//! there), so it is silently partial in the sense above. A constructible
+//! published generic template keeps the table #1442 gave it, so #1448
+//! narrows nothing #1442 published.
 
 use std::collections::BTreeSet;
 
@@ -69,9 +82,12 @@ use pycc_hir::{HirClassDef, HirItem, HirModule, Ty, flat_attr_layout};
 mod setter;
 
 use super::export_name::ExtReceiver;
-use super::{ExtCtor, ExtExport, carrier_class_names, inherited, namespace_owner, wrapper_for};
+use super::{
+    ExtCarrierClass, ExtExport, carrier_class_names, class_constructible, class_publishable,
+    inherited, instance_shape_admissible, mro_class_defs, namespace_owner, wrapper_for,
+};
 
-/// One attribute descriptor a constructible published class exposes.
+/// One attribute descriptor a carrier type exposes.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ExtGetset {
     /// An instance-attribute slot, read straight out of the inner
@@ -82,7 +98,8 @@ pub(crate) enum ExtGetset {
         /// The attribute name, which is the host-visible descriptor name.
         name: String,
         /// The slot index in `pycc_hir::flat_attr_layout` order -- the
-        /// layout `ExtCtor::slot_names` allocates.
+        /// layout every instance of the class is allocated with
+        /// (`ExtCtor::slot_names` for a host-constructed one).
         index: usize,
         /// The slot's declared type, which picks the packer and the
         /// setter's unpack helper. Every slot descriptor has a setter
@@ -133,6 +150,56 @@ impl ExtGetset {
     }
 }
 
+/// One carrier class's descriptor table (#1448): what
+/// [`super::method_types_c`] installs as `Py_tp_getset` on its published
+/// type object or on its hidden carrier type.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ExtClassGetsets {
+    /// The class whose carrier type carries the table.
+    pub(crate) class: String,
+    /// Its descriptors, in [`collect_getsets`] order; never empty.
+    pub(crate) getsets: Vec<ExtGetset>,
+}
+
+/// The descriptor table of every class in `carriers` that has at least one
+/// descriptor and whose name can be some instance's run-time class, in
+/// `carriers` order (the module doc names the classes skipped).
+pub(crate) fn collect_carrier_getsets(
+    module: &HirModule,
+    carriers: &[ExtCarrierClass],
+) -> Vec<ExtClassGetsets> {
+    let lookup = |class: &str| {
+        module
+            .class_defs
+            .iter()
+            .find(|(held, _)| held == class)
+            .map(|(_, def)| def)
+    };
+    carriers
+        .iter()
+        .filter_map(|carrier| {
+            let class = carrier.class.as_str();
+            let def = lookup(class).expect("a carrier class is a module class");
+            // A constructible published generic template kept the table
+            // #1442 built for it from its constructor, so only the classes
+            // #1448 newly covers are held to the generic exclusion.
+            let generic = def
+                .mro
+                .iter()
+                .any(|ancestor| lookup(ancestor).is_some_and(|held| held.type_param.is_some()))
+                && !(class_publishable(def, class) && class_constructible(module, class));
+            if class.starts_with("0gen_") || !instance_shape_admissible(def, class) || generic {
+                return None;
+            }
+            let getsets = collect_getsets(module, def, &mro_class_defs(module, def));
+            (!getsets.is_empty()).then(|| ExtClassGetsets {
+                class: class.to_string(),
+                getsets,
+            })
+        })
+        .collect()
+}
+
 /// Whether a slot or getter of type `ty` gets a descriptor: the five types
 /// whose value the boundary packs from one machine word, and (#1453) an
 /// instance of one of `carrier_classes`, the module's regular classes,
@@ -145,7 +212,7 @@ fn carried(ty: &Ty, carrier_classes: &BTreeSet<String>) -> bool {
     }
 }
 
-/// The getset descriptors the constructible class `class` publishes, given
+/// The getset descriptors the carrier class `class` exposes, given
 /// its definition and its MRO's definitions (most derived first): its
 /// carriable slots in slot order, then its carriable properties in MRO
 /// order.
@@ -310,26 +377,22 @@ fn pack_slot_word(class: &str, name: &str, ty: &Ty) -> String {
     }
 }
 
-/// The C text for one constructible class's descriptors: each property's
+/// The C text for one carrier class's descriptors: each property's
 /// getter wrapper, each descriptor's getter function, each slot's setter
 /// function, each property's setter function unless it is
 /// [`PropertySetter::ReadOnly`] (#1458), and the
 /// `pycc_ext_type_getset_<Class>` table [`super::method_types_c`] installs
-/// as `Py_tp_getset`. Empty when the class has no descriptor, in which case
-/// no slot is installed and the class's generated C is unchanged.
+/// as `Py_tp_getset` on a published type or a hidden carrier type (#1448).
 ///
 /// `emitted` holds the compiled getters and setters whose wrapper an
 /// earlier class already rendered: a `Derived` that inherits `Base`'s `@property` with no
 /// receiver-exact copy resolves to the same `Base.<name>` item, and a
 /// second `pycc_ext_wrap_` definition of one symbol is a C redefinition
 /// error, so each wrapper is rendered once per artifact.
-pub(crate) fn getset_c(ctor: &ExtCtor, emitted: &mut Vec<String>) -> String {
-    if ctor.getsets.is_empty() {
-        return String::new();
-    }
-    let class = &ctor.class;
+pub(crate) fn getset_c(table: &ExtClassGetsets, emitted: &mut Vec<String>) -> String {
+    let class = &table.class;
     let mut out = String::new();
-    for getset in &ctor.getsets {
+    for getset in &table.getsets {
         let name = getset.name();
         let symbol = getter_symbol(class, name);
         match getset {
@@ -396,7 +459,7 @@ pub(crate) fn getset_c(ctor: &ExtCtor, emitted: &mut Vec<String>) -> String {
     out.push_str(&format!(
         "static PyGetSetDef pycc_ext_type_getset_{class}[] = {{\n"
     ));
-    for getset in &ctor.getsets {
+    for getset in &table.getsets {
         let name = getset.name();
         let setter = match getset {
             ExtGetset::Slot { .. }

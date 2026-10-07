@@ -33,8 +33,9 @@ use super::*;
 /// `pycc_ext_methods[]`, because the shim may add it only after the module
 /// body has run.
 ///
-/// This form installs no comparison or hash slot (#1427): it is
-/// [`generate_exports_inc_with_slots`] with none. The `--ext` build passes
+/// This form installs no comparison or hash slot (#1427) and no attribute
+/// descriptor (#1442, #1448): it is [`generate_exports_inc_with_slots`] with
+/// neither. The `--ext` build passes
 /// its slots through that variant; the embed launcher, which publishes no
 /// type and whose carriers the checker keeps out of comparison and key
 /// positions (#1470), uses this one.
@@ -54,14 +55,18 @@ pub(crate) fn generate_exports_inc(
         ctors,
         carriers,
         &[],
+        &[],
     )
 }
 
 /// [`generate_exports_inc`] for a program whose carrier classes resolve
-/// comparison or hash dunders (#1427): `slots` is
-/// [`super::collect_slot_dunders`]' output, which `method_types_c` installs.
+/// comparison or hash dunders (#1427) or carry attribute descriptors
+/// (#1448): `getsets` is [`super::collect_carrier_getsets`]' output and
+/// `slots` is [`super::collect_slot_dunders`]', both of which
+/// `method_types_c` installs.
 /// The build driver calls this form; the embedded build and the
 /// generated-text tests that predate #1427 call the slot-free one.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn generate_exports_inc_with_slots(
     module_name: &str,
     exports: &[ExtExport],
@@ -69,6 +74,7 @@ pub(crate) fn generate_exports_inc_with_slots(
     publications: &[ExtPublishedClass],
     ctors: &[ExtCtor],
     carriers: &[ExtCarrierClass],
+    getsets: &[ExtClassGetsets],
     slots: &[ExtSlotDunders],
 ) -> String {
     let mut out = String::new();
@@ -94,7 +100,7 @@ pub(crate) fn generate_exports_inc_with_slots(
         "pycc_ext_module_hooks",
         module_level().filter(|export| is_module_hook(&export.name)),
     ));
-    out.push_str(&method_types_c(publications, ctors, slots));
+    out.push_str(&method_types_c(publications, ctors, getsets, slots));
     out.push_str(&carrier_class_isinstance_c(carriers));
     out.push_str(&carrier_class_copy_kinds_c(carriers));
     out
