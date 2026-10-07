@@ -198,9 +198,13 @@ spelling (...), is not supported yet``), against the same canonical lists --
 so `from os import List` is refused like `from os import range`.
 Every other from-import shape of such a module keeps its C0001: an aliased
 name (`from X import a as b`, [#963](https://github.com/rotnov/pycc/issues/963)),
-the wildcard, and a from-import inside a block body. (A relative import is a project import (D-222) and never reaches
+the wildcard, and a from-import inside a function or class body. Since
+[#1383](https://github.com/rotnov/pycc/issues/1383) one nested in a
+module-level `if`/`try` body is a foreign import under the top-level form's
+rules, reported at its own statement when refused; a nested from-import of a
+project or `pycc_std` module keeps the block-body C0001. (A relative import is a project import (D-222) and never reaches
 the foreign channel, unless `pycc build --ext --foreign-relative-imports`
-(#1366) makes the entry module's top-level relative from-imports foreign; its failures are the `T0021` row above.) A foreign import's identity for the shadowing
+(#1366) makes the entry module's relative from-imports foreign; its failures are the `T0021` row above.) A foreign import's identity for the shadowing
 rules is its module, its relative level and its name (so `from .x import a`
 and `from x import a` are two objects), and `import copy` followed by
 `from copy import copy` is the same C0001 as any other rebinding of a foreign

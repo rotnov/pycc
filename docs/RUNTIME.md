@@ -1297,10 +1297,12 @@ with CPython's own `IMPORT_FROM` semantics, including the `sys.modules`
 fallback that binds `from xml.dom import minidom`, while a dotted name under a
 project root, and the plain `import X.Y`
 ([#1381](https://github.com/rotnov/pycc/issues/1381)), keep their `C0001`.
-Only that shape is admitted. An aliased name
+Only that shape is admitted, at top level or (since
+[#1383](https://github.com/rotnov/pycc/issues/1383)) inside a module-level
+`if`/`try` block, below. An aliased name
 (`from X import a as b`), the wildcard and a from-import inside a
-block body keep their `C0001` (a relative import is a project import, D-222,
-and never reaches this channel, except the entry module's top-level relative
+function or class body keep their `C0001` (a relative import is a project import, D-222,
+and never reaches this channel, except the entry module's relative
 from-imports under `pycc build --ext --foreign-relative-imports`, #1366, below), and so does a name pycc
 already resolves by its spelling (`from builtins import range`,
 `from numpy import ndarray`, `from numpy.typing import NDArray`;
@@ -1327,6 +1329,16 @@ any nesting depth of those blocks, but not inside a function, a loop, a
 than to a spliced `MirItem`, so it runs only if control reaches it: a branch
 that is not taken imports nothing, and a missing module in a taken one raises
 from that statement (`tests/issue_1291_block_import.rs`). Since
+[#1383](https://github.com/rotnov/pycc/issues/1383) the same holds for a
+foreign `from X import a, b`: the driver answers a nested from-import only
+when the top-level form would be foreign, so a project or `pycc_std` module
+named there keeps the block-body `C0001` and is never loaded, and every
+refusal of the top-level form is reported at the nested statement
+(`tests/issue_1383_block_from_import.rs`). The optional-dependency idiom
+`try: from X import a` / `except ImportError: a = None` is still refused,
+because the handler's assignment is a second definition of the foreign name
+(the shadowing rule below); a handler that does not rebind the name compiles,
+and a read of the name after the `try` is a may-be-unbound `T0041`. Since
 [#1293](https://github.com/rotnov/pycc/issues/1293) such a failure can be
 caught. When the import raises an `ImportError`, the shim's
 `pycc_ext_import_error_bridge` translates it into a pending pycc exception
@@ -1391,11 +1403,16 @@ uncaught, the host still receives CPython's original exception object.
 
 **The from form.** Each name of `from X import a, b` is one call to
 `pycc_ext_obj_import_from(module, fromlist, nfrom, index, level)`, in source order at
-the statement's position, and it takes the top-level `NULL` edge: the
-direct return, never the #1293 bridge. A from-import is admitted only at the
-top level of the module body, where no `try` can enclose it, so a failed one
-is never catchable; a from-import inside a `try` block is still the
-block-body `C0001`. The helper mirrors
+the statement's position, each result stored to its module global before
+the next name is imported. At top level it takes the `NULL` edge: the
+direct return, never the #1293 bridge. Nested in a module-level `if`/`try`
+block ([#1383](https://github.com/rotnov/pycc/issues/1383)) it takes the
+#1293 bridge like a nested `import`, so a missing module
+(`ModuleNotFoundError`) or a missing name (`ImportError: cannot import name
+...`) is caught by an enclosing `except ImportError:`. A failure on a later
+name leaves the earlier names bound, as CPython's `IMPORT_FROM`/`STORE_NAME`
+pairs do, though pycc's type checker rejects a read of them on that path.
+The helper mirrors
 CPython 3.14's `IMPORT_NAME` with a fromlist followed by one `IMPORT_FROM`:
 
 1. It calls `builtins.__import__(X, None, None, fromlist, 0)`, or for a
@@ -1444,7 +1461,8 @@ remain:
 
 **The relative from form** ([#1366](https://github.com/rotnov/pycc/issues/1366)).
 Only `pycc build --ext --foreign-relative-imports` emits it, and only for the
-entry module's top-level relative from-imports. `level` is the statement's dot
+entry module's relative from-imports, at top level or nested in a
+module-level `if`/`try` block. `level` is the statement's dot
 count and `module` the name after the dots (`""` for `from . import x`); an
 absolute import passes `level` `0` and `globals` `None`, unchanged. For
 `level > 0` the helper passes the *executing module's own dict* as `globals`,
