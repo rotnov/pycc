@@ -59,9 +59,10 @@ pub(crate) fn generate_exports_inc(
     )
 }
 
-/// The test-only `generate_exports_inc` for a program whose carrier classes resolve
+/// The generated companion for a program whose carrier classes resolve
 /// comparison or hash dunders (#1427) or carry attribute descriptors
-/// (#1448): `getsets` is [`super::collect_carrier_getsets`]' output and
+/// (#1448), as the test-only `generate_exports_inc` is for one with
+/// neither: `getsets` is [`super::collect_carrier_getsets`]' output and
 /// `slots` is [`super::collect_slot_dunders`]', both of which
 /// `method_types_c` installs.
 /// The `--ext` build driver and (#1470, with no descriptors) the embedded

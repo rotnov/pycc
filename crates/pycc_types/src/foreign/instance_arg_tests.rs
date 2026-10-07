@@ -1,6 +1,9 @@
 //! #1435: an instance of a regular user class as a positional argument of
 //! a call on a CPython object -- a method call, a direct call and a call of
 //! a subscript result -- and the positions and classes that stay refused.
+//! Since #1470 it also pins the same instances as a subscript key and a
+//! rich-comparison operand, and the enum member, exception instance and
+//! class method's `cls` those positions still refuse.
 //!
 //! Kept apart from `foreign/tests.rs` (see #1314); the fixture helpers are
 //! copied from `call_tests.rs` because a sibling module cannot reach them.

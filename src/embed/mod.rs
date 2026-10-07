@@ -492,6 +492,10 @@ pub(crate) struct EmbedPlan {
 /// natives are copied into `OUT.pycc\natives\`; it compiles without `-fPIC`,
 /// links the program DLL into the sidecar as [`EmbedPlan::artifact`], and
 /// describes the stub `OUT` linked after it as [`EmbedPlan::stub`].
+///
+/// Precondition (#1470): [`embed_slot_dunders`] accepts `typed_hir`. The
+/// build driver checks it first, so an uninstallable slot dunder is a
+/// `C0003` before the probe; a caller that skips the check panics here.
 pub(crate) fn plan_embed(
     out: &Path,
     entry: &Path,
