@@ -330,25 +330,19 @@ fn a_missing_plain_import_falls_back_to_none_in_the_host() {
 }
 
 /// A plain (embedded) build boxes the fallback `None` exactly as `--ext`
-/// does (D-258's #1475 amendment).
+/// does (D-258's #1475 amendment). `msvcrt` is a standard-library root
+/// that is absent off Windows, so the import fails and no `pycc.lock` is
+/// needed (#1242), as in `tests/issue_1293_import_bridge.rs`.
 #[cfg(not(windows))]
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn an_embedded_build_runs_the_none_fallback_like_cpython() {
     let dir = ScratchDir::new("fallback_embedded").expect("scratch");
-    let body = "try:\n    from pycc_nosuch_1485 import product\nexcept ImportError:\n    \
-                product = None\nprint(product is None)\n";
-    // `pycc_nosuch_1485` is an optional root (#1290), locked with no
-    // closure because it is absent.
-    let lock = pycc()
-        .arg("lock")
-        .arg(source(&dir, body))
-        .output()
-        .expect("pycc should spawn");
-    assert!(lock.status.success(), "{}", stderr_of(&lock));
+    let body = "try:\n    from msvcrt import getch\nexcept ImportError:\n    \
+                getch = None\nprint(getch is None)\n";
     let build = pycc()
         .arg("build")
-        .arg(dir.join("m.py"))
+        .arg(source(&dir, body))
         .arg("-o")
         .arg(dir.join("app"))
         .output()
