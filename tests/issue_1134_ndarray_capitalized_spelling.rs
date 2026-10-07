@@ -12,13 +12,14 @@
 //! **What this does not do, stated here so the file cannot be read as more
 //! than it is:** at #1134 it made none of those 19 occurrences compile.
 //! Every one of them also needed a name binding that did not exist yet —
-//! `from numpy.typing import NDArray` is refused by the *foreign-import*
+//! `from numpy.typing import NDArray` was refused by the *foreign-import*
 //! path, `import numpy as np` was #883, and an attribute-form base
 //! `np.ndarray` is #889. Registering the name is necessary, not sufficient.
-//! Since #1291 `import numpy as np` binds a CPython module object, so that
-//! one binding is no longer missing; the census itself was not re-measured
-//! for #1291 (its corpus is not available to the change), so no count is
-//! claimed here.
+//! Since #1291 `import numpy as np` binds a CPython module object, and since
+//! #1380 `from numpy.typing import NDArray` is admitted as a buffer-carrier
+//! import, so those two bindings are no longer missing; the census itself
+//! was not re-measured for either (its corpus is not available to the
+//! change), so no count is claimed here.
 //!
 //! Scope, against the two predecessors. The run-time half — the widened
 //! `PyObject_CheckBuffer` admission predicate and the four wrapper arms — is
@@ -363,38 +364,42 @@ fn explain_i0405_names_the_capitalized_spelling() {
 /// The gaps this issue does *not* close, pinned so the disclosure above is
 /// checked rather than merely asserted in prose.
 ///
-/// Each of the two bindings still refused is pinned here (the third,
-/// `import numpy as np`, compiles since #1291 and is pinned by
-/// `import_numpy_as_np_binds_a_cpython_module_since_1291`), and each arm pins the *cause* and not only the exit
+/// Of the three bindings the census needs, `import numpy as np` compiles
+/// since #1291 (pinned by `import_numpy_as_np_binds_a_cpython_module_since_1291`)
+/// and `from numpy.typing import NDArray` checks cleanly since #1380, which
+/// admits it as a buffer-carrier import (pinned by
+/// `the_census_from_import_checks_cleanly_since_1380` below and owned by
+/// `tests/issue_1380_buffer_carrier_from_import.rs`). The attribute-form base
+/// is still refused, and its arm pins the *cause* and not only the exit
 /// status: a refusal that migrated to a different reason would leave the
-/// module doc's "makes none of the 19 compile" claim true by accident and
-/// unmeasured. If one of these ever starts passing, or starts failing for
-/// another reason, that claim has to be re-measured rather than silently
-/// inherited.
+/// module doc's claim true by accident and unmeasured. The census itself was
+/// not re-measured for #1380 (its corpus is not available to the change), so
+/// no count of compiling occurrences is claimed.
 #[test]
 fn registering_the_name_does_not_make_the_census_bindings_compile() {
-    for (category, source, needle) in [
-        // The foreign-import path, not the `pycc_std` registry #882 widens
-        // -- numpy is not stdlib. `docs/TESTING.md`'s fifth dated
-        // correction under prerequisite 2 owns that attribution. Since
-        // Part 1 of #1138 the dotted module is admitted, so the refusal is
-        // the spelling guard's: `NDArray` is a name pycc resolves by its
-        // spelling (#1380).
-        (
-            "1134_gap_from_import",
-            "from numpy.typing import NDArray\n\n\ndef f(a: NDArray) -> float:\n    return a[0]\n",
-            "binding the CPython object `numpy.typing.NDArray` to `NDArray`",
-        ),
-        // An attribute-form annotation base, #889.
-        (
-            "1134_gap_attribute_base",
-            "def f(a: np.ndarray) -> float:\n    return a[0]\n",
-            "only a bare name type annotation is supported so far",
-        ),
-    ] {
-        let (ok, text) = check(source, category);
-        assert!(!ok, "{category} unexpectedly compiles: {text}");
-        assert!(text.contains("error[C0001]"), "{category}: {text}");
-        assert!(text.contains(needle), "{category}: {text}");
-    }
+    // An attribute-form annotation base, #889.
+    let (ok, text) = check(
+        "def f(a: np.ndarray) -> float:\n    return a[0]\n",
+        "1134_gap_attribute_base",
+    );
+    assert!(!ok, "the attribute base unexpectedly compiles: {text}");
+    assert!(text.contains("error[C0001]"), "{text}");
+    assert!(
+        text.contains("only a bare name type annotation is supported so far"),
+        "{text}"
+    );
+}
+
+/// #1380 admits the census's own from-import as a buffer-carrier import, so
+/// the binding no longer stops the check.
+#[test]
+fn the_census_from_import_checks_cleanly_since_1380() {
+    let (ok, text) = check(
+        "from numpy.typing import NDArray\n\n\ndef f(a: NDArray) -> float:\n    return a[0]\n",
+        "1380_from_import",
+    );
+    assert!(
+        ok,
+        "`from numpy.typing import NDArray` should check cleanly: {text}"
+    );
 }

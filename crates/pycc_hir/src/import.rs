@@ -17,6 +17,7 @@
 //! them in. Everything else is `pub(crate)`, re-exported through `lib.rs`.
 
 mod block;
+mod carrier;
 mod fallback;
 mod request;
 mod shadow;
@@ -24,6 +25,7 @@ mod spelling;
 mod type_alias;
 
 pub(crate) use block::{lower_block_imports, nested_foreign_import};
+pub(crate) use carrier::{reject_carrier_misuse, splice_by_item};
 pub(crate) use fallback::{FallbackGroup, fallback_groups};
 pub use request::{ProjectImportRequest, project_import_requests};
 pub(crate) use shadow::{import_local_name, reject_shadowed_foreign_imports};
@@ -215,6 +217,9 @@ pub enum ResolvedImport<'a> {
     /// --ext --foreign-relative-imports` (#1366) it is also recorded for
     /// every relative `from` import of the entry module, dotted or not,
     /// which binds attributes of the package the artifact is imported under.
+    /// A buffer-carrier pair (`from numpy import ndarray`, `from
+    /// numpy.typing import NDArray`, #1380) binds its name under a hidden
+    /// local name instead, so the spelling keeps its annotation meaning.
     Foreign,
 }
 
@@ -613,10 +618,16 @@ fn lower_import_alias(
 /// a typing, decorator or base-class marker -- is refused for every name,
 /// aliased or not, because the unaliased form binds that very spelling:
 /// `from builtins import range` would otherwise make `range` a CPython
-/// object in some passes and the builtin in others, and `from numpy import
-/// ndarray` would silently stop meaning the registered annotation spelling
-/// (#1380, Part 2 of #1138, owns that half). The first refused name fails the whole
-/// statement, as every other import arm does.
+/// object in some passes and the builtin in others. The first refused name
+/// fails the whole statement, as every other import arm does.
+///
+/// The exception is a buffer-carrier pair (#1380, Part 2 of #1138, D-244):
+/// `from numpy import ndarray` and `from numpy.typing import NDArray`. Its
+/// binding still runs the import in the host, but under the hidden
+/// `spelling::carrier_local_name`, so no name resolution sees it and the
+/// spelling keeps its #1129/#1134 annotation meaning. Every other read or
+/// binding of the spelling in the module is refused by
+/// `carrier::reject_carrier_misuse`, after the whole module is lowered.
 fn lower_foreign_from_import(
     import: &StmtImportFrom,
     site: ForeignImportSite,
@@ -633,7 +644,9 @@ fn lower_foreign_from_import(
     for (index, alias) in import.names.iter().enumerate() {
         check_alias_shape(import, alias)?;
         let name = alias.name.as_str();
-        if spelling::shadows_a_resolved_spelling(name) {
+        if spelling::shadows_a_resolved_spelling(name)
+            && !spelling::carrier_from_import(&module_path, name, import.level)
+        {
             let object = FromImport {
                 name: name.to_string(),
                 fromlist: fromlist.clone(),
@@ -656,7 +669,11 @@ fn lower_foreign_from_import(
         .iter()
         .enumerate()
         .map(|(index, name)| ImportBinding::Foreign {
-            local_name: name.clone(),
+            local_name: if spelling::carrier_from_import(&module_path, name, import.level) {
+                spelling::carrier_local_name(name)
+            } else {
+                name.clone()
+            },
             module_path: module_path.clone(),
             from: Some(FromImport {
                 name: name.clone(),
