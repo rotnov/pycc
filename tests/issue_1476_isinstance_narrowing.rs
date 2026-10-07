@@ -13,8 +13,9 @@
 //! raises `AttributeError`, an object whose `__class__` property answers
 //! `int` or a compiled class passes the guard but raises `TypeError` at the
 //! narrowed read, a `str` subclass handed to a native `str`
-//! parameter comes back a plain `str`, and a native use of a subclass
-//! instance runs the base type's operation, not an override.
+//! parameter comes back a plain `str`, and a native use of an `int`,
+//! `float` or `str` subclass instance runs the base type's operation, not
+//! an override.
 //!
 //! Two guards do not narrow: one on a class that has a compiled subclass
 //! keeps the object, so an override runs through CPython's own lookup
