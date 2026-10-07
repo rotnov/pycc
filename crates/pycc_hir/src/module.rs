@@ -40,6 +40,7 @@ mod poison;
 mod type_var;
 
 pub use lowered::LoweredModule;
+use lowered::strip_imported;
 
 pub(crate) use poison::{
     bare_container_annotation_message, builtin_base_message, cascade_name, poisonable_names,
@@ -512,17 +513,6 @@ pub fn lower_module(
         // module's own top-level and block foreign imports.
         object_receivers: signatures.object_receivers(),
     })
-}
-
-/// Drops the entries at `imported_indices` (a project import's copied
-/// classes or aliases) from `entries`, keeping every other entry in order.
-fn strip_imported<T>(entries: Vec<T>, imported_indices: &[usize]) -> Vec<T> {
-    entries
-        .into_iter()
-        .enumerate()
-        .filter(|(index, _)| !imported_indices.contains(index))
-        .map(|(_, entry)| entry)
-        .collect()
 }
 
 /// Lowers one top-level statement into `state`, in exactly the order the

@@ -4,7 +4,8 @@
 //! Extracted from `module.rs` per AGENTS.md's file-decomposition rule
 //! (#1425), which added the `object_receivers` field: a pure move of the
 //! struct and its documentation, re-exported from `module` so every
-//! `crate::LoweredModule` path is unchanged.
+//! `crate::LoweredModule` path is unchanged, and of the `strip_imported`
+//! helper that prepares its class and alias lists.
 
 use crate::HirModule;
 use crate::class::slots::ClassSlotsRow;
@@ -74,4 +75,15 @@ pub struct LoweredModule {
     /// body. The `SignatureTable` itself stays lowering-internal; only this
     /// bit is published.
     pub object_receivers: bool,
+}
+
+/// Drops the entries at `imported_indices` (a project import's copied
+/// classes or aliases) from `entries`, keeping every other entry in order.
+pub(super) fn strip_imported<T>(entries: Vec<T>, imported_indices: &[usize]) -> Vec<T> {
+    entries
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| !imported_indices.contains(index))
+        .map(|(_, entry)| entry)
+        .collect()
 }
