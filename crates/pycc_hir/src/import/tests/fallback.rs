@@ -225,6 +225,41 @@ fn every_other_rebinding_keeps_the_shadowing_refusal() {
     assert!(error.message.contains(SHADOW), "{}", error.message);
 }
 
+/// A `try` that forms a group can still hold a stray import of the name in
+/// an arm the group does not cover: a handler that does not catch a failed
+/// import, the `else`, or the `finally`. `killed_names` records no import,
+/// so the group test does not see it; the shadowing check refuses it
+/// because only a pair of imports both recorded in the group, in different
+/// arms, is exempt. It is refused at the first import of the pair.
+#[test]
+fn a_stray_import_beside_a_formed_group_stays_refused() {
+    const TRY: &str = "try:\n    from itertools import product\n";
+    for tail in [
+        "except ValueError:\n    from functools import product\nexcept ImportError:\n    \
+         product = None\n",
+        "except ImportError:\n    product = None\nelse:\n    from functools import product\n",
+        "except ImportError:\n    product = None\nfinally:\n    from functools import product\n",
+        "except ImportError:\n    from operator import product\nelse:\n    \
+         from functools import product\n",
+        "except ImportError:\n    from operator import product\nfinally:\n    \
+         from functools import product\n",
+    ] {
+        let source = format!("{TRY}{tail}");
+        let error = refused(&source);
+        assert_eq!(error.code, "C0001", "{source:?}");
+        assert!(
+            error.message.contains(SHADOW),
+            "{source:?}: {}",
+            error.message
+        );
+        assert_eq!(
+            error.span,
+            Some(span_of(&source, "from itertools")),
+            "{source:?}"
+        );
+    }
+}
+
 /// Two different imports of the name in the same arm are the sequential
 /// rebinding #1291 refuses, so they are refused at the first of the pair;
 /// so are two `try` statements binding it to different objects, which a

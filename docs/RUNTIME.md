@@ -1340,7 +1340,8 @@ idiom compiles: when a module-level `try` body directly holds a foreign
 `from X import a` or `import X as a`, a handler of that `try` that catches a
 failed import (`except ImportError`, `ModuleNotFoundError`, `Exception`, a
 tuple naming one, or a bare `except:`) may rebind `a` with a direct `a = None`
-or a direct fallback `from Y import a` / `import Y as a`. The name is whichever
+(also as one target of a chained `a = b = None`) or a direct fallback
+`from Y import a` / `import Y as a`. The name is whichever
 binding ran and is `object` on every path after the `try`: the handler runs
 through the #1293 bridge below, a `None` is boxed into the same `object` slot
 (D-258's #1475 amendment), so `if a is None:` behaves as in CPython. Every other
@@ -1348,9 +1349,10 @@ rebinding is still the shadowing rule below (`else`, `finally`, a handler that
 does not catch a failed import, an assignment nested in the handler's own
 block, `except ... as a`, or a later top-level binding), and a qualifying
 handler that rebinds `a` to another value is a `C0001` of its own wording
-(`tests/issue_1485_import_fallback.rs`). A handler that only reads the name
-without rebinding it compiles as before, and a read of the name after such a
-`try` is a may-be-unbound `T0041`. Since
+(`tests/issue_1485_import_fallback.rs`). A handler that does not mention the
+name compiles as before, and a read of the name after such a `try` is a
+may-be-unbound `T0041`; a handler that only reads the name without rebinding
+it is a `T0021` (the name is not defined there). Since
 [#1293](https://github.com/rotnov/pycc/issues/1293) such a failure can be
 caught. When the import raises an `ImportError`, the shim's
 `pycc_ext_import_error_bridge` translates it into a pending pycc exception

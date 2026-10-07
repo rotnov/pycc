@@ -156,6 +156,21 @@ fn every_other_rebinding_keeps_the_shadowing_refusal() {
             "except ImportError:\n    product = None\n\
              try:\n    from functools import product\nexcept ImportError:\n    product = None\n",
         ),
+        // A stray import beside a formed group: only a pair of imports both
+        // recorded in the group, in different arms, is exempt.
+        (
+            "fallback_stray_value_error",
+            "except ValueError:\n    from functools import product\n\
+             except ImportError:\n    product = None\n",
+        ),
+        (
+            "fallback_stray_else",
+            "except ImportError:\n    product = None\nelse:\n    from functools import product\n",
+        ),
+        (
+            "fallback_stray_finally",
+            "except ImportError:\n    product = None\nfinally:\n    from functools import product\n",
+        ),
     ] {
         let rendered = one_error(tag, &format!("{TRY}{tail}"), "C0001");
         assert!(rendered.contains(SHADOW), "{rendered}");
@@ -172,6 +187,33 @@ fn a_handler_that_only_reads_the_name_is_unbound() {
     );
     assert!(
         rendered.contains("name `product` is not defined"),
+        "{rendered}"
+    );
+}
+
+/// A handler that does not mention the name forms no fallback, so a read
+/// after the `try` is the may-be-unbound `T0041` (the handler alone is
+/// pinned as compiling by `tests/issue_1383_block_from_import.rs`).
+#[test]
+fn a_read_after_a_handler_that_does_not_rebind_is_may_be_unbound() {
+    let rendered = one_error(
+        "fallback_read_after",
+        "try:\n    from itertools import product\nexcept ImportError:\n    pass\nprint(product)\n",
+        "T0041",
+    );
+    assert!(
+        rendered.contains("`product` may not be bound on every path"),
+        "{rendered}"
+    );
+    // A handler read before its own rebinding is the same `T0041`.
+    let rendered = one_error(
+        "fallback_read_before",
+        "try:\n    from itertools import product\nexcept ImportError:\n    print(product)\n    \
+         product = None\n",
+        "T0041",
+    );
+    assert!(
+        rendered.contains("`product` may not be bound on every path"),
         "{rendered}"
     );
 }

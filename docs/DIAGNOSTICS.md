@@ -212,12 +212,14 @@ and `from x import a` are two objects), and `import copy` followed by
 name. Since [#1485](https://github.com/rotnov/pycc/issues/1485) one rebinding is exempt: an `except` handler that
 catches a failed import (`ImportError`, `ModuleNotFoundError`, `Exception`, a
 tuple naming one, or a bare `except:`) of a module-level `try` whose body
-directly imports `N` may rebind `N` with a direct `N = None` or a direct
-fallback `from Y import N` / `import Y as N` (`docs/RUNTIME.md`). Any other value
+directly imports `N` may rebind `N` with a direct `N = None` (also as one
+target of a chained `N = M = None`) or a direct fallback
+`from Y import N` / `import Y as N` (`docs/RUNTIME.md`). Any other value
 there is a C0001 of its own wording at the `try`: "`N` is rebound in an
 `except ImportError` handler to a value other than `None`; only a `None` or a
 fallback `import`/`from ... import` statement is supported as the fallback of
-a foreign import yet". `I0402` and `I0403` are reported once per statement, not once per name:
+a foreign import yet". A handler of such a `try` that only reads `N` without
+rebinding it is the `T0021` "name is not defined" refusal. `I0402` and `I0403` are reported once per statement, not once per name:
 `from tkinter import Tk, Label` under a native build is one `I0403`, and its
 message quotes the whole statement.
 

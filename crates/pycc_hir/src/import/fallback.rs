@@ -15,8 +15,10 @@
 //! The containment argument (Part 1 of #1026) still holds for a fallback
 //! name. Every runtime binding of it is either a foreign import or the
 //! `None` literal, all written in the same `try` statement: the exclusivity
-//! test below uses the exhaustive [`killed_names`] over every arm, and an
-//! `except ... as name` is refused explicitly. A boxed `None` (D-258's #1475
+//! test below uses the exhaustive [`killed_names`] over every arm for every
+//! non-import binding, an `except ... as name` is refused explicitly, and an
+//! import outside the group is refused by the shadowing check's span-pair
+//! exemption ([`FallbackGroup::are_alternatives`]). A boxed `None` (D-258's #1475
 //! amendment) and a foreign object share one representation, so the module
 //! global slot stays `object` on every path, and every pass that types the
 //! name eagerly as `object` (`pycc_mir`'s module scope, `pycc_types`'s
@@ -107,12 +109,22 @@ fn direct_import_names(body: &[HirStmt]) -> Vec<(&str, Span)> {
 /// directly in the body of a `try` written directly in `lowered` when
 /// some handler that itself catches a failed import
 /// ([`IMPORT_ERROR_CATCHERS`] or bare) rebinds `N` by a statement written
-/// directly in its body that is either `N = None` or a foreign import
-/// binding `N`, and no other statement of the `try` binds `N`: no other
-/// binding in the body, `else` or `finally`, no `except ... as N`, and no
-/// other binding (a nested one, an annotated or chained assignment, a
-/// `for` target) in any handler. A name that fails the test forms no group
-/// and keeps the general shadowing refusal.
+/// directly in its body that is either `N = None` (also one target of a
+/// chained `N = M = None`, which lowering writes as one `N = None` per
+/// target) or a foreign import binding `N`, and no other statement of the
+/// `try` binds `N`: no other non-import binding in the body, `else` or
+/// `finally`, no `except ... as N`, and no other binding (a nested one, an
+/// annotated assignment, a chained or unpacking assignment of a non-literal
+/// value whose target lowering desugars, a `for` target) in any handler. A
+/// name that fails the test forms no group and keeps the general shadowing
+/// refusal.
+///
+/// The test sees no import statement outside the qualifying handlers:
+/// [`killed_names`] records none. A stray import of `N` in the `else`, the
+/// `finally` or a handler that does not catch a failed import is therefore
+/// not guarded here but by the shadowing check, which exempts only a pair
+/// of imports both recorded in the group's `import_spans` and in different
+/// arms ([`FallbackGroup::are_alternatives`]).
 ///
 /// # Errors
 ///
@@ -166,7 +178,9 @@ fn fallback_group(
         .map(|(_, import)| (*import, Arm::Body))
         .collect();
     // `killed_names` records no import, so the body's own imports are not
-    // in it; anything it does record is another binding of `name`.
+    // in it; anything it does record is another binding of `name`. A stray
+    // import of `name` in `else`/`finally` is not in it either: the
+    // shadowing check refuses that one, since its span is not in the group.
     let mut exclusive = others.iter().all(|arm| !killed_names(arm).contains(name));
     let mut rebound = false;
     for (index, handler) in handlers.iter().enumerate() {
