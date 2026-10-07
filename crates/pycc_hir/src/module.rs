@@ -36,7 +36,7 @@
 //! checker (`src/frontend.rs`), so no partial module is ever type-checked.
 
 mod lowered;
-mod own_foreign;
+pub(crate) mod own_foreign;
 mod poison;
 mod type_var;
 

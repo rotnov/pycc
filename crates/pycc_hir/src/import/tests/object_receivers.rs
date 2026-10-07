@@ -289,10 +289,21 @@ fn a_rebound_typing_alias_is_read_positionally() {
     assert!(!module.object_receivers);
 }
 
-/// An import statement the item loop refuses is skipped by the pre-scan
-/// too, and the module still reports it.
+/// An import statement the item loop refuses is skipped by the pre-scan,
+/// which goes on to a foreign import below it, and the module still
+/// reports the refusal.
 #[test]
 fn a_refused_import_is_skipped_by_the_pre_scan() {
+    let parsed = parse("xs = [1]\nfrom __future__ import annotations\nimport gc\n");
+    let mut resolved = ResolvedImports::default();
+    for request in project_import_requests(&parsed) {
+        resolved.insert(request.span, ResolvedImport::Foreign);
+    }
+    assert!(crate::module::own_foreign::binds_foreign_import(
+        &parsed,
+        &resolved,
+        &[]
+    ));
     let parsed = parse("xs = [1]\nfrom __future__ import annotations\n");
     let mut resolved = ResolvedImports::default();
     for request in project_import_requests(&parsed) {

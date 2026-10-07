@@ -7,8 +7,9 @@
 //! `if TYPE_CHECKING:` body never runs and never admits.
 //!
 //! The `pycc check` results run everywhere. The embedded-executable
-//! comparison with CPython 3.14.7 is `#[ignore]`d for the reason every
-//! embed test is.
+//! comparisons with CPython 3.14.7 -- the issue's two programs verbatim,
+//! and one that observes both shapes through `print` -- are `#[ignore]`d
+//! for the reason every embed test is.
 //!
 //! [#1482]: https://github.com/rotnov/pycc/issues/1482
 
@@ -65,19 +66,22 @@ const EMBEDDED: &str = "def f() -> None:\n    gc.garbage.append(1)\n    \
                         def h() -> None:\n    g.append(2)\n    print(g.pop())\n\n\n\
                         import gc\nimport collections\n\ng = collections.deque()\nf()\nh()\n";
 
+/// The issue's first program, verbatim: an attribute of the imported
+/// module. CPython runs it silently and exits 0.
+const ISSUE_ATTR: &str = "def f() -> None:\n    gc.garbage.append(1)\n\n\nimport gc\n\nf()\n";
+
+/// The issue's second program, verbatim: a name bound to a CPython object
+/// below the function. CPython raises `AttributeError` from `g.append`, a
+/// module having no `append`.
+const ISSUE_NAME: &str = "def f() -> None:\n    g.append(1)\n\n\nimport gc\n\ng = gc\nf()\n";
+
 /// The issue's two examples: an attribute of the imported module, and a
 /// name bound to a CPython object below the function.
 #[test]
 fn a_call_above_the_module_s_own_foreign_import_passes_check() {
     for (tag, entry) in [
-        (
-            "obj_1482_attr",
-            "def f() -> None:\n    gc.garbage.append(1)\n\n\nimport gc\n\nf()\n",
-        ),
-        (
-            "obj_1482_name",
-            "def f() -> None:\n    g.append(1)\n\n\nimport gc\n\ng = gc\nf()\n",
-        ),
+        ("obj_1482_attr", ISSUE_ATTR),
+        ("obj_1482_name", ISSUE_NAME),
         (
             "obj_1482_block",
             "def f() -> None:\n    gc.garbage.append(1)\n\n\ntry:\n    import gc\n\
@@ -126,11 +130,13 @@ fn a_type_checking_only_import_leaves_the_module_native() {
     );
 }
 
+/// Builds `source`, written as `m.py` in `dir`, into the embedded
+/// executable `dir/app`, and returns the interpreter its bundle names.
 #[cfg(not(windows))]
-fn build_embedded(dir: &Path) -> PathBuf {
+fn build_embedded(dir: &Path, source: &str) -> PathBuf {
     let output = pycc()
         .arg("build")
-        .arg(write(dir, "m.py", EMBEDDED))
+        .arg(write(dir, "m.py", source))
         .arg("-o")
         .arg(dir.join("app"))
         .output()
@@ -152,16 +158,62 @@ fn build_embedded(dir: &Path) -> PathBuf {
 #[test]
 #[ignore = "needs CPython 3.14.7 as python3.14 or PYCC_PYTHON; run with --include-ignored"]
 fn calls_above_the_import_match_cpython_3_14_7_in_an_embedded_executable() {
-    let dir = ScratchDir::new("embed_1482_own_import").expect("scratch");
-    let python = build_embedded(&dir);
+    let (embedded, oracle) = run_both("embed_1482_own_import", EMBEDDED);
+    assert_eq!(embedded.status.code(), Some(0), "{}", stderr_of(&embedded));
+    assert_eq!(stdout_of(&oracle), "1\n1\n2\n");
+    assert_eq!(embedded.stdout, oracle.stdout);
+}
+
+/// Builds `source` into an embedded executable in a fresh scratch directory
+/// named by `tag`, and runs it and CPython (the interpreter the bundle
+/// names) on the same file.
+#[cfg(not(windows))]
+fn run_both(tag: &str, source: &str) -> (Output, Output) {
+    let dir = ScratchDir::new(tag).expect("scratch");
+    let python = build_embedded(&dir, source);
     let embedded = Command::new(dir.join("app"))
         .output()
         .expect("the embedded binary runs");
-    assert_eq!(embedded.status.code(), Some(0), "{}", stderr_of(&embedded));
     let oracle = Command::new(python)
         .arg(dir.join("m.py"))
         .output()
         .expect("CPython runs the oracle program");
-    assert_eq!(stdout_of(&oracle), "1\n1\n2\n");
-    assert_eq!(embedded.stdout, oracle.stdout);
+    (embedded, oracle)
+}
+
+/// The last line of `output`'s stderr: the exception line of an uncaught
+/// traceback, compared the way `tests/issue_1371_object_raise.rs` does.
+#[cfg(not(windows))]
+fn last_stderr_line(output: &Output) -> Option<String> {
+    stderr_of(output)
+        .trim_end()
+        .lines()
+        .last()
+        .map(str::to_owned)
+}
+
+/// The issue's two programs, verbatim, behave as under CPython: the
+/// attribute call runs silently, and the bare-name call reaches the module
+/// object and escapes as CPython's `AttributeError`, with the same exit
+/// status and the same last traceback line.
+#[cfg(not(windows))]
+#[test]
+#[ignore = "needs CPython 3.14.7 as python3.14 or PYCC_PYTHON; run with --include-ignored"]
+fn the_issue_s_programs_match_cpython_3_14_7_in_an_embedded_executable() {
+    let (embedded, oracle) = run_both("embed_1482_issue_attr", ISSUE_ATTR);
+    assert_eq!(embedded.status.code(), Some(0), "{}", stderr_of(&embedded));
+    assert_eq!(oracle.status.code(), Some(0), "{}", stderr_of(&oracle));
+    assert_eq!(stdout_of(&embedded), "");
+    assert_eq!(stdout_of(&embedded), stdout_of(&oracle));
+
+    let (embedded, oracle) = run_both("embed_1482_issue_name", ISSUE_NAME);
+    assert_eq!(stdout_of(&embedded), "");
+    assert_eq!(stdout_of(&embedded), stdout_of(&oracle));
+    assert_eq!(oracle.status.code(), Some(1), "{}", stderr_of(&oracle));
+    assert_eq!(embedded.status.code(), oracle.status.code());
+    assert_eq!(
+        last_stderr_line(&embedded),
+        Some("AttributeError: module 'gc' has no attribute 'append'".to_owned())
+    );
+    assert_eq!(last_stderr_line(&embedded), last_stderr_line(&oracle));
 }

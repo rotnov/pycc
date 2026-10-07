@@ -26,7 +26,7 @@ use pycc_ast::ModModule;
 /// exactly when some statement of the loop binds a foreign import. In a
 /// module that fails it can admit where the loop never reaches an import,
 /// which only changes which diagnostics a failing module reports.
-pub(super) fn binds_foreign_import(
+pub(crate) fn binds_foreign_import(
     module: &ModModule,
     resolved: &ResolvedImports<'_>,
     seed: &[ImportBinding],
