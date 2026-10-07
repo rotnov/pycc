@@ -65,6 +65,7 @@ mod foreign_unpack;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
 mod hash;
+mod object_box;
 mod object_comprehension;
 mod object_return;
 mod sequence;
@@ -1857,6 +1858,17 @@ fn emit_expr_unchecked<'ctx>(
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
             Scalar::Int(to_encoded_int(context, builder, scalar))
         }
+        // Part 2 of #1387: a native value boxed into an `object` binding,
+        // rebinding or attribute slot -- see `object_box`.
+        MirExpr::ObjectBox(value) => Scalar::Object(object_box::emit_boxed(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            value,
+        )),
         // The bare literal `None` (D-197, #763, Part 1 of #747), standing
         // alone rather than already known to be flowing into a
         // predeclared `Optional[inner]` slot -- that context-sensitive
@@ -4495,6 +4507,22 @@ fn build_call_to_with_leading_args<'ctx>(
         .iter()
         .zip(&user_function.param_tys[leading_args.len()..])
         .map(|(a, param_ty)| {
+            // Part 2 of #1387: a native argument to an `object` parameter
+            // is boxed (`object_box`). The packer borrows the value and the
+            // box is a new `PyObject *` reference, so none of the
+            // `str`/`int` ownership steps below applies to it.
+            if object_box::boxes_into(a, param_ty) {
+                return object_box::emit_boxed(
+                    context,
+                    builder,
+                    module,
+                    rt,
+                    user_functions,
+                    locals,
+                    a,
+                )
+                .into();
+            }
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, a);
             let scalar = incref_if_str_duplicate(builder, rt, a, scalar);
             let scalar = retain_if_int_duplicate_and_track_for_exception_edge(
@@ -7614,22 +7642,27 @@ fn emit_stmt<'ctx>(
             // After the finally body runs, the codegen emits the `ret`.
             let finally_target = finally_stack.last().cloned();
             // #1387: in a function returning `object` (D-258), a bare
-            // `return` means `return None`, and both hand the host CPython's
-            // `None` -- see `object_return`.
+            // `return` means `return None` -- see `object_return` -- and,
+            // since Part 2 of #1387, a native returned value (`None`
+            // included) is boxed into the `object` the host receives -- see
+            // `object_box`.
             let bare_none = MirExpr::NoneLiteral;
             let value = object_return::object_return_value(&expected_return_ty, value, &bare_none);
             match value {
                 Some(expr) => {
-                    let scalar = object_return::object_return_none(
-                        context,
-                        builder,
-                        module,
-                        &expected_return_ty,
-                        expr,
-                    )
-                    .unwrap_or_else(|| {
+                    let scalar = if object_box::boxes_into(expr, &expected_return_ty) {
+                        Scalar::Object(object_box::emit_boxed(
+                            context,
+                            builder,
+                            module,
+                            rt,
+                            user_functions,
+                            locals,
+                            expr,
+                        ))
+                    } else {
                         emit_expr(context, builder, module, rt, user_functions, locals, expr)
-                    });
+                    };
                     let scalar = incref_if_str_duplicate(builder, rt, expr, scalar);
                     let scalar = retain_if_int_duplicate(context, builder, rt, expr, scalar);
                     let scalar =

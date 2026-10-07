@@ -386,6 +386,7 @@ impl Verifier<'_> {
             }
             MirExpr::IntBoundary(inner)
             | MirExpr::OptionalWrap(inner, _)
+            | MirExpr::ObjectBox(inner)
             | MirExpr::OptionalUnwrap(inner, _)
             | MirExpr::Not(inner)
             | MirExpr::ExceptionMessage(inner)

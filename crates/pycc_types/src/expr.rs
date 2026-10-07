@@ -848,7 +848,9 @@ pub(crate) fn infer_expr_in(
                 ).with_help(format!("pass exactly {} argument(s)", param_tys.len())));
             }
             for (i, (arg_ty, param_ty)) in arg_tys.iter().zip(param_tys.iter()).enumerate() {
-                if !class::is_assignable_env(env, arg_ty, param_ty) {
+                if !class::is_assignable_env(env, arg_ty, param_ty)
+                    && !crate::object_box::admits_value(env, &args[i], arg_ty, param_ty)?
+                {
                     // #380 (PR-20): if the mismatch involves a protocol,
                     // produce a detailed T0046 conformance error.
                     let diag = if matches!(param_ty, Ty::Protocol(_)) || matches!(arg_ty, Ty::Protocol(_)) {

@@ -85,7 +85,7 @@ pub(crate) fn resolve_method_call(
             } = member
                 && member_name == method
             {
-                check_call_args(method, arg_tys, proto_param_tys, Some(env))?;
+                check_call_args(env, method, arg_tys, proto_param_tys, true)?;
                 return Ok(proto_return_ty.clone());
             }
         }

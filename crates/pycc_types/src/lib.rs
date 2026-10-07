@@ -21,6 +21,7 @@ mod module;
 mod monomorphize;
 mod narrow;
 mod not_implemented;
+mod object_box;
 mod object_none;
 mod redeclaration;
 mod return_coverage;
@@ -1086,7 +1087,9 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
     // retained -- `lookup` would return `None` for a `Maybe` binding, wrongly
     // treating the reassignment as a fresh first binding.
     if let Some(previous) = env.lookup_any(target) {
-        if !class::is_assignable_env(env, &ty, &previous) {
+        if !class::is_assignable_env(env, &ty, &previous)
+            && !object_box::admits(env, &ty, &previous)
+        {
             // #380 (PR-20): if the mismatch involves a protocol,
             // produce a detailed T0046 conformance error.
             let diag = if matches!(previous, Ty::Protocol(_)) || matches!(ty, Ty::Protocol(_)) {
@@ -2026,6 +2029,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                     && foreign::is_object_float_tuple_annotation(annotation);
                 if !unpacks_into_float_tuple
                     && !class::is_assignable_env(env, &inferred, annotation)
+                    && !object_box::admits_value(env, value, &inferred, annotation)?
                 {
                     // #380 (PR-20): if the mismatch involves a protocol,
                     // produce a detailed T0046 conformance error.
@@ -2849,7 +2853,9 @@ fn check_stmt_in_function(
             // ordinary assignability check below governs it, so `-> str`
             // returning an object stays the `T0022` mismatch.
             let actual = infer_expr_in(env, local_names, expr)?;
-            if !class::is_assignable_env(env, &actual, &return_ty) {
+            if !class::is_assignable_env(env, &actual, &return_ty)
+                && !object_box::admits_value(env, expr, &actual, &return_ty)?
+            {
                 // #1344: an inferred `set[int]` return the solver could not
                 // widen to the `set[C]` the body builds is a compiler limit,
                 // not a user error.
@@ -3212,7 +3218,9 @@ fn check_stmt_in_function(
                     None => infer_expr_in(env, local_names, value)
                         .map_err(|d| empty_container::name_binding(d, target, value))?,
                 };
-                if !class::is_assignable_env(env, &inferred, annotation) {
+                if !class::is_assignable_env(env, &inferred, annotation)
+                    && !object_box::admits_value(env, value, &inferred, annotation)?
+                {
                     // #380 (PR-20): if the mismatch involves a protocol,
                     // produce a detailed T0046 conformance error.
                     let diag = if matches!(annotation, Ty::Protocol(_))

@@ -33,6 +33,8 @@ mod obj_keyword_call;
 mod obj_raise;
 // Part 1 of #1255: a comprehension over a CPython object.
 mod object_comprehension;
+// #1475: a native value boxed into an `object` binding.
+mod object_box;
 mod protocol;
 mod receiver_class_call;
 mod scope;

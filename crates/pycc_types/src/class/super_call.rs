@@ -223,7 +223,7 @@ pub(crate) fn resolve_super_method_call(
     // the MRO entry that declares the method -- see
     // `buffer::buffer_returning_method_call_unsupported`.
     crate::buffer::refuse_buffer_returning_method(current_class, method, return_ty)?;
-    check_call_args(method, arg_tys, method_param_tys, None)?;
+    check_call_args(env, method, arg_tys, method_param_tys, false)?;
     Ok(return_ty.clone())
 }
 

@@ -52,7 +52,7 @@ pub(super) fn check_method_call_args(
                 arg_tys.len(),
             ));
         }
-        return check_call_args(method, arg_tys, param_tys, Some(env));
+        return check_call_args(env, method, arg_tys, param_tys, true);
     };
     let mut filled = arg_tys.to_vec();
     for default in omitted {
@@ -62,7 +62,7 @@ pub(super) fn check_method_call_args(
         }
         filled.push(crate::infer_expr(env, default)?);
     }
-    check_call_args(method, &filled, param_tys, Some(env))
+    check_call_args(env, method, &filled, param_tys, true)
 }
 
 /// How many leading parameters of `owner`'s method `mangled` are required,

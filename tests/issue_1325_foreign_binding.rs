@@ -95,17 +95,19 @@ fn check_accepts_a_module_level_object_binding_and_loop() {
     }
 }
 
-/// A type change is the ordinary redefinition refusal, and a comprehension
-/// over the bound name keeps its `I0404`. The function-body binding this
-/// test used to refuse is admitted since Part 1 of #1333; see
+/// Rebinding a native name to an object is the ordinary redefinition
+/// refusal (the other order boxes the native value since #1475,
+/// `tests/issue_1475_object_boxing.rs`), and a comprehension over the bound
+/// name keeps its `I0404`. The function-body binding this test used to
+/// refuse is admitted since Part 1 of #1333; see
 /// `tests/issue_1333_foreign_in_function.rs`.
 #[test]
 fn the_shapes_outside_the_admitted_binding_are_refused() {
     assert_one_error(
         "obj_bind_retype",
-        "from itertools import product\nx = product(\"ab\")\nx = 1\n",
+        "from itertools import product\nx = 1\nx = product(\"ab\")\n",
         "T0023",
-        "cannot assign `int` to `x`, previously inferred as `object`",
+        "cannot assign `object` to `x`, previously inferred as `int`",
     );
     assert_one_error(
         "obj_bind_comprehension",

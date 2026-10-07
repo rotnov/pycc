@@ -62,9 +62,9 @@ fn a_bare_name_for_over_an_object_is_admitted() {
     admitted("from sys import path\nfor p in path:\n    pass\n");
 }
 
-/// The binding keeps the name's type fixed, so mixing `object` with any
-/// other type is the ordinary redefinition refusal, in either order and
-/// against either annotation form.
+/// The binding keeps the name's type fixed, so an `object` value into a
+/// native name is the ordinary redefinition refusal, also against either
+/// annotation form; the other order boxes the native value (#1475).
 #[test]
 fn a_type_change_is_refused_like_any_other() {
     refused(
@@ -72,11 +72,9 @@ fn a_type_change_is_refused_like_any_other() {
         "T0023",
         "cannot assign `object` to `x`, previously inferred as `int`",
     );
-    refused(
-        &format!("{FROM_FORM}x = product()\nx = 1\n"),
-        "T0023",
-        "cannot assign `int` to `x`, previously inferred as `object`",
-    );
+    // #1475: a native value is boxed into the `object` name, as CPython
+    // rebinds it.
+    admitted(&format!("{FROM_FORM}x = product()\nx = 1\n"));
     refused(
         &format!("{FROM_FORM}x: int\nx = product()\n"),
         "T0026",

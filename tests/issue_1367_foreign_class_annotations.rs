@@ -175,8 +175,10 @@ fn a_foreign_class_nested_in_a_container_keeps_its_element_code() {
 }
 
 /// The positions Part 1 does not widen: `object` itself (the top type is
-/// Part 3, #1387), an annotated attribute target (#891), and a non-object
-/// argument, which the opaque type does not accept.
+/// Part 3, #1387), an annotated attribute target (#891), and a container
+/// argument, which the opaque type does not accept (a scalar, `None` or
+/// class-instance argument is boxed since #1475,
+/// `tests/issue_1475_object_boxing.rs`).
 #[test]
 fn the_positions_outside_part_1_are_refused() {
     assert_one_error(
@@ -195,10 +197,10 @@ fn the_positions_outside_part_1_are_refused() {
         "an annotated attribute target annotated `object` with this value is not supported yet",
     );
     assert_one_error(
-        "1367_int_argument",
-        &format!("{FRACTION}def _f(t: Fraction) -> int:\n    return 1\nn = _f(3)\n"),
+        "1367_list_argument",
+        &format!("{FRACTION}def _f(t: Fraction) -> int:\n    return 1\nn = _f([3])\n"),
         "T0021",
-        "argument 1 of `_f` expects `object`, got `int`",
+        "argument 1 of `_f` expects `object`, got `list[int]`",
     );
 }
 

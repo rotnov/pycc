@@ -4,18 +4,17 @@
 //! D-258 makes `object` (and, in an `--ext` module, `Any`) the opaque
 //! CPython top type, and `None` is a CPython object -- but `None` stays a
 //! native `Ty::None` value inside a compiled body, and `crate::is_assignable`
-//! deliberately keeps it out of every `object` slot (an annotated
-//! assignment, a call argument, an attribute), because no conversion exists
-//! at those seams yet.
+//! deliberately keeps it out of every `object` slot.
 //!
-//! The return position is the one seam this narrows, and only for the two
+//! The return position was the first seam to narrow that, for the two
 //! spellings whose value is CPython's `None` by construction: a bare
-//! `return` and `return None` (the literal). A `None`-typed *expression*
-//! such as `return g()` with `g -> None` is not admitted: it would need a
-//! conversion of an arbitrary native value, which is exactly what the
-//! deferred seams are waiting on. Falling off the end of an `object`
-//! function also stays `T0022` -- an implicit `None` is not written down
-//! anywhere and `crate::return_coverage` keeps its existing contract.
+//! `return` and `return None` (the literal). Since Part 2 of #1387 every
+//! `None`-typed *value* -- the literal, or a call such as `return g()` with
+//! `g -> None` -- is boxed into an `object` slot at every seam
+//! (`crate::object_box`), so what this module still owns is the bare
+//! `return`, which has no value for that rule to see. Falling off the end of
+//! an `object` function stays `T0022` -- an implicit `None` is not written
+//! down anywhere and `crate::return_coverage` keeps its existing contract.
 //!
 //! Both walkers -- `crate::check_stmt_in_function` and the solver's
 //! `HirStmt::Return` arm -- call [`admits_none_return`], so the two can

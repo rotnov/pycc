@@ -46,12 +46,15 @@ pub(crate) const COMPARISON_DUNDERS: [&str; 6] =
     ["__lt__", "__le__", "__eq__", "__ne__", "__gt__", "__ge__"];
 
 /// The `help` a `T0022` return mismatch carries when a method that returns
-/// `NotImplemented` also returns a native value (`pycc_types` attaches it
-/// in both of its return checks).
+/// `NotImplemented` also returns a native value the object cannot hold
+/// (`pycc_types` attaches it in both of its return checks). Since #1475 a
+/// scalar, `None` or class-instance value is boxed into the object, so
+/// only a container, an `Optional` and the like still reach it.
 pub const WIDENED_RETURN_HELP: &str = "this method returns `NotImplemented`, so pycc types its \
      return as the CPython object, as CPython does, whatever its annotation says; return a \
-     CPython object on every path (a comparison of two objects is one) -- boxing a native value \
-     into the object is not implemented yet (#1387)";
+     CPython object, an `int`, `float`, `bool`, `str`, `None` or class-instance value on every \
+     path -- boxing a container or `Optional` value into the object is not implemented yet \
+     (#1387)";
 
 /// Whether `name` is one of [`COMPARISON_DUNDERS`].
 pub(crate) fn is_comparison_dunder(name: &str) -> bool {

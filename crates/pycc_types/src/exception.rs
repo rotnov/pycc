@@ -623,7 +623,7 @@ fn check_raise_operand(
             .collect::<Result<Vec<_>, _>>()?;
         // `param_tys[0]` is always `self`, never part of the caller-supplied
         // argument list -- mirrors `resolve_instantiation`'s identical slice.
-        super::class::check_call_args(callee, &arg_tys, &param_tys[1..], None)?;
+        super::class::check_call_args(env, callee, &arg_tys, &param_tys[1..], false)?;
         return Ok(RaiseOperand::Native);
     }
 
