@@ -269,7 +269,9 @@ fn link_windows_stub(stub: &embed::StubLink, target: Option<&str>) -> Result<(),
 }
 
 /// Runs [`embed::plan_embed`] for the host platform, reporting its failure
-/// as an environment failure at exit 2.
+/// as an environment failure at exit 2. Before it, a comparison or hash
+/// dunder the embedded executable cannot install (#1470) is a compile
+/// diagnostic (`C0003`) at exit 1, answered before the interpreter probe.
 fn embed_plan_or_exit(
     out: &Path,
     entry: &Path,

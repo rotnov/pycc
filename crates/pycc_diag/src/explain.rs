@@ -151,9 +151,10 @@ from math import isnan
     DiagnosticExplanation {
         code: "C0003",
         severity: Severity::Error,
-        summary: "--ext cannot carry this public function's or exported method's signature across the CPython boundary",
+        summary: "--ext (or, for a comparison or hash dunder, an embedded executable) cannot carry this public function's or exported method's signature across the CPython boundary",
         explanation: "\
-C0003 is an `ext`-mode capability gap (D-244), and it is distinct from C0001 \
+C0003 is an `ext`-mode capability gap (D-244) -- and, since #1470, an \
+embedded executable's gap for a comparison or hash dunder -- and it is distinct from C0001 \
 in what is missing: the construct itself is fully supported -- pycc compiles \
 the function without complaint for a `native` executable -- but the \
 `PyObject*` boundary that a hosted extension module needs for that \
@@ -200,8 +201,11 @@ syntax; never drop it, which would answer `==` and `hash()` by identity. \
 Since #1470 an embedded executable -- a plain build of a program that \
 imports CPython -- installs the same slots, so the same bindings are a \
 C0003 there too, worded for the embedded executable, as is a slot method \
-whose signature carries a `tuple`, which an embedded executable, compiled \
-without export thunks, cannot call.",
+whose signature needs an export thunk (it carries a `tuple` or returns a \
+slice of a `memoryview` argument), which an embedded executable, compiled \
+without export thunks, cannot call. The refusal covers every class of an \
+embedded program, not only one whose instances reach CPython, so such a \
+program that built before #1470 is refused now.",
         // The example has to name a signature the boundary still refuses
         // *and* that `native` mode compiles, since the explanation above
         // rests on exactly that contrast. It must be re-pointed whenever

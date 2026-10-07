@@ -10,7 +10,7 @@
 //! * the per-platform shared-object link argv, [`ExtLinkPlatform`] and
 //!   [`ext_link_args`];
 //! * the export set and its `C0003` capability gaps, [`collect_exports_with_hooks`];
-//! * the generated C companion to the fixed shim, [`generate_exports_inc`]
+//! * the generated C companion to the fixed shim, [`generate_exports_inc_with_slots`]
 //!   and [`SHIM_C`].
 //!
 //! Every item here except [`ExtToolchain::probe`] is a pure function of its

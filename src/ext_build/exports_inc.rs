@@ -59,7 +59,7 @@ pub(crate) fn generate_exports_inc(
     )
 }
 
-/// [`generate_exports_inc`] for a program whose carrier classes resolve
+/// The test-only `generate_exports_inc` for a program whose carrier classes resolve
 /// comparison or hash dunders (#1427) or carry attribute descriptors
 /// (#1448): `getsets` is [`super::collect_carrier_getsets`]' output and
 /// `slots` is [`super::collect_slot_dunders`]', both of which

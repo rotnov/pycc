@@ -22,10 +22,10 @@ pub(crate) struct ExtPublishedClass {
     /// every exported member of the class and of its bases, first MRO hit
     /// winning, in the order [`collect_class_publications`] resolves them.
     /// Each entry is an [`ExtExport`] the export set already holds, so every
-    /// row names a `pycc_ext_wrap_` that [`generate_exports_inc`] really
+    /// row names a `pycc_ext_wrap_` that [`generate_exports_inc_with_slots`] really
     /// emits.
     ///
-    /// [`generate_exports_inc`]: super::generate_exports_inc
+    /// [`generate_exports_inc_with_slots`]: super::generate_exports_inc_with_slots
     pub(crate) methods: Vec<ExtExport>,
     /// The class's MRO, most derived first (`HirClassDef::mro`): the
     /// classes an object `isinstance` against which this class's type

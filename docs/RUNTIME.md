@@ -956,7 +956,17 @@ installs the same slots: it runs the same shim and companion, so every
 none of #1448's field descriptors), and a binding it cannot install is the same
 `C0003`, worded "an embedded executable cannot install ..." and answered before
 the interpreter is probed. An embedded executable is compiled without export
-thunks, so it also refuses a slot method whose signature carries a `tuple`.
+thunks, so it also refuses a slot method whose signature needs one (a `tuple`
+parameter or return, or a returned slice of a `memoryview` argument). The
+refusal covers every carrier class of the program, as it does in `--ext`, not
+only a class whose instances reach CPython: an instance crosses as a carrier of
+its run-time class from any call argument, so narrowing it to the classes that
+can cross would need the static type at every pack site and its subclass
+closure, and a missed site would answer by identity. An embedded program that
+built before #1470 with such a class (a `def __lt__(self, other: list[int])`,
+say) is therefore refused now even if the class never reaches CPython;
+narrowing that is
+[#1473](https://github.com/rotnov/pycc/issues/1473).
 Compiled code may therefore use a pycc instance as a subscript key, a
 comparison operand or a list-display element opposite a CPython object in both
 artifacts ("A pycc instance argument crosses as a carrier of its run-time

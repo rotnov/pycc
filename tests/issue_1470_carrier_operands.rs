@@ -295,3 +295,36 @@ fn an_uninstallable_slot_is_refused_before_the_embed_probe() {
     assert!(!dir.join("app").exists());
     assert!(!dir.join("app.pycc").exists());
 }
+
+/// The refusal covers every class of an embedded program, not only one
+/// whose instances reach CPython: `L` never crosses, and the program built
+/// before #1470, but its `__lt__` takes a `list[int]` the boundary cannot
+/// carry, so it is refused now (a deliberate tightening, `docs/RUNTIME.md`).
+#[test]
+fn a_class_that_never_crosses_is_still_refused_in_an_embedded_executable() {
+    let dir = ScratchDir::new("embed_1470_tightening").expect("scratch");
+    let output = pycc()
+        .arg("build")
+        .arg(write(
+            &dir,
+            "m.py",
+            "import json\n\n\nclass L:\n    def __init__(self, v: int) -> None:\n        \
+             self.v = v\n\n    def __lt__(self, other: list[int]) -> bool:\n        \
+             return self.v < len(other)\n\n\nprint(json.dumps(1), L(1).__lt__([1, 2]))\n",
+        ))
+        .arg("-o")
+        .arg(dir.join("app"))
+        .env("PYCC_PYTHON", "/nonexistent/pycc-no-python")
+        .output()
+        .expect("pycc should spawn");
+    let rendered = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(1), "{rendered}");
+    assert!(
+        rendered.contains(
+            "error[C0003]: an embedded executable cannot install `L.__lt__` as the host-visible \
+             `__lt__` of `L` instances: its parameter `other: list`"
+        ),
+        "{rendered}"
+    );
+    assert!(!dir.join("app").exists());
+}

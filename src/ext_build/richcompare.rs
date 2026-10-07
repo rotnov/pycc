@@ -313,8 +313,9 @@ fn slot_export(
         export.returns_buffer_slice,
     );
     if artifact == SlotArtifact::Embedded && needs_thunk {
-        let why = "its signature carries a `tuple`, which an embedded executable's boundary \
-                   does not carry";
+        let why = "its signature needs an export thunk (it carries a `tuple` or returns a \
+                   slice of a `memoryview` argument), and an embedded executable is \
+                   compiled without one";
         let fix = "take and return only scalars, instances of a class compiled in this program, \
                    or `None`";
         return Err(slot_dunder_gap_with(

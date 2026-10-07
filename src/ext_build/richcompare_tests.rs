@@ -425,7 +425,8 @@ fn a_tuple_signature_slot_is_refused_only_in_an_embedded_executable() {
     assert!(
         embedded[0].message.contains(
             "install `T.__eq__` as the host-visible `__eq__` of `T` instances: its signature \
-             carries a `tuple`, which an embedded executable's boundary does not carry"
+             needs an export thunk (it carries a `tuple` or returns a slice of a `memoryview` \
+             argument), and an embedded executable is compiled without one"
         ) && embedded[0].message.contains("take and return only scalars"),
         "{}",
         embedded[0].message
