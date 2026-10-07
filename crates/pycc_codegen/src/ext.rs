@@ -575,6 +575,36 @@ pub const EXT_OBJ_TO_STR_SYMBOL: &str = "pycc_ext_obj_to_str";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_FORMAT_SYMBOL: &str = "pycc_ext_obj_format";
 
+/// The fixed C shim's narrowed-read helpers (#1476, Part 3 of #1387): the
+/// read of an `object` name an `isinstance(o, int|float|bool|str)` guard
+/// narrowed (`pycc_mir::MirExpr::ObjectUnbox`). Each takes a borrowed
+/// `PyObject *` and an out-parameter of the native ABI type (`long long`
+/// D-141 word, `double`, one-byte `char`, `PyStrObj *`), writes the value
+/// and returns `0`, or returns `-1` with the CPython exception set.
+///
+/// The read is an implicit crossing, so each helper keeps D-244 rule 7's
+/// closed type check rather than CPython's conversion protocol: a `bool`
+/// under an `int` guard keeps its D-141 marker word, an `int` outside the
+/// inline range raises `OverflowError` citing #1040, and a `str` subclass
+/// is copied into a plain pycc `str` at refcount 1 (the ownership
+/// [`EXT_OBJ_TO_STR_SYMBOL`] documents). No CPython reference is taken.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_UNBOX_INT_SYMBOL: &str = "pycc_ext_obj_unbox_int";
+/// See [`EXT_OBJ_UNBOX_INT_SYMBOL`].
+pub const EXT_OBJ_UNBOX_FLOAT_SYMBOL: &str = "pycc_ext_obj_unbox_float";
+/// See [`EXT_OBJ_UNBOX_INT_SYMBOL`].
+pub const EXT_OBJ_UNBOX_BOOL_SYMBOL: &str = "pycc_ext_obj_unbox_bool";
+/// See [`EXT_OBJ_UNBOX_INT_SYMBOL`].
+pub const EXT_OBJ_UNBOX_STR_SYMBOL: &str = "pycc_ext_obj_unbox_str";
+/// The narrowed read under `isinstance(o, C)` for a regular class `C`
+/// compiled in this module (#1476): a borrowed `PyObject *`, the class's
+/// NUL-terminated name and a `void **` out-parameter; writes the compiled
+/// instance the carrier holds, borrowed (compiled instances are never
+/// freed), and returns `0`, or returns `-1` with a `TypeError` set for an
+/// uninitialized carrier or an object that is not a carrier of this module.
+pub const EXT_OBJ_UNBOX_INSTANCE_SYMBOL: &str = "pycc_ext_obj_unbox_instance";
+
 /// The fixed C shim's fixed-arity all-`float` tuple unpack helper (Part 4
 /// of #1026, PR 4c of #1083): it takes a borrowed `PyObject *`, the
 /// declared arity and a `double *` out-array, writes that many converted

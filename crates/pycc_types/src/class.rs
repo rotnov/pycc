@@ -1030,7 +1030,10 @@ pub(crate) fn check_isinstance(
     // catch-all would answer a constant `False` where CPython answers
     // `True` and drop the operand's side effect (see
     // `foreign::compare::check_object_isinstance`).
-    if obj_ty == Ty::Object {
+    // #1476: a narrowed `object` name is still tested at run time, as
+    // `pycc_mir`'s `class::lower_isinstance` does, so a nested guard over a
+    // narrowed name never folds over its narrowed type.
+    if obj_ty == Ty::Object || crate::narrow::is_bare_narrowed_object_read(env, &args[0]) {
         return crate::foreign::compare::check_object_isinstance(env, local_names, &args[1]);
     }
     // Extract class names from the second argument (do NOT infer it as a

@@ -49,6 +49,7 @@ mod object_list_display;
 mod object_attr_store;
 // #1475: boxing a native value into an `object` slot.
 mod object_box;
+mod object_unbox;
 // Part 2b of #1371: membership in, and slices of, a CPython object.
 mod object_membership_slice;
 mod object_raise;
@@ -2374,7 +2375,7 @@ fn a_while_loop_body_that_always_returns_skips_its_own_trailing_branch() {
     // ; `print(f())` -- must print `1`. The trailing `return 2` is
     // unreachable dead code. Since #1370 a bare `while True: return 1`
     // with nothing after it is accepted source too (the checker's
-    // `pycc_types` `return_coverage::block_always_returns` accepts it,
+    // `pycc_hir::block_always_returns` accepts it,
     // and `fallthrough::block_always_terminates` is the codegen
     // counterpart that ends the block with `unreachable`); this shape,
     // with an explicit trailing `return`, remains valid source as well.

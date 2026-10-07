@@ -27,6 +27,7 @@ use item_names::resolve_method_owner_class;
 use item_names::{item_anchor_class, source_frame_name};
 mod obj_compare;
 mod object_box;
+mod object_narrow;
 pub use obj_compare::{ObjBuiltinClass, ObjIsInstanceClass};
 mod receiver_exact;
 mod set_ops;
@@ -170,6 +171,23 @@ pub enum MirExpr {
     /// `pycc_codegen::bigint_rc` for the refcount reasoning); it is a
     /// pure read, never a slot's own storage type.
     OptionalUnwrap(Box<MirExpr>, Box<Ty>),
+    /// #1476 (Part 3 of #1387): the read-side counterpart of `ObjectBox`. A
+    /// read of an `object`-typed name inside a region an `isinstance(name,
+    /// C)` guard narrows (`crate::object_narrow`), unboxed to the guard's
+    /// native type -- the carried `Ty`, one of `int`, `float`, `bool`,
+    /// `str` or a compiled class's `Instance`. The operand is always the
+    /// `object`-typed `Name` itself.
+    ///
+    /// Unlike `OptionalUnwrap` this node can fail at run time: codegen calls
+    /// a checked `pycc_ext_obj_unbox_*` helper per read, which re-tests the
+    /// type and raises `TypeError` (or `OverflowError` for an `int` outside
+    /// D-141's inline range) instead of trusting the guard, because the
+    /// kill prescan is syntactic and cannot see a callee rebinding a
+    /// global. A read that flows straight back into an object position --
+    /// a packed CPython operand, an `ObjectBox` -- uses the operand instead
+    /// (`pycc_codegen::object_box`'s identity peephole), so the original
+    /// object, not an unbox-then-repack copy, reaches CPython.
+    ObjectUnbox(Box<MirExpr>, Box<Ty>),
     Name {
         name: String,
         ty: Ty,
@@ -969,7 +987,7 @@ impl MirExpr {
             MirExpr::NoneLiteral => Ty::None,
             MirExpr::NotImplemented | MirExpr::ObjectBox(_) => Ty::Object,
             MirExpr::OptionalWrap(_, inner) => Ty::Optional(inner.clone()),
-            MirExpr::OptionalUnwrap(_, inner) => (**inner).clone(),
+            MirExpr::OptionalUnwrap(_, inner) | MirExpr::ObjectUnbox(_, inner) => (**inner).clone(),
             MirExpr::Name { ty, .. }
             | MirExpr::Call { ty, .. }
             | MirExpr::BinOp { ty, .. }
@@ -1204,7 +1222,9 @@ impl MirExpr {
             // 0)`-shaped MIR is not producible by this compiler's own
             // narrowing lowering today, but the recursive walk still must
             // not silently skip whatever sub-expression this node wraps).
-            MirExpr::OptionalUnwrap(inner, _) => inner.collect_named_expr_bindings(out),
+            MirExpr::OptionalUnwrap(inner, _) | MirExpr::ObjectUnbox(inner, _) => {
+                inner.collect_named_expr_bindings(out)
+            }
             MirExpr::Call { args, .. } => {
                 for arg in args {
                     arg.collect_named_expr_bindings(out);
@@ -1875,7 +1895,7 @@ pub fn build(hir: &HirModule) -> MirModule {
             // shape uniformly, mirroring
             // `pycc_types::check_with_environment_all`'s own identical no-op
             // call at its module top level.
-            apply_post_if_narrowing(stmt, &mut scopes);
+            object_narrow::apply_post_if_narrowing(stmt, &mut scopes, &classes);
         }
     }
     for (index, item) in hir.items.iter().enumerate() {
@@ -2158,8 +2178,9 @@ fn kill_narrowing(scopes: &mut [HashMap<String, Ty>], name: &str) {
 /// now no longer allows to be narrowed. Called from the same two site
 /// classes as the checker's: `stmt::lower_loop_body` (every
 /// `While`/`ForRange`/`ForList` lowering path, all funneled through that
-/// one shared helper) and `stmt::lower_stmt`'s `Try` arm (each handler
-/// body, prescanned against the *try body's* kill set before lowering).
+/// one shared helper) and `stmt::try_stmt::lower_try` (each handler body,
+/// prescanned against the *try body's* kill set before lowering, and the
+/// `finally` body against every path's).
 fn apply_kill_prescan(scopes: &mut [HashMap<String, Ty>], body: &[HirStmt]) {
     for name in pycc_hir::killed_names(body) {
         kill_narrowing(scopes, &name);
@@ -2180,42 +2201,9 @@ fn narrowed_ty(scopes: &[HashMap<String, Ty>], name: &str) -> Option<Ty> {
         .find_map(|scope| scope.get(&narrowed_scope_key(name)).cloned())
 }
 
-/// Issue #769 (Part 2 of #747), the early-return continuation shape: if
-/// `stmt` is `if name is None: <body that definitely terminates>`, `name`
-/// is known to be present (the `Optional`'s inner type) for every
-/// statement *after* `stmt` in the same sequential statement list --
-/// mirroring `pycc_types::narrow::apply_post_if_narrowing` one layer down,
-/// using the same shared `pycc_hir::optional_none_test` /
-/// `pycc_hir::definitely_terminates` recognizers that module's own doc
-/// comment explains in full. Unlike [`push_narrowing`]'s in-branch use in
-/// `stmt::lower_stmt`'s own `HirStmt::If` arm (which pairs every push with
-/// a [`kill_narrowing`] once that one branch finishes lowering), this
-/// sentinel is deliberately never popped by its own caller -- it is meant
-/// to persist for the rest of the enclosing sequence, exactly like
-/// `pycc_types::narrow`'s own overlay entry does when applied directly to
-/// (not a clone of) the real `env`. Only [`lower_stmt_sequence`] below
-/// calls this, once per statement, immediately after lowering it.
-fn apply_post_if_narrowing(stmt: &HirStmt, scopes: &mut [HashMap<String, Ty>]) {
-    let HirStmt::If { test, body, .. } = stmt else {
-        return;
-    };
-    let Some((name, polarity)) = pycc_hir::optional_none_test(test) else {
-        return;
-    };
-    if !matches!(polarity, pycc_hir::NoneTestPolarity::Is) {
-        return;
-    }
-    if !pycc_hir::definitely_terminates(body) {
-        return;
-    }
-    if let Ty::Optional(inner) = lookup(scopes, name) {
-        push_narrowing(scopes, name, *inner);
-    }
-}
-
 /// Issue #769 (Part 2 of #747): lowers a sequential list of statements --
 /// a function body, or any `if`/`while`/`for` body -- applying the
-/// early-return continuation narrowing ([`apply_post_if_narrowing`]) after
+/// early-return continuation narrowing ([`object_narrow::apply_post_if_narrowing`]) after
 /// each one. The narrowing-aware replacement for the raw `stmts.iter()
 /// .map(|s| lower_stmt(s, scopes, classes, current_class)).collect()`
 /// pattern every sequential body lowering in this crate used before this
@@ -2238,7 +2226,7 @@ fn lower_stmt_sequence(
     let mut out = Vec::with_capacity(stmts.len());
     for stmt in stmts {
         out.push(lower_stmt(stmt, scopes, classes, current_class));
-        apply_post_if_narrowing(stmt, scopes);
+        object_narrow::apply_post_if_narrowing(stmt, scopes, classes);
     }
     out
 }
@@ -2261,13 +2249,37 @@ fn narrowing_snapshot(scopes: &[HashMap<String, Ty>]) -> HashMap<String, Ty> {
 /// [`narrowing_snapshot`], undoing every `push_narrowing`/`kill_narrowing`
 /// mutation made since the snapshot was taken, whether from a direct
 /// `push_narrowing` call or indirectly from a nested
-/// [`apply_post_if_narrowing`] hit deeper in the body being restored from.
+/// [`object_narrow::apply_post_if_narrowing`] hit deeper in the body being restored from.
 fn restore_narrowing(scopes: &mut [HashMap<String, Ty>], snapshot: HashMap<String, Ty>) {
     let top = scopes
         .last_mut()
         .expect("at least one scope is always present");
     top.retain(|key, _| !key.starts_with("$narrowed:"));
     top.extend(snapshot);
+}
+
+/// #1476: the end state of the branch an `if` guard narrows `name` in, with
+/// the guard's own narrowing replaced by `name`'s pre-`if` entry in
+/// `before` (or none) -- unless `branch` rebinds `name`, whose kill already
+/// decided its end state. The MIR-side twin of
+/// `pycc_types::narrow::end_branch_narrowing`.
+fn end_branch_narrowing(
+    before: &HashMap<String, Ty>,
+    end: &mut HashMap<String, Ty>,
+    name: &str,
+    branch: &[HirStmt],
+) {
+    if pycc_hir::killed_names(branch)
+        .iter()
+        .any(|killed| killed == name)
+    {
+        return;
+    }
+    let key = narrowed_scope_key(name);
+    match before.get(&key) {
+        Some(outer) => end.insert(key, outer.clone()),
+        None => end.remove(&key),
+    };
 }
 
 /// Blocker fix (D-068 review of #780): the MIR-side counterpart of
@@ -2284,7 +2296,8 @@ fn restore_narrowing(scopes: &mut [HashMap<String, Ty>], snapshot: HashMap<Strin
 /// precedent, should not) depend on `pycc_types`.
 ///
 /// Every call site has at least one snapshot by construction (an `if`'s
-/// body/orelse end-state, or a loop's pre-body/post-body end-state), so
+/// body/orelse end-state, a loop's pre-body/post-body end-state, or a
+/// `try`'s non-empty list of fall-through end states), so
 /// `first` is taken separately from `rest` rather than a possibly-empty
 /// slice -- that keeps the join total without an unreachable empty-input
 /// branch.
@@ -2310,7 +2323,7 @@ fn join_narrowed(
 /// never per-block -- see this module's existing scope-stack convention) is
 /// shared, mutable state threaded through every nested body, unlike the
 /// checker's own per-branch `Environment` *clones*. Without this wrapper, a
-/// narrowing fact established by [`apply_post_if_narrowing`] deep inside one
+/// narrowing fact established by [`object_narrow::apply_post_if_narrowing`] deep inside one
 /// branch (e.g. a nested early-return guard) would persist in that shared
 /// frame past the branch's own close and incorrectly narrow reads in a
 /// sibling branch or in code after the enclosing construct entirely.
@@ -2337,11 +2350,11 @@ fn join_narrowed(
 /// times") combines the returned end-states with [`join_narrowed`] and
 /// applies the result back onto `scopes` via a second, deliberate
 /// `restore_narrowing` call of its own -- see `stmt.rs`'s `If`/`While`/
-/// `ForRange`/`ForList` arms. A caller that does not need that (a `match`
-/// case, a `try` handler/`orelse`/`finally` body -- each already isolated
-/// from its siblings by this same wrapper, and not this session's fix
-/// scope) simply ignores the second return value, preserving the prior
-/// "restore to entry state" behavior exactly.
+/// `ForRange`/`ForList` arms, and `stmt::try_stmt`, which since #1476
+/// continues `else` from the body's end state and joins every
+/// fall-through path's end state after the `try`. A caller that does not
+/// need that (a `match` case) simply ignores the second return value,
+/// preserving the prior "restore to entry state" behavior exactly.
 fn lower_scoped_body(
     stmts: &[HirStmt],
     scopes: &mut Vec<HashMap<String, Ty>>,

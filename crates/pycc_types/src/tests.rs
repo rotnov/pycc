@@ -39,6 +39,7 @@ mod generic_monomorphization_arms;
 mod if_exp;
 mod import_alias;
 mod init_rank;
+mod isinstance_narrowing;
 mod method_call_return;
 mod not_implemented;
 mod object_none_return;

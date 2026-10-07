@@ -557,6 +557,10 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // `ObjectBox`'s `.ty()` is always `Ty::Object` (Part 2 of #1387),
         // for the same reason as `OptionalWrap` immediately above.
         | MirExpr::ObjectBox(_)
+        // #1476: an `int` narrowed read is a word the shim just encoded
+        // from the CPython object -- always inline (a value outside the
+        // inline range raises instead), so owning it releases nothing.
+        | MirExpr::ObjectUnbox(_, _)
         // Non-`Ty::Int` `NamedExpr` joins the combined "owning" answer for
         // the same reason the non-`Ty::Int` `Name`/`AttrGet` arms do just
         // above: `int_temporary_word`'s caller has already established

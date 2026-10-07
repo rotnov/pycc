@@ -62,6 +62,7 @@
 mod constructor_call;
 mod method_return;
 mod object_lift;
+mod object_narrow;
 mod set_comp;
 mod signatures;
 mod try_stmt;
@@ -277,6 +278,11 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// `Call` arm's constructor term (`constructor_call`). Shared by every
     /// environment of one module; empty in a unit-test environment.
     pub(crate) class_defs: &'hir [(String, pycc_hir::HirClassDef)],
+    /// #1476 (Part 3 of #1387): the solver's mirror of
+    /// `Environment::narrowed` for an `object` name an `isinstance` guard
+    /// narrowed to a native type; `object_narrow` sets and drops it.
+    /// Starts empty in every scope.
+    pub(crate) narrowed: HashMap<String, Ty>,
 }
 
 impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
@@ -300,6 +306,7 @@ impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
             shadowed_producers: HashSet::new(),
             finals: HashSet::new(),
             class_defs: &[],
+            narrowed: HashMap::new(),
         }
     }
 
@@ -884,6 +891,10 @@ pub(crate) fn collect_expr_constraints(
             // `BindingState::Maybe` distinction (D-147).
             if env.maybe_bindings.contains(name.as_str()) {
                 return Ok(None);
+            }
+            // #1476: a read an `isinstance` guard narrowed.
+            if let Some(term) = object_narrow::narrowed_read(env, name) {
+                return Ok(Some(term));
             }
             match env.bindings.get(name).cloned() {
                 Some(term) => {
@@ -2432,7 +2443,15 @@ pub(crate) fn collect_block_constraints(
     body: &[HirStmt],
     return_term: Option<TypeTerm>,
 ) -> Result<(), Diagnostic> {
+    // #1476: the narrowing overlay is updated after each statement at the
+    // top of the next iteration, because several arms below `continue`.
+    let mut previous: Option<&HirStmt> = None;
     for stmt in body {
+        if let Some(previous) = previous {
+            object_narrow::after_statement(signatures, env, previous);
+        }
+        object_narrow::before_statement(env, stmt);
+        previous = Some(stmt);
         match stmt {
             HirStmt::Assign { target, value } => {
                 // A value assignment re-shadows any earlier same-named `def`
@@ -2493,6 +2512,13 @@ pub(crate) fn collect_block_constraints(
                 // because the initializer may still read the buffer the
                 // name is about to stop denoting (`a = a[0]`).
                 env.rebind_over_owned_buffer(target);
+                // #1476: a first binding from a bare narrowed read keeps the
+                // `object` term (`object_narrow::is_bare_narrowed_read`).
+                let term = if object_narrow::is_bare_narrowed_read(env, value) {
+                    Some(Ok(Ty::Object))
+                } else {
+                    term
+                };
                 if let Some(term) = term {
                     env.bindings.entry(target.clone()).or_insert(term);
                 } else {
@@ -2758,7 +2784,18 @@ pub(crate) fn collect_block_constraints(
                     .chain(env.opaque_bindings.iter())
                     .cloned()
                     .collect();
+                // #1476: an `isinstance` guard narrows the branch it admits.
+                let narrowing = object_narrow::branch_target(signatures, env, test);
                 let mut body_env = env.clone();
+                let mut orelse_env = env.clone();
+                if let Some((name, inner, narrows_body)) = narrowing {
+                    let branch_env = if narrows_body {
+                        &mut body_env
+                    } else {
+                        &mut orelse_env
+                    };
+                    branch_env.narrowed.insert(name, inner);
+                }
                 collect_block_constraints(
                     signatures,
                     parents,
@@ -2768,7 +2805,6 @@ pub(crate) fn collect_block_constraints(
                     body,
                     return_term.clone(),
                 )?;
-                let mut orelse_env = env.clone();
                 collect_block_constraints(
                     signatures,
                     parents,
@@ -3489,6 +3525,11 @@ pub(crate) fn collect_block_constraints(
                 }
             }
         }
+    }
+    // The last statement's update, so a block's final environment (a `try`
+    // body's, which its `else` continues) reflects every rebinding in it.
+    if let Some(previous) = previous {
+        object_narrow::after_statement(signatures, env, previous);
     }
     Ok(())
 }

@@ -146,7 +146,11 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // Part 2 of #1387: boxing a native value into an `object` slot may
         // fail (a bigint outside the inline range is `OverflowError`), and
         // `object_box::emit_boxed` owns the `NULL` check.
-        | MirExpr::ObjectBox(_) => true,
+        | MirExpr::ObjectBox(_)
+        // #1476: a narrowed `object` read may fail (an `int` outside the
+        // inline range is `OverflowError`), and `object_unbox::emit_unboxed`
+        // owns the status check.
+        | MirExpr::ObjectUnbox(_, _) => true,
         // Part 1 of #1371: a rich comparison runs the operands' own
         // `__eq__`/`__lt__`/..., which may raise, and
         // `foreign_compare::emit_compare` owns the `NULL` check; an

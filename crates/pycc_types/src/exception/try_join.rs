@@ -66,10 +66,11 @@ pub(super) struct TryPaths<'a> {
 /// The pre-#1289 conservative join (the body joined like a loop body, then every
 /// handler and `else` like `if` branches) is still computed, with the
 /// first-established types written over its own for every name that is not
-/// an `as` name. It supplies the name set
-/// and buffer provenance, and is the entry state of `finally`, which can be
-/// entered after any partial run. When no path falls through, it is also the
-/// state after the statement. Otherwise `finally` is checked a second time
+/// an `as` name. It supplies the name set and buffer provenance, and, less
+/// every name any path rebinds ([`apply_finally_kill_prescan`]), is the
+/// entry state of `finally`, which can be entered after any partial run.
+/// When no path falls through, it is also the state after the statement.
+/// Otherwise `finally` is checked a second time
 /// against the fall-through join to compute that state; checking twice has
 /// no side effect beyond the environment it mutates.
 ///
@@ -156,6 +157,7 @@ pub(super) fn join_try_outcome(
         ..
     } = paths;
     apply_finally_delete_prescan(&mut conservative, body, handlers, orelse, finalbody);
+    apply_finally_kill_prescan(&mut conservative, body, handlers, orelse);
     check_stmt_sequence_shared(&mut conservative, local_names, finalbody, return_ty)?;
     let Some(mut joined) = fallthrough else {
         *env = conservative;
@@ -239,4 +241,31 @@ fn apply_finally_delete_prescan(
         crate::narrow::apply_delete_prescan(env, &handler.body, None);
     }
     crate::narrow::apply_delete_prescan(env, orelse, None);
+}
+
+/// #1476: a `finally` block can be entered after any path's rebinding --
+/// the try body's, a handler's `as` name or body, or `else`'s -- so none of
+/// those names is narrowed in it. The conservative join alone does not
+/// drop such a name when the rebinding path narrows it again to the same
+/// type before it ends (`o = p` then `if not isinstance(o, int): return`),
+/// although the `finally` runs between the two when the guard returns.
+/// Applied only to the conservative entry state, the one every `finally`
+/// read must type under: the fall-through join is the state after the
+/// `try`, where a rebinding that returns before reaching it does not count,
+/// as the constraint solver's `collect_try_constraints` and `pycc_mir`'s
+/// `stmt::try_stmt` also compute it.
+fn apply_finally_kill_prescan(
+    env: &mut Environment,
+    body: &[HirStmt],
+    handlers: &[HirExceptHandler],
+    orelse: &[HirStmt],
+) {
+    crate::narrow::apply_kill_prescan(env, body);
+    crate::narrow::apply_kill_prescan(env, orelse);
+    for handler in handlers {
+        if let Some(name) = &handler.name {
+            env.narrowed.remove(name);
+        }
+        crate::narrow::apply_kill_prescan(env, &handler.body);
+    }
 }

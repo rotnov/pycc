@@ -36,7 +36,15 @@ pub(super) fn emit_object_args<'ctx>(
 ) -> Vec<Scalar<'ctx>> {
     args.iter()
         .map(|arg| {
-            let value = emit_expr(context, builder, module, rt, user_functions, locals, arg);
+            let value = crate::object_unbox::emit_pack_operand(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                arg,
+            );
             if arg.ty() == Ty::None {
                 Scalar::Object(foreign_pack::none_pointer(context, builder, module))
             } else {

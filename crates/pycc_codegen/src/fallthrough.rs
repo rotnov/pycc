@@ -29,7 +29,7 @@ pub(crate) fn block_always_terminates(body: &[MirStmt]) -> bool {
                 !orelse.is_empty() & block_always_terminates(body) & block_always_terminates(orelse)
             }
             MirStmt::Seq(stmts) => block_always_terminates(stmts),
-            // #1370: mirrors `pycc_types::return_coverage`'s `While` arm. A
+            // #1370: mirrors `pycc_hir::return_coverage`'s `While` arm. A
             // constant-true loop leaves only through a `return` or a raise
             // in its body (MIR has no `break`), so the block after it is
             // unreachable and gets an `unreachable` terminator.
@@ -93,7 +93,7 @@ pub(crate) fn block_always_terminates(body: &[MirStmt]) -> bool {
     false
 }
 
-/// The MIR form of `pycc_types::return_coverage`'s constant-true test: the
+/// The MIR form of `pycc_hir::return_coverage`'s constant-true test: the
 /// literal `True` or a non-zero integer literal.
 fn is_constant_true(test: &MirExpr) -> bool {
     matches!(test, MirExpr::BoolLiteral(true)) | matches!(test, MirExpr::IntLiteral(n) if *n != 0)

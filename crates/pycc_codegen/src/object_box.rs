@@ -66,7 +66,15 @@ pub(crate) fn emit_boxed<'ctx>(
         }
         return none_pointer(context, builder, module);
     }
-    let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
+    let scalar = crate::object_unbox::emit_pack_operand(
+        context,
+        builder,
+        module,
+        rt,
+        user_functions,
+        locals,
+        value,
+    );
     let packed = emit_pack(context, builder, module, scalar, "object_box");
     release_scalar_if_int_temporary(context, builder, rt, value, &scalar);
     route_null(

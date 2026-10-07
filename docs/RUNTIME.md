@@ -734,10 +734,13 @@ property itself, where CPython's getter body would name the slot it reads. A
 property is described only where it wins the namespace walk above, and each
 value is packed by the return-type row of the table below, so an `int` outside
 the inline range raises `OverflowError`. This is what lets compiled code read a
-field off an `Any` operand: `other.state_stack` in lark's
-`ParserState.__eq__(self, other)` lowers to `PyObject_GetAttr` (D-258), which
-finds the descriptor when `other` is a compiled instance, so the host's
-`obj.field` and the compiled `other.field` answer alike. Two limits are
+field off an `Any` operand: `obj.field` on an object name no `isinstance`
+guard narrows lowers to `PyObject_GetAttr` (D-258), which finds the descriptor
+when `obj` is a compiled instance, so the host's `obj.field` and the compiled
+`obj.field` answer alike. (Lark's `ParserState.__eq__(self, other)` reads
+`other.state_stack` after `if not isinstance(other, ParserState): return
+NotImplemented`, so since [#1476](https://github.com/rotnov/pycc/issues/1476)
+that read is a narrowed native field read instead, below.) Two limits are
 deliberate. A field whose type no row packs from one machine word (a
 `list[int]` slot, an enum- or exception-class-typed one, a `tuple`-returning
 getter) gets **no descriptor**, never a `C0003`: the table widens what a host
@@ -2162,6 +2165,50 @@ decrement. The int packer's inline-range `OverflowError` applies here too
 ([#1040](https://github.com/rotnov/pycc/issues/1040)). An instance packs to
 its live carrier when it has one, so the same instance boxed twice is the
 same CPython object, as `is` sees it in CPython.
+
+**An object narrowed by `isinstance` is unboxed at each native read.** Part 3
+of [#1387](https://github.com/rotnov/pycc/issues/1387)
+([#1476](https://github.com/rotnov/pycc/issues/1476); `docs/TYPE_SYSTEM.md`, "Narrowing an object by `isinstance`")
+lowers a read of a narrowed object name to `MirExpr::ObjectUnbox`, and codegen
+(`pycc_codegen`'s `object_unbox`) calls one shim helper per read:
+`pycc_ext_obj_unbox_int(o, &out)`, `_float`, `_bool`, `_str`, or
+`pycc_ext_obj_unbox_instance(o, class_name, &out)` for a compiled class. Each
+borrows `o`, writes the native value through an out-slot hoisted into the
+entry block, and answers `0`, or `-1` with a CPython exception set, which
+takes the function's foreign failure edge (the IR label
+`object_unbox_failed`; the module-exec `-1` at module scope). The scalar
+helpers keep the closed D-244 rule-7 check of the matching argument
+unpacker rather than CPython's conversion protocol. The guard is CPython's
+own `isinstance`, which consults a `__class__` attribute, so an object whose
+`__class__` property answers the guarded class without being one (a mock, a
+proxy) passes it and is refused at the read with `TypeError`, a deliberate
+deviation where CPython runs the guarded body on it; a `bool`
+under an `int` guard keeps its D-141 marker word, and an `int` outside the
+inline range raises `OverflowError` citing
+[#1040](https://github.com/rotnov/pycc/issues/1040). A `str` (or `str`
+subclass) is copied into a fresh `PyStrObj` at refcount 1, which the
+function owns. An `int`, `float` or `str` subclass instance is therefore
+operated on as its base value: a native use never calls an overridden
+dunder or method of `type(o)`. The instance helper admits exactly what
+`pycc_ext_unpack_instance` admits -- a carrier of this module whose
+instance's run-time class has `class_name` on its MRO -- and hands back the
+compiled instance borrowed (compiled instances are never freed, D-107,
+D-154); a carrier whose `__init__` never ran passes the guard and is refused
+here with `TypeError`, as is a non-carrier whose `__class__` property answers
+the compiled class. No helper takes a CPython reference, so nothing joins
+the #1092 leak-only set. **The identity peephole:** a narrowed read in a
+position that packs its value back into a `PyObject *` -- every
+`foreign_pack::emit_pack` operand (a foreign call argument, a
+rich-comparison or membership operand, a subscript key or slice bound, an
+attribute store, a list element) and `object_box::emit_boxed` -- is
+evaluated as the object itself (`object_unbox::emit_pack_operand`), so no
+unbox, no re-pack and no `OverflowError` happen there, and the object's
+identity and class survive. The peephole sees only the operand itself. A
+narrowed read inside a native expression, such as a conditional
+expression's arm or an annotated binding, has already been unboxed and is
+packed anew. A `str` subclass is therefore flattened there: D-258's
+documented deviation, described in TYPE_SYSTEM.md under "What a narrowed
+read is".
 
 **`and`/`or` boxes a selected native operand and leaks it.** Part 6 of
 [#1371](https://github.com/rotnov/pycc/issues/1371) types `n or o` and

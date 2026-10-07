@@ -1,16 +1,19 @@
-//! Return coverage: whether a function body can reach its implicit end.
+//! Return coverage: whether a statement list can reach its end.
 //!
-//! [`block_always_returns`] decides the `T0022` "function `f` can exit
-//! without returning `T`" check in `check_function_in`, and the
-//! fall-through joins after a `try` statement
-//! (`exception::try_join`, `constraints::try_stmt`) reuse it to drop a
-//! path that never reaches the statement after it.
-//!
-//! Extracted from `lib.rs` per AGENTS.md's file-decomposition rule.
+//! [`block_always_returns`] decides `pycc_types`' `T0022` "function `f` can
+//! exit without returning `T`" check, and the fall-through joins after a
+//! `try` statement drop a path it says never reaches the statement after
+//! it: the check phase's `exception::try_join`, the constraint solver's
+//! `constraints::try_stmt`, and `pycc_mir`'s `Try` lowering. It lives here,
+//! in their common dependency, so the three joins cannot disagree on which
+//! paths fall through (moved from `pycc_types::return_coverage` by #1476,
+//! the D-205 shared-predicate precedent).
 
-use pycc_hir::{HirExpr, HirStmt};
+use crate::{HirExpr, HirStmt};
 
-pub(crate) fn block_always_returns(body: &[HirStmt]) -> bool {
+/// Whether every path through `body` leaves it by `return`, `raise`, or a
+/// loop that never completes, so no statement after `body` runs.
+pub fn block_always_returns(body: &[HirStmt]) -> bool {
     for stmt in body {
         let returns = match stmt {
             HirStmt::Return(_) => true,

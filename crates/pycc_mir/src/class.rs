@@ -241,7 +241,11 @@ pub(super) fn lower_isinstance(
     // The type checker already validated arg count and class names. If we
     // reach here, args has exactly 2 elements and args[1] is a valid class
     // name or tuple of class names.
-    let obj = lower_expr(&args[0], scopes, classes, current_class);
+    // #1476: a narrowed `object` read is tested as the object it is, so a
+    // nested guard (`isinstance(o, bool)` under `isinstance(o, int)`) still
+    // asks CPython rather than folding over the narrowed static type.
+    let obj =
+        super::object_narrow::object_operand(lower_expr(&args[0], scopes, classes, current_class));
     let obj_ty = obj.ty();
     // Part 1 of #1371: a CPython object is tested at run time; the fold
     // below reads only the static type and would answer `False`.

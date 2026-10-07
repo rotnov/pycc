@@ -31,6 +31,17 @@ pub(crate) fn compare_link_ty(
     // admits a single comparison between two non-literal operands, and
     // `foreign::compare::general_identity_ty` admits only two objects.
     if matches!(op, CmpOp::Is | CmpOp::IsNot) {
+        // #1476: identity is the object's own, so a narrowed `object` name
+        // is typed as the object it still is, never its narrowed native
+        // copy (`pycc_mir` reads it raw the same way).
+        let raw_ty = |operand: &HirExpr, ty: &Ty| {
+            if crate::narrow::is_bare_narrowed_object_read(env, operand) {
+                Ty::Object
+            } else {
+                ty.clone()
+            }
+        };
+        let (left_ty, right_ty) = (&raw_ty(left, left_ty), &raw_ty(right, right_ty));
         let other_ty = if matches!(left, HirExpr::NoneLiteral) {
             right_ty
         } else if matches!(right, HirExpr::NoneLiteral) {
@@ -109,7 +120,26 @@ pub(crate) fn infer_compare_chain(
     for link in links {
         operands.push((&link.right, infer_expr_in(env, local_names, &link.right)?));
     }
-    let operand_tys: Vec<Ty> = operands.iter().map(|(_, ty)| ty.clone()).collect();
+    // #1476: an `is`/`is not` link compares the object itself, which a
+    // chain cannot carry, so a bare narrowed read on either side of such a
+    // link is the object here and refused like any object operand; a
+    // narrowed read in an ordered link (`0 < o < 10`) stays native.
+    let operand_tys: Vec<Ty> = operands
+        .iter()
+        .enumerate()
+        .map(|(index, (operand, ty))| {
+            let in_identity_link = [index.checked_sub(1), Some(index)]
+                .into_iter()
+                .flatten()
+                .filter_map(|link| links.get(link))
+                .any(|link| matches!(link.op, CmpOp::Is | CmpOp::IsNot));
+            if in_identity_link && crate::narrow::is_bare_narrowed_object_read(env, operand) {
+                Ty::Object
+            } else {
+                ty.clone()
+            }
+        })
+        .collect();
     crate::foreign::compare::reject_object_in_chain(&operand_tys)?;
     for (index, link) in links.iter().enumerate() {
         let (left, left_ty) = &operands[index];

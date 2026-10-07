@@ -13,9 +13,12 @@ mod hir_module;
 mod if_exp;
 mod import;
 mod int_boundary;
+mod isinstance_narrow;
 mod module;
 mod not_implemented;
+mod post_if;
 mod program;
+mod return_coverage;
 mod stmt;
 mod typecheck;
 
@@ -60,9 +63,12 @@ pub use import::{
 pub(crate) use import::{
     import_local_name, lower_import_stmt, lower_legacy_type_alias_ann_assign, lower_type_alias_stmt,
 };
+pub use isinstance_narrow::{IsInstancePolarity, isinstance_narrow_target, isinstance_test};
 pub use module::{LoweredModule, lower_all, lower_checked, lower_module};
 pub use not_implemented::{WIDENED_RETURN_HELP, body_returns_not_implemented};
+pub use post_if::continuation_narrows;
 pub use program::{LinkInput, finalize, link};
+pub use return_coverage::block_always_returns;
 pub use stmt::del::{deleted_names, mentioned_names};
 pub use typecheck::{
     ExtractClassNamesError, eval_isinstance_single, eval_issubclass_single, extract_class_names,

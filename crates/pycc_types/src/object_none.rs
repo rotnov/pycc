@@ -14,7 +14,7 @@
 //! (`crate::object_box`), so what this module still owns is the bare
 //! `return`, which has no value for that rule to see. Falling off the end of
 //! an `object` function stays `T0022` -- an implicit `None` is not written
-//! down anywhere and `crate::return_coverage` keeps its existing contract.
+//! down anywhere and `pycc_hir::block_always_returns` keeps its existing contract.
 //!
 //! Both walkers -- `crate::check_stmt_in_function` and the solver's
 //! `HirStmt::Return` arm -- call [`admits_none_return`], so the two can

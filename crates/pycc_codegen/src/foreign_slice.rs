@@ -51,7 +51,15 @@ pub(super) fn emit_with_operands<'ctx, T>(
     let mut pendings = Vec::new();
     let scalars = bounds.map(|bound| {
         bound.map(|bound| {
-            let scalar = emit_expr(context, builder, module, rt, user_functions, locals, bound);
+            let scalar = crate::object_unbox::emit_pack_operand(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                bound,
+            );
             pendings.push(push_pending_int_release_if_scalar_temporary(
                 rt, bound, &scalar,
             ));
