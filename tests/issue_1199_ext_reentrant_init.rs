@@ -282,11 +282,15 @@ except NameError as e:
 }
 
 /// An embedded executable runs its program as `__main__` with empty
-/// publication tables, so every publication call codegen emits is a no-op.
+/// publication tables, so every publication call codegen emits is a no-op
+/// and the shared shim's `m_methods = NULL` and post-body safety net bind
+/// nothing. The oracle is the interpreter the bundle's `PYCC-BUNDLE`
+/// marker records, pinned to 3.14.7 as `tests/issue_1223_embedded_executable.rs`
+/// pins it.
 #[cfg(not(windows))]
 #[test]
-#[ignore = "needs CPython 3.14 as python3.14 or PYCC_PYTHON; run with --include-ignored"]
-fn an_embedded_program_with_definitions_runs_unchanged() {
+#[ignore = "needs CPython 3.14.7 as python3.14 or PYCC_PYTHON; run with --include-ignored"]
+fn an_embedded_program_with_definitions_runs_like_cpython() {
     let dir = ScratchDir::new("1199_embedded").expect("scratch");
     let source = write(
         &dir,
@@ -310,7 +314,11 @@ class C:
         return self.v
 
 
-print(json.dumps(f()), C().get())
+class E(C):
+    pass
+
+
+print(json.dumps(f()), C().get(), E().get())
 "#,
     );
     let build = pycc()
@@ -321,10 +329,24 @@ print(json.dumps(f()), C().get())
         .output()
         .expect("pycc should spawn");
     assert_ok(&build);
-    assert!(dir.join("app.pycc").is_dir(), "an embedded build");
+    let marker = std::fs::read_to_string(dir.join("app.pycc").join("PYCC-BUNDLE"))
+        .expect("an embedded build writes its marker");
+    let mut lines = marker.lines();
+    assert_eq!(lines.next(), Some("pycc-bundle 1"));
+    assert_eq!(lines.next(), Some("python 3.14.7"), "{marker}");
+    let python = lines
+        .next()
+        .and_then(|line| line.strip_prefix("executable "))
+        .expect("the marker names its interpreter");
     let run = Command::new(dir.join("app"))
         .output()
         .expect("the embedded binary runs");
+    let oracle = Command::new(python)
+        .arg(&source)
+        .output()
+        .expect("CPython runs the oracle program");
     assert_ok(&run);
-    assert_eq!(stdout_of(&run), "2 3\n");
+    assert_ok(&oracle);
+    assert_eq!(stdout_of(&run), stdout_of(&oracle));
+    assert_eq!(stdout_of(&run), "2 3 3\n");
 }
