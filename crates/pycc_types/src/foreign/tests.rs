@@ -1095,11 +1095,11 @@ fn a_hand_built_function_body_foreign_import_binds_a_local() {
     };
     *body = vec![
         pycc_hir::HirStmt::ForeignImport {
-            bindings: vec![("colorsys".to_string(), "colorsys".to_string())],
+            bindings: vec![("colorsys".to_string(), "colorsys".to_string(), None)],
             span: Span::new(0, 0),
         },
         pycc_hir::HirStmt::ForeignImport {
-            bindings: vec![("colorsys".to_string(), "colorsys".to_string())],
+            bindings: vec![("colorsys".to_string(), "colorsys".to_string(), None)],
             span: Span::new(0, 0),
         },
     ];

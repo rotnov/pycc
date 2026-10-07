@@ -1,10 +1,11 @@
-//! A CPython-backed `import` nested in a module-level `if`/`try` block
-//! (Part 1 of #1282, #1291).
+//! A CPython-backed `import` (Part 1 of #1282, #1291) or `from ... import`
+//! (#1383) nested in a module-level `if`/`try` block.
 //!
 //! [`lower_block_imports`] runs before a module-level `if`/`try` statement
-//! is lowered. It lowers each `import` statement nested in the block
-//! exactly as a top-level one would be lowered, and keeps a statement's
-//! bindings only when every alias is foreign. `module::lower_top_level_item`
+//! is lowered. It lowers each `import` statement, and each `from ...
+//! import` the driver answered foreign, nested in the block exactly as a
+//! top-level one would be lowered, and keeps a statement's bindings only
+//! when every one is foreign. `module::lower_top_level_item`
 //! pushes those bindings, with [`ForeignImportSite::Block`] (optional when a
 //! `try` whose handler catches a failed import guards it, #1290), onto the
 //! module's import table before lowering the block, so the driver's lock,
@@ -13,6 +14,7 @@
 //! [`nested_foreign_import`], which finds its bindings by the statement's
 //! span.
 
+use super::ResolvedImport;
 use super::{FuturePosition, lower_import_stmt, statement_span};
 use crate::stmt::is_type_checking_guard;
 use crate::{ForeignImportSite, HirStmt, ImportBinding, ResolvedImports};
@@ -23,15 +25,17 @@ use pycc_diag::{Diagnostic, Span};
 #[derive(Debug, Default)]
 pub(crate) struct BlockImports {
     /// The foreign bindings of every nested `import` statement whose
-    /// aliases are all foreign, in source order, each with
+    /// aliases are all foreign, and of every nested foreign `from ...
+    /// import` (#1383), in source order, each with
     /// [`ForeignImportSite::Block`].
     pub(crate) bindings: Vec<ImportBinding>,
-    /// The span of the `import` statement each entry of `bindings` came
+    /// The span of the import statement each entry of `bindings` came
     /// from, index for index, so a refusal of one binding can point at its
     /// own statement rather than at the enclosing block.
     pub(crate) spans: Vec<Span>,
-    /// The diagnostic each nested `import` statement that failed to lower
-    /// would report at top level, keyed by that statement's span. A
+    /// The diagnostic each nested import statement that failed to lower
+    /// would report at top level (a foreign from-import's alias, wildcard
+    /// or spelling refusal included), keyed by that statement's span. A
     /// statement with a `pycc_std` alias is in neither list.
     pub(crate) deferred: Vec<(Span, Diagnostic)>,
 }
@@ -60,8 +64,9 @@ impl BlockImports {
 /// `if`/`try`. It never enters a `for`, `while`, `with`, `match`, `def` or
 /// `class` body, and it skips the body of an `if`/`elif` whose test
 /// [`is_type_checking_guard`] accepts, the same bodies `lower_stmt` folds
-/// away. An `import` it does not reach keeps `lower_stmt`'s block-body
-/// diagnostic. A nested `from ... import` is never lowered here.
+/// away. An import it does not reach keeps `lower_stmt`'s block-body
+/// diagnostic, and so does a nested `from ... import` the driver did not
+/// answer foreign (#1383).
 pub(crate) fn lower_block_imports(
     stmt: &Stmt,
     resolved: &ResolvedImports<'_>,
@@ -98,31 +103,19 @@ fn walk_stmt(
 ) {
     match stmt {
         Stmt::Import(import) => {
-            // `position` only matters for a `from __future__` import, which
-            // a plain `import` never is.
-            match lower_import_stmt(
-                stmt,
-                resolved,
-                FuturePosition::Body,
-                ForeignImportSite::Block { optional: guarded },
-            ) {
-                Ok(lowered) => {
-                    let bindings = lowered.map(|l| l.bindings).unwrap_or_default();
-                    if bindings
-                        .iter()
-                        .all(|binding| matches!(binding, ImportBinding::Foreign { .. }))
-                    {
-                        let span = statement_span(import.range);
-                        found
-                            .spans
-                            .extend(std::iter::repeat_n(span, bindings.len()));
-                        found.bindings.extend(bindings);
-                    }
-                }
-                Err(diagnostic) => found
-                    .deferred
-                    .push((statement_span(import.range), diagnostic)),
-            }
+            lower_nested_import(stmt, statement_span(import.range), guarded, resolved, found);
+        }
+        // #1383: a nested `from ... import` lowers only when the driver
+        // answered it foreign. Any other answer -- a project or `pycc_std`
+        // module, a relative miss, none at all -- leaves the statement to
+        // `lower_stmt`'s block-body diagnostic.
+        Stmt::ImportFrom(import)
+            if matches!(
+                resolved.get(statement_span(import.range)),
+                Some(ResolvedImport::Foreign)
+            ) =>
+        {
+            lower_nested_import(stmt, statement_span(import.range), guarded, resolved, found);
         }
         Stmt::If(if_stmt) => {
             if !is_type_checking_guard(&if_stmt.test, imports) {
@@ -156,6 +149,41 @@ fn walk_stmt(
     }
 }
 
+/// Lowers one nested `import` or foreign `from ... import` statement `stmt`
+/// spanning `span` exactly as a top-level one, with a
+/// [`ForeignImportSite::Block`] site. The bindings are kept only when every
+/// one is foreign; a failure is deferred under `span`.
+fn lower_nested_import(
+    stmt: &Stmt,
+    span: Span,
+    guarded: bool,
+    resolved: &ResolvedImports<'_>,
+    found: &mut BlockImports,
+) {
+    // `position` only matters for a `from __future__` import, which is
+    // never answered foreign and so never reaches here.
+    match lower_import_stmt(
+        stmt,
+        resolved,
+        FuturePosition::Body,
+        ForeignImportSite::Block { optional: guarded },
+    ) {
+        Ok(lowered) => {
+            let bindings = lowered.map(|l| l.bindings).unwrap_or_default();
+            if bindings
+                .iter()
+                .all(|binding| matches!(binding, ImportBinding::Foreign { .. }))
+            {
+                found
+                    .spans
+                    .extend(std::iter::repeat_n(span, bindings.len()));
+                found.bindings.extend(bindings);
+            }
+        }
+        Err(diagnostic) => found.deferred.push((span, diagnostic)),
+    }
+}
+
 /// The exception names whose handler catches a failed `import`: the
 /// `ModuleNotFoundError` pycc raises, its base `ImportError`, and
 /// `Exception`. `BaseException` is refused by type checking (`T0021`), and a
@@ -182,24 +210,29 @@ pub(crate) fn handlers_catch_import_error(handlers: &[pycc_ast::ExceptHandler]) 
     })
 }
 
-/// The [`HirStmt::ForeignImport`] for `stmt` when it is an `import`
-/// statement whose bindings [`lower_block_imports`] recorded in `imports`
-/// (matched by the statement's own span), or `None`.
+/// The [`HirStmt::ForeignImport`] for `stmt` when it is an `import` or
+/// `from ... import` statement whose bindings [`lower_block_imports`]
+/// recorded in `imports` (matched by the statement's own span), or `None`.
+/// A from-import's bindings carry their [`crate::FromImport`], in source
+/// order.
 pub(crate) fn nested_foreign_import(stmt: &Stmt, imports: &[ImportBinding]) -> Option<HirStmt> {
-    let Stmt::Import(import) = stmt else {
-        return None;
+    let span = match stmt {
+        Stmt::Import(import) => statement_span(import.range),
+        Stmt::ImportFrom(import) => statement_span(import.range),
+        _ => return None,
     };
-    let span = statement_span(import.range);
-    let bindings: Vec<(String, String)> = imports
+    let bindings: Vec<(String, String, Option<crate::FromImport>)> = imports
         .iter()
         .filter_map(|binding| match binding {
             ImportBinding::Foreign {
                 local_name,
                 module_path,
-                from: None,
+                from,
                 site: ForeignImportSite::Block { .. },
                 span: binding_span,
-            } if *binding_span == span => Some((local_name.clone(), module_path.clone())),
+            } if *binding_span == span => {
+                Some((local_name.clone(), module_path.clone(), from.clone()))
+            }
             _ => None,
         })
         .collect();

@@ -1,6 +1,6 @@
 //! Emission for `MirItem::ForeignImport` (Part 1 of #1026, PR 1c of #1080)
-//! and for `MirStmt::ForeignImport`, a foreign import nested in a
-//! module-level `if`/`try` block (#1291).
+//! and for `MirStmt::ForeignImport`, a foreign import (#1291) or
+//! from-import (#1383) nested in a module-level `if`/`try` block.
 //!
 //! Cohesion-driven carve out of `lib.rs` under AGENTS.md's decomposability
 //! rule: everything that knows how a foreign `import numpy` becomes machine
@@ -243,7 +243,7 @@ fn emit_import_from_call<'ctx>(
 }
 
 /// Emits the import call for one foreign import binding (a
-/// [`MirItem::ForeignImport`], or one pair of a `MirStmt::ForeignImport`)
+/// [`MirItem::ForeignImport`], or one entry of a `MirStmt::ForeignImport`)
 /// and stores the resulting object into `slot`, the binding's module
 /// global. `pycc_ext_obj_import(module_path)` binds the module for `import
 /// X`; `pycc_ext_obj_import_from` binds the named attribute for `from X
@@ -262,8 +262,11 @@ fn emit_import_from_call<'ctx>(
 /// `ImportError` is now a pending pycc exception, and control branches to
 /// the innermost exception target exactly as an explicit `raise` does
 /// (`emit_body`); a zero answer takes the same direct return, from a block
-/// named `foreign_import_unbridged`. A from-import is only ever a top-level
-/// item (#1278), so it always takes [`FailureEdge::ReturnFailed`].
+/// named `foreign_import_unbridged`. Both edges serve both forms: a
+/// top-level from-import (#1278) takes [`FailureEdge::ReturnFailed`], and
+/// one nested in a module-level block (#1383) takes
+/// [`FailureEdge::Bridge`], whose shim maps CPython's "cannot import name"
+/// `ImportError` like any other.
 pub(super) fn emit<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -363,18 +366,19 @@ pub(super) fn emit<'ctx>(
 /// in an `ext` build, because the driver refuses every other build with
 /// `I0403`, and `expect_module_exec_entry` pins the entry point. Each
 /// binding's failure edge is [`FailureEdge::Bridge`] (#1293), so a failed
-/// binding stops the remaining ones exactly as a raise would. A block
-/// import is never a from-import (#1278; see `MirStmt::ForeignImport`).
+/// binding stops the remaining ones exactly as a raise would, leaving the
+/// earlier ones bound as in CPython. A binding with a `from` is one name
+/// of a nested `from X import a, b` (#1383).
 pub(super) fn emit_stmt<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
     rt: &RtFns<'ctx>,
     locals: &HashMap<String, StorageSlot<'ctx>>,
-    bindings: &[(String, String)],
+    bindings: &[(String, String, Option<FromImport>)],
 ) {
     let entry_fn = crate::foreign_attr::expect_module_exec_entry(builder);
-    for (local_name, module_path) in bindings {
+    for (local_name, module_path, from) in bindings {
         emit(
             context,
             builder,
@@ -384,7 +388,7 @@ pub(super) fn emit_stmt<'ctx>(
             ForeignBinding {
                 local_name,
                 module_path,
-                from: None,
+                from: from.as_ref(),
             },
             FailureEdge::Bridge { rt },
         );

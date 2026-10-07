@@ -5671,7 +5671,7 @@ fn definitely_terminates_is_true_when_both_if_branches_terminate() {
 #[test]
 fn killed_names_ignores_a_foreign_import() {
     let body = vec![HirStmt::ForeignImport {
-        bindings: vec![("colorsys".to_string(), "colorsys".to_string())],
+        bindings: vec![("colorsys".to_string(), "colorsys".to_string(), None)],
         span: Span::new(0, 15),
     }];
     assert!(killed_names(&body).is_empty());

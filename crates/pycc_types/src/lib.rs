@@ -735,7 +735,7 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
             // An `import` binds its local names as an assignment does
             // (#1291; `pycc_hir` produces this node only at module level).
             HirStmt::ForeignImport { bindings, .. } => {
-                for (target, _) in bindings {
+                for (target, _, _) in bindings {
                     if !is_local(names, target) {
                         names.push(target);
                     }

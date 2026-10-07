@@ -392,10 +392,11 @@ pub(super) fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<Stri
         | MirStmt::RaiseFrom { .. }
         | MirStmt::ObjRaise { .. }
         | MirStmt::Reraise => {}
-        // #1291: a foreign import nested in a module-level block binds each
-        // name to a module global holding the imported CPython object.
+        // #1291, #1383: a foreign import or from-import nested in a
+        // module-level block binds each name to a module global holding the
+        // imported CPython object.
         MirStmt::ForeignImport { bindings: imports } => {
-            for (local_name, _) in imports {
+            for (local_name, _, _) in imports {
                 bindings.insert(local_name.clone(), pycc_mir::Ty::Object);
             }
         }

@@ -801,6 +801,7 @@ fn a_bare_file_name_importer_renders_its_directory_as_a_single_dot() {
         module: Some("helper".to_string()),
         names: vec!["helper".to_string()],
         span: pycc_diag::Span::new(0, 0),
+        nested: false,
     };
     let base = loader
         .base_dir(&request, "main.py", &importer)
@@ -921,3 +922,5 @@ fn a_dependency_relative_import_stays_a_project_import_under_foreign_from_entry(
         "{rendered}"
     );
 }
+
+mod nested;

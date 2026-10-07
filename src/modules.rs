@@ -104,7 +104,8 @@ enum Resolution {
     Unanswered,
     /// A bare `import X` -- or one name `X` of `import X, Y` (#1280), or
     /// `import X as Y` (#1291), or the module of `from X import a, b`
-    /// (#1278) -- whose single-segment absolute root is neither a
+    /// (#1278), at top level or nested in a module-level `if`/`try` body
+    /// (#1383) -- whose single-segment absolute root is neither a
     /// project module nor a `pycc_std` one (Part 1 of #1026), or the dotted
     /// module of `from X.Y import a` whose root `X` is neither a project
     /// module nor a project package (Part 1 of #1138): the name is
@@ -360,6 +361,10 @@ impl Loader {
     /// `importer_is_entry` is whether the importer is the entry module: under
     /// [`RelativeImports::ForeignFromEntry`] its relative imports are foreign
     /// before any base directory is resolved (#1366).
+    ///
+    /// A nested `from ... import` request (#1383) is answered only
+    /// [`Resolution::Foreign`] or [`Resolution::Unanswered`]: it never
+    /// reaches the cycle check or loads a module.
     fn resolve(
         &mut self,
         request: &ProjectImportRequest,
@@ -378,6 +383,19 @@ impl Loader {
             Some(module) => module.split('.').collect(),
             None => Vec::new(),
         };
+        if request.nested && !request.names.is_empty() {
+            // A `from ... import` nested in a module-level `if`/`try` body
+            // (#1383) is admitted only as a foreign import. Every other
+            // outcome -- a project module, a relative miss, a namespace
+            // package -- is left unanswered, so `pycc_hir` keeps its
+            // block-body `C0001` and the module is never loaded: a
+            // conditionally run module body is not something static
+            // module linking can express.
+            return Ok(match self.probe(&base, &segments, request) {
+                Err(Resolution::Foreign) => Resolution::Foreign,
+                _ => Resolution::Unanswered,
+            });
+        }
         let target = match self.probe(&base, &segments, request) {
             Ok(target) => target,
             Err(resolution) => return Ok(resolution),
@@ -611,7 +629,8 @@ impl Loader {
             // `import X, Y` (which `pycc_hir` requests alias by alias under
             // each alias's own span, #1280), an aliased `import X as Y`
             // (#1291; `pycc_hir` binds `Y`), and -- when `request.names` is
-            // non-empty -- a top-level `from X import a, b` (#1278), whose
+            // non-empty -- a `from X import a, b` at top level (#1278) or
+            // nested in a module-level `if`/`try` body (#1383), whose
             // names `pycc_hir` binds to the module's attributes. A non-relative
             // base means `request.level` is `0` and `base.path` is the
             // source root the probe walked.

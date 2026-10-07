@@ -139,7 +139,7 @@ fn if_block_import(bindings: &[(&str, &str)]) -> MirItem {
         body: vec![MirStmt::ForeignImport {
             bindings: bindings
                 .iter()
-                .map(|(local, module)| ((*local).to_string(), (*module).to_string()))
+                .map(|(local, module)| ((*local).to_string(), (*module).to_string(), None))
                 .collect(),
         }],
         orelse: vec![],
@@ -233,7 +233,7 @@ fn try_stmt(body: Vec<MirStmt>, handler: Vec<MirStmt>) -> MirItem {
 
 fn import_stmt(name: &str) -> MirStmt {
     MirStmt::ForeignImport {
-        bindings: vec![(name.to_string(), name.to_string())],
+        bindings: vec![(name.to_string(), name.to_string(), None)],
     }
 }
 
@@ -358,7 +358,7 @@ fn two_bindings_of_one_block_import_are_emitted_in_order() {
 #[test]
 fn an_identical_pair_in_both_arms_emits_two_imports_of_its_own_path() {
     let import = || MirStmt::ForeignImport {
-        bindings: vec![("numpy".to_string(), "numpy".to_string())],
+        bindings: vec![("numpy".to_string(), "numpy".to_string(), None)],
     };
     let dir = pycc_scratch::ScratchDir::new("foreign_import_block_pair").expect("scratch");
     let mut ir = String::new();
@@ -485,9 +485,9 @@ fn from_item(index: usize) -> MirItem {
     }
 }
 
-/// A from-import is only ever a top-level item (#1278), so, like a
-/// top-level `import`, its failure edge is the direct return and it never
-/// calls the #1293 bridge.
+/// A top-level from-import item (#1278), like a top-level `import`, has
+/// the direct return as its failure edge and never calls the #1293
+/// bridge; a nested one (#1383) is a `MirStmt` and does.
 #[test]
 fn a_from_import_item_never_calls_the_bridge() {
     let ir = entry_ir("foreign_from_import_no_bridge", vec![from_item(0)]);
@@ -607,4 +607,131 @@ fn a_relative_from_import_passes_its_level() {
         )),
         "{ir}"
     );
+}
+
+/// The block statement `from itertools import <names>` lowers to (#1383).
+fn from_stmt(names: &[&str]) -> MirStmt {
+    let fromlist: Vec<String> = names.iter().map(ToString::to_string).collect();
+    MirStmt::ForeignImport {
+        bindings: fromlist
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                (
+                    name.clone(),
+                    "itertools".to_string(),
+                    Some(pycc_mir::FromImport {
+                        name: name.clone(),
+                        fromlist: fromlist.clone(),
+                        index,
+                        level: 0,
+                    }),
+                )
+            })
+            .collect(),
+    }
+}
+
+/// #1383: a from-import nested in a `try` body calls
+/// `pycc_ext_obj_import_from` and bridges its failure to the handler
+/// dispatch exactly as a nested `import` does.
+#[test]
+fn a_try_block_from_import_bridges_to_the_handler_dispatch() {
+    let ir = entry_ir(
+        "foreign_from_import_bridge_try",
+        vec![try_stmt(vec![from_stmt(&["product"])], vec![MirStmt::NoOp])],
+    );
+    let import = ir
+        .find(&format!("call ptr @{EXT_OBJ_IMPORT_FROM_SYMBOL}("))
+        .expect("the from-import call");
+    let bridge = ir
+        .find(&format!("call i32 @{EXT_IMPORT_ERROR_BRIDGE_SYMBOL}()"))
+        .expect("the bridge call");
+    assert!(import < bridge, "{ir}");
+    assert!(
+        !ir.contains(&format!("call ptr @{EXT_OBJ_IMPORT_SYMBOL}(")),
+        "{ir}"
+    );
+    let (raised, unbridged) = bridge_branch_labels(&ir);
+    assert_eq!(raised, "try_handler_dispatch", "{ir}");
+    assert_eq!(unbridged, "foreign_import_unbridged", "{ir}");
+    assert!(
+        ir.contains("store ptr %foreign_import, ptr @pyglobal_product"),
+        "{ir}"
+    );
+}
+
+/// #1383: each name of a nested multi-name from-import is stored before
+/// the next name is imported, so a failure on a later name leaves the
+/// earlier ones bound, as CPython's `IMPORT_FROM`/`STORE_NAME` pairs do.
+#[test]
+fn a_nested_multi_name_from_import_stores_each_name_before_the_next_import() {
+    let ir = module_ir(
+        "foreign_from_import_block_order",
+        vec![MirItem::TopLevelStmt(MirStmt::If {
+            test: MirExpr::BoolLiteral(true),
+            body: vec![from_stmt(&["product", "chain"])],
+            orelse: vec![],
+        })],
+    );
+    let lines: Vec<&str> = ir.lines().collect();
+    let position = |needle: &dyn Fn(&str) -> bool| -> Vec<usize> {
+        lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| needle(line))
+            .map(|(at, _)| at)
+            .collect()
+    };
+    let call = format!("call ptr @{EXT_OBJ_IMPORT_FROM_SYMBOL}(");
+    let calls = position(&|line| line.contains(&call));
+    assert_eq!(calls.len(), 2, "{ir}");
+    let stores = position(&|line| {
+        line.contains("store ptr") && line.ends_with("ptr @pyglobal_product, align 8")
+            || line.contains("store ptr") && line.ends_with("ptr @pyglobal_product")
+    });
+    assert_eq!(stores.len(), 1, "{ir}");
+    assert!(calls[0] < stores[0] && stores[0] < calls[1], "{ir}");
+    assert!(lines[calls[1]].ends_with("i64 2, i64 1, i64 0)"), "{ir}");
+    assert_eq!(
+        ir.matches(&format!("call i32 @{EXT_IMPORT_ERROR_BRIDGE_SYMBOL}()"))
+            .count(),
+        2,
+        "one bridged failure edge per name: {ir}"
+    );
+}
+
+/// #1383 with #1291's identical-pair exemption: the same from-import at
+/// top level, then in both arms of an `if`/`else`, emits three calls that
+/// each pass a fromlist global of their own, and the module verifies.
+#[test]
+fn an_identical_from_import_at_top_level_and_in_both_arms_verifies() {
+    let ir = module_ir(
+        "foreign_from_import_block_pair",
+        vec![
+            from_item(0),
+            MirItem::TopLevelStmt(MirStmt::If {
+                test: MirExpr::BoolLiteral(true),
+                body: vec![from_stmt(&["product"])],
+                orelse: vec![from_stmt(&["product"])],
+            }),
+        ],
+    );
+    let calls: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.contains(&format!("call ptr @{EXT_OBJ_IMPORT_FROM_SYMBOL}(")))
+        .collect();
+    assert_eq!(calls.len(), 3, "{ir}");
+    // LLVM uniquifies each repeated global name, so every call must pass a
+    // fromlist global of its own rather than the first emission's.
+    let fromlists: std::collections::BTreeSet<&str> = calls
+        .iter()
+        .map(|call| {
+            call.split("ptr @")
+                .find(|arg| arg.starts_with("pycc_foreign_fromlist_product"))
+                .and_then(|arg| arg.split(',').next())
+                .expect("a fromlist argument")
+        })
+        .collect();
+    assert_eq!(fromlists.len(), 3, "{ir}");
 }

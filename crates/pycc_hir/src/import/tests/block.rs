@@ -41,8 +41,8 @@ fn only_message(source: &str) -> String {
 
 /// Every `ForeignImport` node reached through `if`/`try` nesting, in
 /// source order.
-fn nested_nodes(module: &LoweredModule) -> Vec<Vec<(String, String)>> {
-    fn walk(stmts: &[HirStmt], out: &mut Vec<Vec<(String, String)>>) {
+fn nested_nodes(module: &LoweredModule) -> Vec<Vec<Binding>> {
+    fn walk(stmts: &[HirStmt], out: &mut Vec<Vec<Binding>>) {
         for stmt in stmts {
             match stmt {
                 HirStmt::ForeignImport { bindings, .. } => out.push(bindings.clone()),
@@ -99,8 +99,12 @@ fn foreign_sites(module: &LoweredModule) -> Vec<(&str, &str, ForeignImportSite)>
         .collect()
 }
 
-fn pair(local: &str, module: &str) -> Vec<(String, String)> {
-    vec![(local.to_string(), module.to_string())]
+/// One `HirStmt::ForeignImport` binding: local name, module path, and the
+/// from-import it binds a name of, if any.
+type Binding = (String, String, Option<crate::FromImport>);
+
+fn pair(local: &str, module: &str) -> Vec<Binding> {
+    vec![(local.to_string(), module.to_string(), None)]
 }
 
 const BLOCK_TEXT: &str = "an `import` inside a block body";
@@ -416,10 +420,18 @@ fn nested_and_aliased_imports_are_requested_under_their_alias_spans() {
         .iter()
         .filter_map(|request| request.module.as_deref())
         .collect();
-    assert_eq!(modules, vec!["a", "b"]);
+    // The handler's `from d import e` is requested too since #1383, under
+    // its statement's span.
+    assert_eq!(modules, vec!["a", "b", "d"]);
     let alias_start = |needle: &str| source.find(needle).expect("needle") as u32;
     assert_eq!(requests[0].span.start, alias_start("a as x"));
     assert_eq!(requests[1].span.start, alias_start("b\n"));
+    assert_eq!(requests[2].span.start, alias_start("from d"));
+    assert_eq!(requests[2].names, vec!["e".to_string()]);
+    assert!(
+        requests.iter().all(|request| request.nested),
+        "{requests:#?}"
+    );
 }
 
 #[test]
