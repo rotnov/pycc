@@ -4489,13 +4489,11 @@ int pycc_ext_publish(const char *name)
  * published class has at least one such slot (a method it declares, the
  * `__init__` D-225 synthesizes for a base-less class that declares none,
  * or an inherited method a subclass's type object calls), so today this
- * binds nothing. It exists so that a
- * publication codegen ever misses becomes late visibility rather than a
- * class the host can never reach. A name already in the module dict is
- * left alone: either its
- * publication ran, or the body rebound the name itself. Runs before the
- * PEP 562 hooks are added, so the dict lookup sees the module's own
- * bindings only.
+ * binds nothing. It exists so that a publication codegen ever misses
+ * becomes late visibility rather than a class the host can never reach.
+ * A name already in the module dict is left alone: either its publication
+ * ran, or the body rebound the name itself. Runs before the PEP 562 hooks
+ * are added, so the dict lookup sees the module's own bindings only.
  */
 static int pycc_ext_publish_unbound_classes(PyObject *module)
 {

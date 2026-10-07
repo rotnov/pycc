@@ -46,10 +46,13 @@ fn guard(symbol: &str, source_name: &str, fail: &str) -> String {
 #[test]
 fn the_shim_has_no_creation_time_method_table() {
     let shim = shim_c();
+    let start = shim
+        .find("static struct PyModuleDef pycc_ext_moduledef = {")
+        .expect("the shim defines its moduledef");
+    let moduledef = &shim[start..start + shim[start..].find("};").expect("closed")];
     assert!(
-        shim.contains("    0,\n    /*")
-            && shim.contains("    NULL,\n    pycc_ext_slots,\n    NULL,\n"),
-        "the moduledef must carry m_methods = NULL"
+        moduledef.contains("    NULL,\n    pycc_ext_slots,\n    NULL,\n"),
+        "the moduledef must carry m_methods = NULL:\n{moduledef}"
     );
 }
 
@@ -228,6 +231,82 @@ fn every_wrapper_refuses_an_unbound_slot_before_anything_else() {
             "{wrapper}"
         );
     }
+}
+
+/// Every `pycc_ext_wrap_` the companion defines -- including the property
+/// getter and setter wrappers `getset.rs` emits and the comparison and hash
+/// wrappers `richcompare.rs` emits -- opens with its slot's null guard.
+#[test]
+fn every_wrapper_family_in_a_companion_opens_with_its_guard() {
+    let dir = pycc_scratch::ScratchDir::new("1199-guards").expect("scratch");
+    let src = dir.join("m.py");
+    std::fs::write(
+        &src,
+        "class P:\n\
+         \x20   def __init__(self, n: int) -> None:\n\
+         \x20       self._n = n\n\
+         \x20   @property\n\
+         \x20   def n(self) -> int:\n\
+         \x20       return self._n\n\
+         \x20   @n.setter\n\
+         \x20   def n(self, v: int) -> None:\n\
+         \x20       self._n = v\n\
+         \x20   def __eq__(self, other: object) -> bool:\n\
+         \x20       return True\n\
+         \x20   def __hash__(self) -> int:\n\
+         \x20       return 1\n",
+    )
+    .expect("write source");
+    let module = crate::frontend::resolve_frontend_with(
+        &src,
+        Some("m"),
+        crate::modules::RelativeImports::Project,
+    )
+    .unwrap_or_else(|_| panic!("the fixture type-checks in an ext build"));
+    let exports = collect_exports(&module).expect("the module exports");
+    let publications = collect_class_publications(&module, &exports);
+    let ctors = collect_constructors(&module, &publications);
+    let carriers = collect_carrier_classes(&module);
+    let getsets = collect_carrier_getsets(&module, &carriers);
+    let slots = collect_slot_dunders(&module, &carriers, SlotArtifact::Ext)
+        .unwrap_or_else(|_| panic!("installable slots"));
+    let inc = generate_exports_inc_with_slots(
+        "m",
+        &exports,
+        &[],
+        &publications,
+        &ctors,
+        &carriers,
+        &getsets,
+        &slots,
+    );
+    let head = "static PyObject *pycc_ext_wrap_";
+    let mut symbols = Vec::new();
+    for (at, _) in inc.match_indices(head) {
+        let rest = &inc[at + head.len()..];
+        let symbol = &rest[..rest.find('(').expect("a parameter list")];
+        let line_end = rest.find('\n').expect("a full line");
+        if rest[..line_end].ends_with(';') {
+            continue;
+        }
+        let body = &rest[line_end + 1..];
+        assert!(
+            body.starts_with(&format!("{{\n    if (fnptr_{symbol} == NULL) {{\n")),
+            "pycc_ext_wrap_{symbol} does not open with its guard:\n{inc}"
+        );
+        symbols.push(symbol.to_string());
+    }
+    // The property getter, its setter, and the `__eq__` and `__hash__`
+    // slot wrappers: every family a carrier class's type object calls.
+    assert_eq!(
+        symbols,
+        [
+            "0m1_P1_n",
+            "0m1_P1_n6_setter",
+            "0m1_P6___eq__",
+            "0m1_P8___hash__"
+        ]
+    );
 }
 
 #[test]
