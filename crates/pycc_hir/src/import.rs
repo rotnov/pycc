@@ -9,18 +9,22 @@
 //! #547, Part 2), and split further for #1291: the driver-request scan
 //! lives in [`request`], the foreign-import shadowing rule in [`shadow`],
 //! and the two type-alias lowerings in [`type_alias`]. [`block`] lowers a
-//! foreign import nested in a module-level `if`/`try` block. The project-import
+//! foreign import nested in a module-level `if`/`try` block, and
+//! [`fallback`] finds the `except ImportError` fallback rebinding of one
+//! (#1485). The project-import
 //! request/answer types (`ProjectImportRequest`, `ResolvedImports`, #898)
 //! are this module's public surface: the driver's `src/modules.rs` fills
 //! them in. Everything else is `pub(crate)`, re-exported through `lib.rs`.
 
 mod block;
+mod fallback;
 mod request;
 mod shadow;
 mod spelling;
 mod type_alias;
 
 pub(crate) use block::{lower_block_imports, nested_foreign_import};
+pub(crate) use fallback::{FallbackGroup, fallback_groups};
 pub use request::{ProjectImportRequest, project_import_requests};
 pub(crate) use shadow::{import_local_name, reject_shadowed_foreign_imports};
 pub(crate) use type_alias::{lower_legacy_type_alias_ann_assign, lower_type_alias_stmt};

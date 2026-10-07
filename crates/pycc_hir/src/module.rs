@@ -113,6 +113,8 @@ struct ModuleState<'a> {
     // so `program::link` can report a cross-module name collision at the
     // later definition. Names may repeat (a variable rebound twice).
     definition_spans: Vec<(String, Span)>,
+    /// #1485: each `except ImportError` fallback name of a module-level `try`.
+    fallback_groups: Vec<crate::import::FallbackGroup>,
     /// The module's keyword-bindable signature table (Part 1 of #884,
     /// #1125). Collected from the whole module body *before* the item loop
     /// so a keyword call written above its own `def` binds just as well as
@@ -202,6 +204,7 @@ pub fn lower_module(
         imported_class_indices: Vec::new(),
         imported_alias_indices: Vec::new(),
         definition_spans: Vec::new(),
+        fallback_groups: Vec::new(),
         signatures: SignatureTable::collect(&module.body, |import| {
             resolved.resolves_to_project_module(import.range)
         }),
@@ -473,6 +476,7 @@ pub fn lower_module(
     diagnostics.extend(crate::import::reject_shadowed_foreign_imports(
         &state.imports,
         &state.definition_spans,
+        &state.fallback_groups,
     ));
     // #1244: the module-level `del` late-binding rule, after the per-item
     // loop so an earlier per-item failure still reports first.
@@ -494,6 +498,7 @@ pub fn lower_module(
         imported_class_indices,
         imported_alias_indices,
         definition_spans,
+        fallback_groups: _,
         signatures,
         staticmethod_rebound: _,
         type_vars: _,
@@ -918,11 +923,16 @@ fn lower_top_level_item<'a>(
     // same reason the `__name__` seed is not recorded (see `lower_module`).
     // `killed_names` reaches into nested bodies, so one inside a
     // module-level `for` or `if` is filtered the same way.
+    // #1485: an `except ImportError` fallback rebinding is no definition.
+    let groups = crate::import::fallback_groups(&lowered, span).inspect_err(|_| {
+        state.imports.truncate(imports_before_block);
+    })?;
     for name in killed_names(&lowered) {
-        if !is_synthesized_name(&name) {
+        if !is_synthesized_name(&name) && !groups.iter().any(|group| group.name == name) {
             state.definition_spans.push((name, span));
         }
     }
+    state.fallback_groups.extend(groups);
     state
         .items
         .extend(lowered.into_iter().map(HirItem::TopLevelStmt));
