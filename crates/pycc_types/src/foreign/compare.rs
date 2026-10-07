@@ -9,7 +9,9 @@
 //!   native value is refused (`I0404`): pycc would have to box the native
 //!   value into a fresh object, whose identity CPython's program never
 //!   compared against. Two native non-`None` operands keep the `C0001` the
-//!   HIR gate gives a literal operand (`pycc_hir::compare_chain`).
+//!   HIR gate gives a literal operand (`pycc_hir::compare_chain`). A chain
+//!   link reaches here the same way since Part 11 of #1371, though a chain
+//!   with an object operand is refused before its links are typed.
 //! * **Rich comparison** (`==`, `!=`, `<`, `<=`, `>`, `>=`) is admitted
 //!   when one operand is an object and the other is an object, one of the
 //!   four packable scalars (`int`, `float`, `bool`, `str`) or, since #1470,

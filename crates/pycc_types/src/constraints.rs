@@ -1630,13 +1630,21 @@ pub(crate) fn collect_expr_constraints(
                     return Ok(Some(Ok(crate::hash::check_call_terms(&arg_terms)?)));
                 }
                 // Part 11 of #1371: the solver half of `crate::expr`'s
-                // `type(o)` arm, guarded like the `hash` arm above.
+                // `type(o)` arm, guarded like the `hash` arm above. An
+                // argument whose term is still unresolved (an unannotated
+                // parameter a caller passes an object to) is read as an
+                // object, as `hash`'s arm reads it as hashable: the final
+                // check pass re-types the call with the resolved argument
+                // and refuses a native one with the known-builtin `C0001`.
                 if !env.shadowed_producers.contains(callee.as_str())
-                    && let [Some(Ok(arg_ty))] = arg_terms.as_slice()
+                    && let [Some(arg_term)] = arg_terms.as_slice()
                     && crate::foreign::type_call::is_object_type_call(
                         &env.std_module_aliases,
                         callee,
-                        std::slice::from_ref(arg_ty),
+                        &[match arg_term {
+                            Ok(arg_ty) => arg_ty.clone(),
+                            Err(_) => Ty::Object,
+                        }],
                     )
                 {
                     return Ok(Some(Ok(Ty::Object)));

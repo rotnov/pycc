@@ -28,7 +28,8 @@ pub(crate) fn compare_link_ty(
     // `Ty::None` itself, or (Part 1 of #1371) a CPython object, whose
     // `None` test is pointer identity against `Py_None`. Without a `None`
     // literal operand, HIR lowering (`pycc_hir::compare_chain::lower_cmp_op`)
-    // admits a single comparison between two non-literal operands, and
+    // admits a single comparison or (Part 11 of #1371) a chain link
+    // between two non-literal operands, and
     // `foreign::compare::general_identity_ty` admits only two objects.
     if matches!(op, CmpOp::Is | CmpOp::IsNot) {
         // #1476: identity is the object's own, so a narrowed `object` name

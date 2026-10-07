@@ -15,6 +15,10 @@
 //! which lives in none of those tables. `pycc_mir` mirrors the same
 //! precedence: its class-instantiation lookup runs first, and its own split
 //! carries the `$fn:type` shadow guard.
+//!
+//! The solver arm also reads an argument whose term is still unresolved
+//! (an unannotated parameter) as an object; the final check pass re-types
+//! the call with the resolved argument, so a native one keeps its `C0001`.
 
 use pycc_hir::Ty;
 

@@ -64,6 +64,22 @@ fn the_solver_types_type_of_an_object_as_an_object() {
     ));
 }
 
+/// An unannotated parameter is still unresolved when the solver walks the
+/// body: its `type(x)` is read as an object, and the final pass re-types
+/// the call with the parameter's resolved type -- an object is admitted, a
+/// native value keeps the known-builtin `C0001`.
+#[test]
+fn type_of_an_unannotated_parameter_follows_its_resolved_type() {
+    admitted(&format!(
+        "{IMPORT}def _g(x):\n    return type(x)\n\n\nprint(_g(k).__name__)\n"
+    ));
+    refused(
+        "def _g(x):\n    return type(x)\n\n\nprint(_g(5))\n",
+        "C0001",
+        "call to builtin `type` is valid Python but not implemented yet",
+    );
+}
+
 /// Every other `type(...)` shape keeps its known-builtin `C0001`: a native
 /// argument, two arguments, none, and a stdlib module alias spelled
 /// `type`.

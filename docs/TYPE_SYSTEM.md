@@ -1414,7 +1414,13 @@ comparison stays `HirExpr::Compare`.
   comparison of its two operands: `==`, `!=`, `<`, `<=`, `>`, `>=` over the
   numeric/`bool`/`str` pairs a single comparison accepts, `==`/`!=` between
   two instances of the same dataclass, and `is`/`is not` only when one of
-  *that link's* two operands is the literal `None` (D-197). A bad link is the
+  *that link's* two operands is the literal `None` (D-197). Since Part 11 of
+  #1371 an `is`/`is not` link between two non-literal operands lowers too, as
+  a single comparison's does, and the type checker decides it: a chain with a
+  CPython object operand is the object chain's `I0404`, and a native pair
+  keeps the `C0001` "comparison operator not supported yet", reported at the
+  module's first position rather than the link's span; a literal operand
+  keeps that `C0001` at the chain's span. A bad link is the
   single comparison's `T0021` "cannot compare `int` and `str`". `in`/`not in`
   anywhere in a chain keep their `C0001` "comparison operator not supported
   yet".
