@@ -389,6 +389,16 @@ fn plan_ext(
             gaps,
         )))
     })?;
+    let carriers = ext_build::collect_carrier_classes(typed_hir);
+    // #1427: a comparison or hash dunder the artifact cannot install is a
+    // span-less `C0003`, reported exactly as an export gap is,
+    // and before the interpreter probe, so the refusal needs no CPython.
+    let slot_gaps = ext_build::collect_slot_dunders(typed_hir, &carriers);
+    let slots = slot_gaps.map_err(|gaps| {
+        let failure =
+            frontend::FrontendFailure::compile(&source_path.display().to_string(), "", gaps);
+        ExitCode::from(report_build_failure(failure))
+    })?;
     let probe = toolchain.probe().map_err(|e| {
         eprintln!("error: {e}");
         ExitCode::from(2)
@@ -409,15 +419,6 @@ fn plan_ext(
     let publications = ext_build::collect_class_publications(typed_hir, &exports);
     let mut ctors = ext_build::collect_constructors(typed_hir, &publications);
     ext_build::bind_ctor_keyword_names(typed_hir, &signatures, &mut ctors);
-    let carriers = ext_build::collect_carrier_classes(typed_hir);
-    // #1427: a comparison or hash dunder the artifact cannot install is a
-    // span-less `C0003`, reported exactly as an export gap is.
-    let slot_gaps = ext_build::collect_slot_dunders(typed_hir, &carriers);
-    let slots = slot_gaps.map_err(|gaps| {
-        let failure =
-            frontend::FrontendFailure::compile(&source_path.display().to_string(), "", gaps);
-        ExitCode::from(report_build_failure(failure))
-    })?;
     let inc_body = ext_build::generate_exports_inc_with_slots(
         &output.module_name,
         &exports,
