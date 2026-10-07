@@ -217,9 +217,9 @@ fn out_slot_in_entry_block<'ctx>(
 ///
 /// # Failure edge
 ///
-/// `foreign_fail::route_negative`'s: the module-exec return inside
-/// `pycc_ext_module_exec`, the bridge plus an immediate branch to the
-/// innermost exception target in any other function (#1316). The out-slot is
+/// `foreign_fail::route_negative`'s: the module-exec return in a module
+/// body outside every module-level `try`, the bridge plus an immediate
+/// branch to the innermost exception target anywhere else (#1316, #1096). The out-slot is
 /// hoisted into the entry block of whichever function that is.
 pub(super) fn emit_len<'ctx>(
     context: &'ctx Context,

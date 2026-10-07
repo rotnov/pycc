@@ -358,9 +358,10 @@ pub(super) fn emit_iter_header<'ctx>(
 /// # Failure edge
 ///
 /// A missing method returns `NULL` with CPython's `AttributeError` set,
-/// which `foreign_fail::route_null` routes: the module-exec return inside
-/// `pycc_ext_module_exec`, the bridge and an immediate branch to the
-/// innermost exception target in any other function (#1316). The branch is
+/// which `foreign_fail::route_null` routes: the module-exec return in a
+/// module body outside every module-level `try`, the bridge and an
+/// immediate branch to the innermost exception target anywhere else
+/// (#1316, #1096). The branch is
 /// immediate because the arguments are evaluated next, with no guard in
 /// between.
 pub(super) fn emit_lookup<'ctx>(

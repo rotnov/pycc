@@ -13,8 +13,8 @@
 //!
 //! Unlike the other foreign-object operations this one takes no
 //! [`crate::foreign_fail::ForeignFailEdge`]: every `raise` raises, so
-//! there is no success path to branch around, and the module-exec edge's
-//! early `-1` would skip a module-level `try`.
+//! there is no success path to branch around: the raise always ends in the
+//! branch to the innermost exception target.
 
 use super::*;
 use crate::foreign_attr::expect_object_pointer;

@@ -100,7 +100,7 @@ pub(super) fn expect_object_pointer(scalar: Scalar<'_>) -> PointerValue<'_> {
 ///   exception target -- the enclosing `try`'s handler, or the function's
 ///   own `exception_exit` -- exactly as a failed pycc operation does.
 ///
-/// [`ForeignFailEdge`] owns that rule.
+/// `foreign_fail::emit_failure` owns that rule.
 ///
 /// The nested case (`a.b.c` nests this node inside itself) is answered
 /// twice over: this check stops the outer load from ever seeing the inner

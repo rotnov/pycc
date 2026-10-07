@@ -17,8 +17,9 @@
 //!
 //! **Failure.** Both helpers return `0`, or `-1` with the CPython exception
 //! set, and a negative status takes the foreign-failure edge
-//! ([`ForeignFailEdge`]): the module-exec failure return inside
-//! `pycc_ext_module_exec`, and the error bridge everywhere else.
+//! ([`ForeignFailEdge`]): the module-exec failure return in a module body
+//! outside every module-level `try`, and the error bridge everywhere else
+//! (#1096).
 
 use super::*;
 use crate::foreign_attr::expect_object_pointer;
