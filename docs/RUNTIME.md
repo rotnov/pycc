@@ -894,7 +894,7 @@ that row's ingress `TypeError`.
 `__hash__` or `__eq__` decides, so a class whose nearest binding is `__eq__`
 alone is unhashable (`PyObject_HashNotImplemented`, published as
 `__hash__ = None`); a compiled `__hash__` is called through
-`pycc_ext_hash_result`, which refuses a non-`int` result with CPython's
+`pycc_ext_finish_hash`, which refuses a non-`int` result with CPython's
 `TypeError`, maps `-1` to `-2` and hashes an `int` outside `Py_hash_t`
 CPython's way; and a class binding neither name but defining an ordering keeps
 `object`'s identity hash (`pycc_ext_identity_hash`), installed explicitly
@@ -906,7 +906,8 @@ a private class, or one whose `__init__` keeps it unpublished -- gets a hidden
 carrier type, built like the on-demand one (#1435) plus the slots and entered
 in the carrier-type cache at module exec (`pycc_ext_carrier_register`), so no
 instance of it crosses on a slotless type. A binding the artifact cannot
-install is refused with `C0003` before any toolchain runs: a
+install is refused with `C0003` before any toolchain runs, on every class of
+the module, since an instance of any class can cross as `Any`: a
 `@staticmethod`, `@classmethod`, `@property` or class attribute under one of
 the seven names, a method whose signature the table below cannot carry, and
 any of them on a PEP 695 generic class, whose specializations share one
@@ -915,9 +916,13 @@ Deviations, pinned by `tests/issue_1427_ext_richcompare.rs` beside CPython's
 own answers: published types are flat, so a subclass overriding a comparison
 is not tried first as the reflected operand (`Base(1) == Over(1)` runs
 `Base.__eq__`); a hand-written comparison whose parameter is annotated with a
-compiled class never runs on another operand, so a body CPython would run --
-and that raises `AttributeError` reading `other.v` -- answers by identity
-here; a carrier type with no field descriptors -- a hidden one or a
+compiled class never runs on an operand that is not an instance of it, so
+whatever its body would answer for one is replaced by the reflected or
+identity answer (a body answering `True` for a non-instance makes `c == None`
+`True` in CPython and `False` here; a body reading `other.v` raises `AttributeError` in CPython);
+a comparison whose parameter has any other annotation the boundary checks
+(`other: int`) raises the boundary's ingress `TypeError` for an operand of
+another type where CPython runs the body (`c == "x"`); a carrier type with no field descriptors -- a hidden one or a
 non-constructible published one -- makes the compiled body's `other.v` on an
 `Any` operand raise `AttributeError`
 ([#1448](https://github.com/rotnov/pycc/issues/1448)), where before #1427 the

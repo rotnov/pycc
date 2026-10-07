@@ -390,7 +390,7 @@ pub(crate) fn slot_functions_c(slots: &ExtSlotDunders, emitted: &mut Vec<String>
     if let Some(export) = hash_export {
         out.push_str(&format!(
             "static Py_hash_t pycc_ext_hash_{class}(PyObject *self)\n{{\n    \
-             return pycc_ext_hash_result(pycc_ext_wrap_{symbol}(self, NULL, 0));\n}}\n\n",
+             return pycc_ext_finish_hash(pycc_ext_wrap_{symbol}(self, NULL, 0));\n}}\n\n",
             symbol = pycc_codegen::mangle_ext_name(&export.name)
         ));
     }

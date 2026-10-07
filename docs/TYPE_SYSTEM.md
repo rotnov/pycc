@@ -894,11 +894,12 @@ twin. Four rules follow from that model:
   #1207 subject's `def __eq__(self, other) -> bool`. Every other dunder
   (`__lt__` keeps `T0021`), an annotated or defaulted operand, a
   `@staticmethod`, and every `native` build are unchanged. Only the
-  parameter's type changes: a dunder is not exported to a host, so a host
-  `==` on an exported instance compares identity rather than calling the
-  compiled `__eq__`, a divergence from CPython tracked by
-  [#1427](https://github.com/rotnov/pycc/issues/1427); an in-module
-  explicit `x.__eq__(y)` runs the compiled body. Its argument must already
+  parameter's type changes. Since
+  [#1427](https://github.com/rotnov/pycc/issues/1427) a host `==` on an
+  instance runs the compiled `__eq__` through its carrier type's
+  `tp_richcompare` (`docs/RUNTIME.md`, "Comparing and hashing through the
+  carrier type"); an in-module explicit `x.__eq__(y)` runs the compiled
+  body too. Its argument must already
   be the object: a native `y` (`3`, a pycc instance) is the `T0021`
   argument mismatch below until #1387's boxing exists -- the same program
   was `T0021` ("cannot infer type of parameter") before, so nothing that

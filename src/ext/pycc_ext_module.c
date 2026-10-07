@@ -3371,7 +3371,7 @@ static int pycc_ext_kw_bind_dict(const char *fn_name, const char *const *names, 
  * for `Py_hash_t` hashes as that `int` does, and `-1` -- the error
  * sentinel -- becomes `-2`.
  */
-static Py_hash_t pycc_ext_hash_result(PyObject *res)
+static Py_hash_t pycc_ext_finish_hash(PyObject *res)
 {
     Py_hash_t h;
 

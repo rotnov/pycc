@@ -195,6 +195,24 @@ class TypedBare:
         return self.v == other.v
 
 
+class TypedNone:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    def __eq__(self, other: "TypedNone") -> bool:
+        if not isinstance(other, TypedNone):
+            return True
+        return self.v == other.v
+
+
+class IntEq:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    def __eq__(self, other: int) -> bool:
+        return self.v == other
+
+
 class _P:
     def __init__(self, v: int) -> None:
         self.v = v
@@ -314,7 +332,12 @@ const DRIVER_OUT: &str = "issue (True, False)\n\
 ///   compiled class answers `NotImplemented` for an operand of any other
 ///   type without running the body (as a `@dataclass`'s `__eq__` does), so
 ///   `==` falls back to identity where CPython's body reads `other.v` and
-///   raises `AttributeError`.
+///   raises `AttributeError`. `typed none` is the same rule on a body that
+///   would not raise: CPython's body answers `True` for `None`, the guard
+///   answers identity's `False` without running it.
+/// - `scalar other`: a comparison whose parameter carries any other checked
+///   annotation (`other: int`) raises the boundary's ingress `TypeError` for
+///   an operand of another type, where CPython runs the body.
 /// - `private self`, `unpublished self`: a hidden carrier type -- of a
 ///   private class, or of `NC`, which is not published because its
 ///   `__init__` takes a `dict` -- has no field descriptors yet (#1448), so
@@ -328,6 +351,8 @@ const DRIVER_OUT: &str = "issue (True, False)\n\
 ///   uninitialized instance`, where CPython's body raises `AttributeError`.
 const EXT_ONLY_DRIVER: &str = r#"show("reflected", lambda: (rc.Base(1) == rc.Over(1), rc.Over(1) == rc.Base(1)))
 show("typed other", lambda: rc.TypedBare(1) == 3)
+show("typed none", lambda: rc.TypedNone(1) == None)
+show("scalar other", lambda: rc.IntEq(1) == "x")
 show("private self", lambda: rc.give_private(lambda p: p == p, 1))
 n = rc.make_nc()
 show("unpublished", lambda: (type(n).__name__, hasattr(rc, "NC"), n == 3))
@@ -338,6 +363,8 @@ show("uninitialized", lambda: (hash(u), u == rc.H(1)))
 
 const EXT_ONLY_OUT: &str = "reflected (True, False)\n\
     typed other False\n\
+    typed none False\n\
+    scalar other TypeError\n\
     private self AttributeError\n\
     unpublished ('NC', False, False)\n\
     unpublished self AttributeError\n\
@@ -345,6 +372,8 @@ const EXT_ONLY_OUT: &str = "reflected (True, False)\n\
 
 const CPYTHON_EXT_ONLY_OUT: &str = "reflected (False, False)\n\
     typed other AttributeError\n\
+    typed none True\n\
+    scalar other False\n\
     private self True\n\
     unpublished ('NC', True, False)\n\
     unpublished self True\n\

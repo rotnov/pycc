@@ -289,7 +289,7 @@ fn a_richcompare_renders_object_richcompare_around_the_defined_methods() {
     let hash_only = slot_functions_c(entry(&slots, "HashOnly"), &mut emitted);
     assert!(!hash_only.contains("richcompare"));
     assert!(hash_only.contains(
-        "static Py_hash_t pycc_ext_hash_HashOnly(PyObject *self)\n{\n    return pycc_ext_hash_result(pycc_ext_wrap_"
+        "static Py_hash_t pycc_ext_hash_HashOnly(PyObject *self)\n{\n    return pycc_ext_finish_hash(pycc_ext_wrap_"
     ));
     assert_eq!(
         slot_rows(entry(&slots, "HashOnly")),
