@@ -186,16 +186,26 @@ fn a_published_class_is_registered_but_bound_only_through_its_publication() {
     let at = init
         .find(&guard(&symbol, "Grid.__init__", "-1"))
         .unwrap_or_else(|| panic!("no guard in:\n{init}"));
+    let opening = init.find("{\n").expect("the body opens") + 2;
+    let prefix = &init[opening..at];
+    assert!(prefix.contains("    void *inst;\n"), "{init}");
+    // Only declarations precede the guard: no statement, so no call that
+    // binds keywords, unpacks an argument, takes the bridge mark or
+    // allocates, and nothing an early `return -1` would leak.
+    for line in prefix.lines() {
+        assert!(
+            line.starts_with("    ") && line.ends_with(';') && !line.contains('('),
+            "{line:?} precedes the guard:\n{init}"
+        );
+    }
     for later in [
         "kwds",
         "pycc_ext_unpack_",
         "pycc_rt_instance_new",
         "pycc_ext_bridge_mark",
     ] {
-        let index = init.rfind(later).expect("the constructor body");
-        assert!(at < index, "{later:?} precedes the guard:\n{init}");
+        assert!(init[at..].contains(later), "{later:?} missing:\n{init}");
     }
-    assert!(init[..at].contains("    void *inst;\n"), "{init}");
 }
 
 /// The guard is the wrapper's first statement, before the receiver is
