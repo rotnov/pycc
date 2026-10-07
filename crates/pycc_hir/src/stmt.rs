@@ -613,8 +613,8 @@ pub(crate) fn lower_stmt(
             };
             HirStmt::Raise { exc, cause }
         }
-        // #1291: a CPython-backed `import` nested in a module-level
-        // `if`/`try` block, whose bindings `module::lower_top_level_item`
+        // A CPython-backed `import` (#1291) or `from ... import` (#1383)
+        // nested in a module-level `if`/`try` block, whose bindings `module::lower_top_level_item`
         // recorded before lowering the block.
         other => match crate::import::nested_foreign_import(other, imports) {
             Some(lowered) if !in_function => lowered,
