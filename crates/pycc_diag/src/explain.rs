@@ -1517,7 +1517,9 @@ object operand: as a condition the object's truth is `PyObject_IsTrue`, \
 and as a value the result is an `object` when the other operand is an \
 `object`, `int`, `float`, `bool` or `str`, a native operand boxed only \
 when it is the one selected. Part 10 of #1371 admits `not o`: the \
-object's `PyObject_IsTrue`, negated into a native `bool`. #1435 lets an instance of a regular pycc \
+object's `PyObject_IsTrue`, negated into a native `bool`. Part 11 of \
+#1371 admits `type(o)` with one object argument: CPython's \
+`PyObject_Type`, the object's class as another CPython object. #1435 lets an instance of a regular pycc \
 class (not an enum or an exception class) be a positional or keyword \
 argument of a method call, a direct call or a call of a subscript \
 result, crossing as a carrier of its run-time class. The loop is \
@@ -1527,7 +1529,7 @@ name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
 a bare imported module is iterated too, and raises CPython's own \
 `TypeError` at run time. Everything else is \
 still refused, including `isinstance` against a tuple of classes or a \
-pycc exception class, protocol, enum or generic class, a comparison chain with an object link (`a < o < b`), an \
+pycc exception class, protocol, enum or generic class, a comparison chain with an object link (`a < o < b`, `o is p is q`), any other `type(...)` shape, an \
 equality test against a bare `None`, a rich comparison with an operand \
 of any other type, a `match` subject, iterating over a subscript load \
 (`for x in o[k]:`) or inside a comprehension, \

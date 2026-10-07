@@ -2026,6 +2026,26 @@ int pycc_ext_obj_truthy(PyObject *o)
 }
 
 /*
+ * Part 11 of #1371: `type(o)` on a CPython object value
+ * (`EXT_OBJ_TYPE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * Returns a new reference to `o`'s class (`PyObject_Type`), which compiled
+ * code leaks under the #1092 leak-only rule like every other producer.
+ * `o` is borrowed. `PyObject_Type` cannot fail for a live object; a NULL
+ * `o` is the defence in depth `pycc_ext_obj_getattr` and `pycc_ext_obj_len`
+ * document: a NULL operand comes only from a producer whose own NULL check
+ * already routed its exception, so returning NULL without setting a second
+ * one leaves exactly one exception pending.
+ */
+PyObject *pycc_ext_obj_type(PyObject *o)
+{
+    if (o == NULL) {
+        return NULL;
+    }
+    return PyObject_Type(o);
+}
+
+/*
  * Part 3 of #1026 (PR 3b of #1082): `o[k]` on a CPython object value
  * (`EXT_OBJ_GETITEM_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *

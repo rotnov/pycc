@@ -661,6 +661,8 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // object slice's is `Ty::Object` -- never `Ty::Int`.
         | MirExpr::ObjContains { .. }
         | MirExpr::ObjSlice { .. }
+        // Part 11 of #1371: `type(o)`'s `.ty()` is `Ty::Object`.
+        | MirExpr::ObjType { .. }
         // Part 2d of #1371: a list display built as a CPython `list` is
         // `Ty::Object`.
         | MirExpr::ObjList { .. } => false,

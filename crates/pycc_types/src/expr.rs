@@ -810,6 +810,15 @@ pub(crate) fn infer_expr_in(
                 {
                     return crate::hash::check_call(arg_tys, env);
                 }
+                // Part 11 of #1371: `type(o)` on a CPython object, placed
+                // here for `frozenset`'s reason above (`foreign::type_call`).
+                if crate::foreign::type_call::is_object_type_call(
+                    &env.std_module_aliases,
+                    callee,
+                    arg_tys,
+                ) {
+                    return Ok(Ty::Object);
+                }
                 if is_known_callable_builtin(callee) {
                     return Err(unsupported_callable_builtin(callee));
                 }

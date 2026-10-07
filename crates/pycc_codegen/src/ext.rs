@@ -272,6 +272,14 @@ pub const EXT_OBJ_LEN_SYMBOL: &str = "pycc_ext_obj_len";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_TRUTHY_SYMBOL: &str = "pycc_ext_obj_truthy";
 
+/// The fixed C shim's `type(o)` helper (Part 11 of #1371): it takes a
+/// borrowed `PyObject *` and returns a *new* reference to its class
+/// (`PyObject_Type`), or `NULL` for a `NULL` operand -- the
+/// defence-in-depth guard [`EXT_OBJ_LEN_SYMBOL`]'s helper documents. It does not touch the operand's refcount.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_TYPE_SYMBOL: &str = "pycc_ext_obj_type";
+
 /// The fixed C shim's subscript-load helper (Part 3 of #1026, PR 3b of
 /// #1082): it takes a borrowed `PyObject *` and an *owned* key reference
 /// produced by one of the `pycc_ext_obj_pack_*` helpers above, and returns a

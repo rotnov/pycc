@@ -377,6 +377,22 @@ pub(super) fn lower_expr(
                 let instance = instance.clone();
                 return lower_instance_hash(instance, &class, scopes, classes);
             }
+            // Part 11 of #1371: `type(o)` on a CPython object, under the
+            // same shadow guard as `hash` above; a user `class type` was
+            // already claimed by the instantiation lookup. `pycc_types`
+            // admits only this one-object-argument shape
+            // (`foreign::type_call`).
+            if callee == "type"
+                && let [base] = args.as_slice()
+                && matches!(base.ty(), Ty::Object)
+                && !scopes
+                    .iter()
+                    .any(|scope| scope.contains_key(&format!("$fn:{callee}")))
+            {
+                return MirExpr::ObjType {
+                    base: Box::new(base.clone()),
+                };
+            }
             let ty = if callee == "print" {
                 Ty::None
             } else if callee == "math.sqrt" {

@@ -1828,6 +1828,19 @@ CPython's own static type object instead, so it adds nothing to
 the leaked set either. An out-of-range selector or a `NULL` operand raises
 `SystemError` rather than reading undefined memory.
 
+**`type(o)` is one more producer.** Part 11 of
+[#1371](https://github.com/rotnov/pycc/issues/1371) adds
+`pycc_ext_obj_type(o)`, which wraps `PyObject_Type`: it borrows the operand
+and returns a new reference to its class, leaked once per evaluation on the
+same terms as an attribute load (`crates/pycc_codegen/src/foreign_type.rs`).
+`PyObject_Type` cannot fail for a live object; the helper answers `NULL` only
+for a `NULL` operand, the defence in depth `pycc_ext_obj_getattr` and
+`pycc_ext_obj_len` keep, without setting a second exception, and that `NULL`
+routes to the operation's failure edge like any other producer's. The hosted
+test compares `type(o)` in a function body and a module body, identity
+between two classes, a nested `type(type(o))` and a class attribute read with
+CPython 3.14.7 (`tests/issue_1371_object_type.rs`).
+
 Against a class compiled in the same module (Part 7 of #1371),
 `pycc_ext_obj_isinstance_compiled(o, name)` borrows `o` and the class's
 constant NUL-terminated name, and has the same `1`/`0`/`-1` contract. A

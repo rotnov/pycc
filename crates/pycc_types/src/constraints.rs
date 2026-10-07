@@ -1629,6 +1629,18 @@ pub(crate) fn collect_expr_constraints(
                 {
                     return Ok(Some(Ok(crate::hash::check_call_terms(&arg_terms)?)));
                 }
+                // Part 11 of #1371: the solver half of `crate::expr`'s
+                // `type(o)` arm, guarded like the `hash` arm above.
+                if !env.shadowed_producers.contains(callee.as_str())
+                    && let [Some(Ok(arg_ty))] = arg_terms.as_slice()
+                    && crate::foreign::type_call::is_object_type_call(
+                        &env.std_module_aliases,
+                        callee,
+                        std::slice::from_ref(arg_ty),
+                    )
+                {
+                    return Ok(Some(Ok(Ty::Object)));
+                }
                 if is_known_callable_builtin(callee) {
                     return Err(unsupported_callable_builtin(callee));
                 }

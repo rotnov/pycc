@@ -5,8 +5,11 @@
 //!
 //! A chain admits the per-link operators `==`, `!=`, `<`, `<=`, `>`, `>=`,
 //! and `is`/`is not` when one of *that link's* two operands is
-//! syntactically the `None` literal (D-197). `in`/`not in` and general
-//! identity `is` in a chain keep their `C0001`. A *single* comparison also
+//! syntactically the `None` literal (D-197). `in`/`not in` in a chain keeps
+//! its `C0001`. Since Part 11 of #1371 a chain link also admits general
+//! identity between two non-literal operands, exactly as a single
+//! comparison does, so `pycc_types` can refuse a chain over a CPython object
+//! with the `I0404` every other object chain gets. A *single* comparison also
 //! admits general identity between two non-literal operands (Part 1 of
 //! #1371), which `pycc_types` admits only between CPython objects, and
 //! `in`/`not in` whose container is not a literal, display or comprehension
@@ -143,12 +146,15 @@ pub(crate) fn lower_compare_chain(
         } else {
             &cmp.comparators[index - 1]
         };
+        // Part 11 of #1371: widen only `is`/`is not`. `general_identity`
+        // also widens `in`/`not in` (`can_be_object`), which a chain keeps
+        // refusing here.
         ops.push(lower_cmp_op(
             *op,
             left,
             &cmp.comparators[index],
             range.clone(),
-            false,
+            matches!(op, CmpOp::Is | CmpOp::IsNot),
         )?);
     }
     let first = lower_expr(&cmp.left, in_function, class_name, imports, signatures)?;
