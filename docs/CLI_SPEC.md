@@ -288,8 +288,9 @@ directory once project mode exists.
                     changes nothing. A dependency module's relative imports
                     stay project imports (its body runs with the entry
                     module's globals, so it has no package of its own), and
-                    aliasing, `*`, and a relative import inside a function
-                    body keep their `C0001`s. `check`, `run`, `lock` and a native
+                    aliasing, `*`, and a relative import outside the top
+                    level and a module-level `if`/`try` block keep their
+                    `C0001`s. `check`, `run`, `lock` and a native
                     `build` have no counterpart and keep D-222, so `pycc
                     check` of such a module still reports `T0021` or links
                     the sibling. An entry module whose only non-`pycc_std`

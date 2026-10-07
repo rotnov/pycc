@@ -1301,7 +1301,7 @@ Only that shape is admitted, at top level or (since
 [#1383](https://github.com/rotnov/pycc/issues/1383)) inside a module-level
 `if`/`try` block, below. An aliased name
 (`from X import a as b`), the wildcard and a from-import inside a
-function or class body keep their `C0001` (a relative import is a project import, D-222,
+function, class, loop, `with` or `match` body keep their `C0001` (a relative import is a project import, D-222,
 and never reaches this channel, except the entry module's relative
 from-imports under `pycc build --ext --foreign-relative-imports`, #1366, below), and so does a name pycc
 already resolves by its spelling (`from builtins import range`,

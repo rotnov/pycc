@@ -198,7 +198,8 @@ spelling (...), is not supported yet``), against the same canonical lists --
 so `from os import List` is refused like `from os import range`.
 Every other from-import shape of such a module keeps its C0001: an aliased
 name (`from X import a as b`, [#963](https://github.com/rotnov/pycc/issues/963)),
-the wildcard, and a from-import inside a function or class body. Since
+the wildcard, and a from-import inside a function, class, loop, `with` or
+`match` body. Since
 [#1383](https://github.com/rotnov/pycc/issues/1383) one nested in a
 module-level `if`/`try` body is a foreign import under the top-level form's
 rules, reported at its own statement when refused; a nested from-import of a
