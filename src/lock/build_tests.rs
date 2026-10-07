@@ -285,6 +285,26 @@ fn an_installed_optional_root_is_locked_with_its_closure() {
     assert!(check.section.optional_roots.is_empty());
 }
 
+/// #1383: a nested from-import is a root like a nested `import`: optional
+/// under a handler that catches a failed import, required under an `if`.
+#[test]
+fn a_nested_from_import_is_an_optional_or_a_required_root() {
+    let env = Env::with_tiny(
+        "build_nested_from",
+        "try:\n    from tinypkg import X\nexcept ImportError:\n    pass\n",
+    );
+    env.lock();
+    let check = env.check();
+    assert!(check.section.roots.is_empty());
+    assert_eq!(check.section.optional_roots, ["tinypkg"]);
+
+    env.write("c = True\nif c:\n    from tinypkg import X\n");
+    env.lock();
+    let check = env.check();
+    assert_eq!(check.section.roots, ["tinypkg"]);
+    assert!(check.section.optional_roots.is_empty());
+}
+
 /// Native libraries no longer stop the plan: the embedded build re-derives
 /// them after the probe and compares them with the section (#1243).
 #[test]

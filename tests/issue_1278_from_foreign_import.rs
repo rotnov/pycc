@@ -122,9 +122,12 @@ fn the_shapes_outside_this_channel_keep_their_c0001() {
             "import of module `os.path` is not supported yet",
         ),
         (
-            "from_foreign_block",
-            "if True:\n    from itertools import product\n",
-            "an `import` inside a block body",
+            // A module-level `if`/`try` body admits it since #1383
+            // (`tests/issue_1383_block_from_import.rs`); a function body
+            // does not.
+            "from_foreign_function",
+            "def f() -> None:\n    from itertools import product\n",
+            "an `import` inside a function or block body",
         ),
         (
             "from_foreign_shadow",

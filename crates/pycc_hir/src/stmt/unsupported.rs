@@ -21,9 +21,9 @@ pub(super) fn unsupported_statement(other: &Stmt, in_function: bool) -> Diagnost
     // TYPE_CHECKING:` body is constant-folded by `lower_stmt`, so an import
     // here is always inside a function or block body (a class-body
     // import is rejected by `class.rs` first and never gets here). A
-    // CPython-backed `import` in a module-level `if`/`try` block never
-    // gets here either: `lower_stmt` lowers it to `HirStmt::ForeignImport`
-    // (#1291). The function text is unchanged from before #1291.
+    // CPython-backed `import` (#1291) or `from ... import` (#1383) in a
+    // module-level `if`/`try` block never gets here either: `lower_stmt`
+    // lowers it to `HirStmt::ForeignImport`. The function text is unchanged from before #1291.
     let kind = match other {
         Stmt::FunctionDef(_) => {
             "a `def` nested inside a function or block body \
@@ -39,8 +39,9 @@ pub(super) fn unsupported_statement(other: &Stmt, in_function: bool) -> Diagnost
         }
         Stmt::Import(_) | Stmt::ImportFrom(_) => {
             "an `import` inside a block body \
-             (only a module-level import, a CPython-backed `import X` or `import X as Y` \
-             inside a module-level `if` or `try` block, or an import inside an \
+             (only a module-level import, a CPython-backed `import X`, `import X as Y` \
+             or a CPython-backed `from X import a, b` inside a module-level `if` or `try` block, \
+             or an import inside an \
              `if TYPE_CHECKING:` guard, is supported)"
         }
         _ => pycc_ast::stmt_kind_name(other),

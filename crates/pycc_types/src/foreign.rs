@@ -248,7 +248,7 @@
 
 use crate::Environment;
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{ForeignImportSite, HirExpr, ImportBinding, Ty};
+use pycc_hir::{ForeignImportSite, FromImport, HirExpr, ImportBinding, Ty};
 
 /// Whether a declared annotation is a fixed-arity tuple whose every
 /// element is `float` -- the one annotation a [`Ty::Object`] initializer
@@ -598,12 +598,16 @@ pub(crate) fn bind_foreign_objects_at(
     }
 }
 
-/// Binds each local name of a `HirStmt::ForeignImport` (a foreign import
-/// nested in a module-level `if`/`try` block, #1291) to `Ty::Object` at the
-/// statement's own position. The enclosing `if`/`try` join then decides
-/// whether a read after the block is definitely assigned.
-pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, String)]) {
-    for (local_name, _) in bindings {
+/// Binds each local name of a `HirStmt::ForeignImport` (a foreign `import`
+/// or `from ... import` nested in a module-level `if`/`try` block, #1291,
+/// #1383) to `Ty::Object` at the statement's own position. The enclosing
+/// `if`/`try` join then decides whether a read after the block is
+/// definitely assigned.
+pub(crate) fn bind_block_import(
+    env: &mut Environment,
+    bindings: &[(String, String, Option<FromImport>)],
+) {
+    for (local_name, _, _) in bindings {
         env.bind(local_name.clone(), Ty::Object);
     }
 }

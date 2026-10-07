@@ -449,8 +449,8 @@ pub enum ImportBinding {
     /// obtains from `pycc_ext_obj_import(module_path)`.
     ///
     /// `from` is `None` for that `import` form. For one name of an
-    /// unaliased top-level `from itertools import product` (#1278) it is
-    /// `Some`, and the bound object is the module's attribute of that name,
+    /// unaliased `from itertools import product` -- at top level (#1278) or
+    /// nested in a module-level `if`/`try` block (#1383) -- it is `Some`, and the bound object is the module's attribute of that name,
     /// fetched with CPython's own `IMPORT_FROM` semantics by
     /// `pycc_ext_obj_import_from`; `local_name` is the name, and
     /// `module_path` stays the module, so every gate that classifies by the
@@ -482,7 +482,8 @@ pub enum ImportBinding {
 }
 
 /// The `from` half of an [`ImportBinding::Foreign`] (#1278): one name of an
-/// unaliased, top-level `from <foreign module> import a, b` statement.
+/// unaliased `from <foreign module> import a, b` statement, at top level
+/// (#1278) or nested in a module-level `if`/`try` block (#1383).
 ///
 /// Every binding of one statement carries the same `fromlist`, the
 /// statement's whole name list in source order, because CPython's
@@ -588,8 +589,9 @@ pub enum ForeignImportSite {
     /// `program::link`, and is where `pycc_mir`'s `splice_foreign_imports`
     /// inserts a `MirItem::ForeignImport`.
     Item(usize),
-    /// An `import` statement nested in a module-level `if`/`try` block
-    /// (#1291). It runs as the `HirStmt::ForeignImport` statement lowered
+    /// An `import` (#1291) or unaliased foreign `from ... import ...`
+    /// (#1383) statement nested in a module-level `if`/`try` block; a
+    /// from-import's bindings carry their [`FromImport`]. It runs as the `HirStmt::ForeignImport` statement lowered
     /// at its own position inside the block, so it is never spliced; the
     /// table entry exists so the name reaches the driver's lock, interop
     /// policy (`I0402`) and native-build (`I0403`) gates, and the
@@ -664,10 +666,11 @@ pub struct HirModule {
     /// Part 1 of #1026 for `ImportBinding::Foreign`), populated in source
     /// order by `module::lower_module` exactly like `type_aliases`. A
     /// module-level `import`/`from ... import ...` statement records its
-    /// bindings here, and so does a foreign `import` nested in a
-    /// module-level `if`/`try` block ([`ForeignImportSite::Block`], #1291).
-    /// Every other nested import still reaches `lower_stmt`'s `C0001`
-    /// catch-all.
+    /// bindings here, and so does a foreign `import` (#1291) or unaliased
+    /// foreign `from ... import ...` (#1383) nested in a module-level
+    /// `if`/`try` block ([`ForeignImportSite::Block`]). Every other nested
+    /// import, including a nested from-import the driver did not answer
+    /// foreign, still reaches `lower_stmt`'s `C0001` catch-all.
     pub imports: Vec<ImportBinding>,
     /// Class name -> declared shape (attribute slots in first-`__init__`-
     /// assignment order, method table) (D-154, Part 1 of #375). Populated by

@@ -26,12 +26,19 @@ use pycc_diag::Span;
 /// `from ... import`, and the one alias's own span for a plain `import`,
 /// which yields one request per qualifying alias so `import sys, re` gets
 /// an answer for each module (#1280).
+///
+/// `nested` is whether the statement sits in a module-level `if`/`try`
+/// body rather than at top level (#1291, #1383). The driver answers a
+/// nested `from ... import` only when it is foreign and never loads the
+/// module it names, so a nested from-import of a project module keeps its
+/// block-body diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectImportRequest {
     pub level: u32,
     pub module: Option<String>,
     pub names: Vec<String>,
     pub span: Span,
+    pub nested: bool,
 }
 
 /// Scans a parsed module's top-level statements for the imports the driver
@@ -44,29 +51,31 @@ pub struct ProjectImportRequest {
 /// [`lower_import_stmt`]'s own single-file dispatch, so a module with no
 /// project import yields an empty list and lowers exactly as before.
 ///
-/// A plain `import` nested in a module-level `if`/`try` block is requested
-/// the same way (#1291). The walk recurses into nested `if`/`try` bodies
-/// and never into a `for`/`while`/`with`/`match`/`def`/`class` body. It
-/// does not skip an `if TYPE_CHECKING:` body, so it asks about a superset
-/// of the imports `lower_block_imports` lowers; the extra answers are never
-/// read, and answering a bare `import m` never loads a file. A nested
-/// `from ... import` is never requested, because answering one loads the
-/// module.
+/// A plain `import` (#1291) or `from ... import` (#1383) nested in a
+/// module-level `if`/`try` block is requested the same way, flagged
+/// `nested`. The walk recurses into nested `if`/`try` bodies and never
+/// into a `for`/`while`/`with`/`match`/`def`/`class` body. It does not skip
+/// an `if TYPE_CHECKING:` body, so it asks about a superset of the imports
+/// `lower_block_imports` lowers; the extra answers are never read.
+/// Answering a nested request never loads a file: a bare `import m` stops
+/// before loading, and the driver answers a nested `from ... import` only
+/// when it is foreign.
 pub fn project_import_requests(module: &ModModule) -> Vec<ProjectImportRequest> {
     let mut requests = Vec::new();
     for stmt in &module.body {
-        requests.extend(project_import_request(stmt));
+        requests.extend(project_import_request(stmt, false));
         nested_import_requests(stmt, false, &mut requests);
     }
     requests
 }
 
-/// The requests of every plain `import` nested in `stmt` when it is an
-/// `if`/`try`; `nested` is whether `stmt` is itself inside such a block.
+/// The requests of every `import`/`from ... import` nested in `stmt` when
+/// it is an `if`/`try`; `nested` is whether `stmt` is itself inside such a
+/// block.
 fn nested_import_requests(stmt: &Stmt, nested: bool, requests: &mut Vec<ProjectImportRequest>) {
     let bodies: Vec<&[Stmt]> = match stmt {
-        Stmt::Import(_) if nested => {
-            requests.extend(project_import_request(stmt));
+        Stmt::Import(_) | Stmt::ImportFrom(_) if nested => {
+            requests.extend(project_import_request(stmt, true));
             return;
         }
         Stmt::If(if_stmt) => std::iter::once(if_stmt.body.as_slice())
@@ -93,7 +102,7 @@ fn nested_import_requests(stmt: &Stmt, nested: bool, requests: &mut Vec<ProjectI
     }
 }
 
-fn project_import_request(stmt: &Stmt) -> Vec<ProjectImportRequest> {
+fn project_import_request(stmt: &Stmt, nested: bool) -> Vec<ProjectImportRequest> {
     match stmt {
         Stmt::Import(import) => import
             .names
@@ -104,6 +113,7 @@ fn project_import_request(stmt: &Stmt) -> Vec<ProjectImportRequest> {
                 module: Some(alias.name.to_string()),
                 names: Vec::new(),
                 span: statement_span(alias.range),
+                nested,
             })
             .collect(),
         Stmt::ImportFrom(import) => {
@@ -131,6 +141,7 @@ fn project_import_request(stmt: &Stmt) -> Vec<ProjectImportRequest> {
                     .map(|alias| alias.name.to_string())
                     .collect(),
                 span: statement_span(import.range),
+                nested,
             }]
         }
         _ => Vec::new(),

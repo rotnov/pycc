@@ -1745,18 +1745,20 @@ pub enum MirStmt {
         value: MirExpr,
     },
     /// A foreign (CPython-object) import nested in a module-level `if`/`try`
-    /// block (#1291), the statement counterpart of
-    /// [`MirItem::ForeignImport`]: each `(local_name, module_path)` pair, in
-    /// order, stores the module object `pycc_ext_obj_import(module_path)`
-    /// returns into the module global `local_name`, where the statement
-    /// runs. A failed import whose exception is an `ImportError` becomes a
-    /// pycc raise of `ImportError`/`ModuleNotFoundError` (#1293), so an
-    /// enclosing handler runs; any other failure returns `-1` from
-    /// `Py_mod_exec` directly (the #1096 residual). It never carries a
-    /// from-import (#1278): `pycc_hir` lowers a `from X import n` nested in a
-    /// block to its block-body `C0001`, so every pair is a plain `import`.
+    /// block (#1291, #1383), the statement counterpart of
+    /// [`MirItem::ForeignImport`]: each `(local_name, module_path, from)`
+    /// entry, in order, stores into the module global `local_name`, where
+    /// the statement runs, the module object
+    /// `pycc_ext_obj_import(module_path)` returns when `from` is `None`, or
+    /// the attribute a `pycc_ext_obj_import_from` call returns for a
+    /// from-import's name (#1383; `from` as for [`MirItem::ForeignImport`]).
+    /// A failed import whose exception is an `ImportError` -- a missing
+    /// name of a from-import included -- becomes a pycc raise of
+    /// `ImportError`/`ModuleNotFoundError` (#1293), so an enclosing handler
+    /// runs; any other failure returns `-1` from `Py_mod_exec` directly (the
+    /// #1096 residual).
     ForeignImport {
-        bindings: Vec<(String, String)>,
+        bindings: Vec<(String, String, Option<FromImport>)>,
     },
 }
 

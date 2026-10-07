@@ -201,12 +201,13 @@ pub enum ResolvedImport<'a> {
     /// ([`ImportBinding::Foreign`]). Recorded only for an undotted
     /// `import X` or `import X as Y` (#1291), or one such name of
     /// `import X, Y` (#1280), at top level or nested in a module-level
-    /// `if`/`try` block (#1291), and for a top-level `from X import a, b`
-    /// with an undotted `X` (#1278) -- or, since Part 1 of #1138, a dotted
-    /// `X` whose root is neither a project module nor a project package --
-    /// whose names bind the module's
-    /// attributes -- see `src/modules.rs`'s own `missing` for why every
-    /// other absolute foreign shape stays unanswered. Under `pycc build
+    /// `if`/`try` block (#1291), and for a `from X import a, b` with an
+    /// undotted `X` (#1278), at top level or nested in such a block
+    /// (#1383) -- or, since Part 1 of #1138, a dotted `X` whose root is
+    /// neither a project module nor a project package -- whose names bind
+    /// the module's attributes. A nested from-import gets no answer but
+    /// this one (`src/modules.rs`'s `resolve`); see its `missing` for why
+    /// every other absolute foreign shape stays unanswered. Under `pycc build
     /// --ext --foreign-relative-imports` (#1366) it is also recorded for
     /// every relative `from` import of the entry module, dotted or not,
     /// which binds attributes of the package the artifact is imported under.
