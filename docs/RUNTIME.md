@@ -1316,7 +1316,9 @@ error and the interop policy and the lock see it, but it binds a hidden
 name: the module's dict never holds it, and the spelling keeps the
 buffer-carrier meaning it has without any import. In a module that writes
 one, the spelling may only annotate; every other read or binding of it is a
-`C0001` ([DIAGNOSTICS.md](./DIAGNOSTICS.md)). Each name is its own
+`C0001` ([DIAGNOSTICS.md](./DIAGNOSTICS.md)), while a repeated or
+`if TYPE_CHECKING:`-guarded copy of the same carrier import is the same
+binding and is accepted. Each name is its own
 foreign binding, whose identity is the module *and* the name, so
 `import copy` followed by `from copy import copy` is the same shadowing refusal
 as any other rebinding of a foreign name.

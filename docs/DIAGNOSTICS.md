@@ -208,11 +208,14 @@ import NDArray` keeps the name's buffer-annotation meaning in pycc (D-244),
 so it may only annotate`` (a call `ndarray(n)`, `isinstance(a, ndarray)`,
 `x = NDArray`, a default value, a decorator or a base class, above or below
 the import), and every other binding of it (a `def`, a `class`, a parameter,
-an assignment, a second import, an `except ... as`, a match capture,
-`type NDArray = ...`) is refused at the binding with ``binding `ndarray` in a
-module that imports it with `from numpy import ndarray` is not supported yet:
-the import keeps the name's buffer-annotation meaning in pycc (D-244)``. Both
-are C0001.
+an assignment, an import that binds it other than the unaliased carrier
+import itself such as `import X as ndarray` or `from m import y as ndarray`,
+an `except ... as`, a match capture, `type NDArray = ...`) is refused at the
+binding with ``binding `ndarray` in a module that imports it with `from numpy
+import ndarray` is not supported yet: the import keeps the name's
+buffer-annotation meaning in pycc (D-244)``. Both are C0001. Repeating the
+carrier import, or guarding it with `if TYPE_CHECKING:`, is the same binding
+and is accepted.
 Every other from-import shape of such a module keeps its C0001: an aliased
 name (`from X import a as b`, [#963](https://github.com/rotnov/pycc/issues/963)),
 the wildcard, and a from-import inside a function, class, loop, `with` or
