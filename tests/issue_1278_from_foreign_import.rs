@@ -93,10 +93,12 @@ fn a_builtin_or_marker_spelling_is_refused() {
     );
     assert_one_error(
         "from_foreign_marker",
-        "from numpy import ndarray\n",
+        // `from numpy import ndarray` is a buffer-carrier import since
+        // #1380; the other module's spelling is not.
+        "from numpy import NDArray\n",
         &[],
         "C0001",
-        "binding the CPython object `numpy.ndarray` to `ndarray`",
+        "binding the CPython object `numpy.NDArray` to `NDArray`",
     );
 }
 
