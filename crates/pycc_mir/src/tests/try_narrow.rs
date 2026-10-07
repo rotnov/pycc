@@ -184,7 +184,7 @@ fn a_body_that_rebinds_and_guards_again_leaves_finally_unnarrowed() {
         try_stmt(
             false,
             vec![rebind_x(), is_none_return()],
-            vec![],
+            vec![handler(vec![HirStmt::Return(None)])],
             vec![print_x()],
         ),
         print_x(),

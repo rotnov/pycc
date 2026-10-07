@@ -351,7 +351,9 @@ pub(crate) fn join_narrowed(
 /// Call this before checking/lowering a loop body (`While`/`ForRange`/
 /// `ForList`, both module and function scope, every fast- and slow-path
 /// call site) and before checking each `except` handler body (against the
-/// pre-try `env` clone, with the *try body's* kill set). A straight-line
+/// pre-try `env` clone, with the *try body's* kill set), and on the
+/// conservative entry state of a `try`'s `finally`, once per path
+/// (`exception::try_join`'s `apply_finally_kill_prescan`). A straight-line
 /// body or an `if`/`else` with no enclosing loop or `try` needs no
 /// prescan at all: execution order there already equals source order, so
 /// the existing sequential pass is already sound.

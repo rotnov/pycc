@@ -125,6 +125,17 @@ status: accepted
      kill anywhere in the try body, a handler, or the `orelse` already
      removes that name from `joined` before `finalbody` is ever checked,
      with no separate prescan needed).
+     - Amendment (2026-10-07, #1476): the `finalbody` argument above does
+       not hold. A path that rebinds a name and then narrows it again to
+       the same type before it ends (`o = p` followed by
+       `if not isinstance(o, int): return 0`) still narrows it in every
+       input map, so the intersection keeps it, although `finalbody` runs
+       between the rebinding and the guard's `return`. `join_try_outcome`
+       (`crates/pycc_types/src/exception/try_join.rs`) therefore checks
+       `finalbody` against the conservative join less every name any path
+       rebinds (`apply_finally_kill_prescan`: the try body's, `orelse`'s,
+       and each handler's body and `as` name), as the constraint solver
+       and `pycc_mir`'s `stmt::try_stmt` already compute it.
   3. **Identical logic in both `pycc_types` and `pycc_mir`, sharing only
      the pure `killed_names` predicate via `pycc_hir`** -- the same
      cross-crate split D-205 decision 4 established for

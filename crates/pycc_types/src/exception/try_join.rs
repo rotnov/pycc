@@ -66,12 +66,11 @@ pub(super) struct TryPaths<'a> {
 /// The pre-#1289 conservative join (the body joined like a loop body, then every
 /// handler and `else` like `if` branches) is still computed, with the
 /// first-established types written over its own for every name that is not
-/// an `as` name. It supplies the name set
-/// and buffer provenance, and, less every name any path rebinds
-/// ([`apply_finally_kill_prescan`]), is the entry state of `finally`, which
-/// can be entered after any partial run. When no path falls through, it is
-/// also the
-/// state after the statement. Otherwise `finally` is checked a second time
+/// an `as` name. It supplies the name set and buffer provenance, and, less
+/// every name any path rebinds ([`apply_finally_kill_prescan`]), is the
+/// entry state of `finally`, which can be entered after any partial run.
+/// When no path falls through, it is also the state after the statement.
+/// Otherwise `finally` is checked a second time
 /// against the fall-through join to compute that state; checking twice has
 /// no side effect beyond the environment it mutates.
 ///
