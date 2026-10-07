@@ -3222,6 +3222,7 @@ static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const 
 static int pycc_ext_unpack_instance(PyObject *obj, const char *fn_name, Py_ssize_t index,
                                     const char *class_name, void **out);
 static PyObject *pycc_ext_pack_instance(void *result);
+static int pycc_ext_slot_operand_is(PyObject *other, const char *class_name);
 /*
  * #1455: the `__copy__` every carrier type carries, declared here because
  * the generated per-class method tables in the companion name it and defined
@@ -3359,6 +3360,51 @@ static int pycc_ext_kw_bind_dict(const char *fn_name, const char *const *names, 
         }
     }
     return pycc_ext_kw_finish(fn_name, names, required, slots);
+}
+
+/*
+ * #1427: the `Py_tp_hash` of a carrier type whose class compiles
+ * `__hash__`, finishing what the generated `pycc_ext_hash_<Class>` started:
+ * `res` is the compiled method's packed result (a new reference) or NULL
+ * with the exception it raised. The conversion is CPython's own
+ * `slot_tp_hash`: a non-`int` result is a `TypeError`, an `int` too large
+ * for `Py_hash_t` hashes as that `int` does, and `-1` -- the error
+ * sentinel -- becomes `-2`.
+ */
+static Py_hash_t pycc_ext_hash_result(PyObject *res)
+{
+    Py_hash_t h;
+
+    if (res == NULL) {
+        return -1;
+    }
+    if (!PyLong_Check(res)) {
+        Py_DECREF(res);
+        PyErr_SetString(PyExc_TypeError, "__hash__ method should return an integer");
+        return -1;
+    }
+    h = PyLong_AsSsize_t(res);
+    if (h == -1 && PyErr_Occurred()) {
+        PyErr_Clear();
+        h = PyObject_Hash(res);
+    } else if (h == -1) {
+        h = -2;
+    }
+    Py_DECREF(res);
+    return h;
+}
+
+/*
+ * #1427: `object`'s identity hash, for a carrier type that installs a
+ * `Py_tp_richcompare` while its class binds neither `__eq__` nor
+ * `__hash__` (an `__lt__`-only class). `inherit_slots` never inherits
+ * `tp_hash` next to an overridden `tp_richcompare`, so without this the
+ * type would turn unhashable where CPython's class stays hashable.
+ */
+static Py_hash_t pycc_ext_identity_hash(PyObject *self)
+{
+    hashfunc base = (hashfunc)PyType_GetSlot(&PyBaseObject_Type, Py_tp_hash);
+    return base(self);
 }
 
 #include "pycc_ext_exports.inc"
@@ -3690,6 +3736,33 @@ static int pycc_ext_unpack_instance(PyObject *obj, const char *fn_name, Py_ssize
     }
     Py_DECREF(type_name);
     return -1;
+}
+
+/*
+ * #1427: whether a generated `tp_richcompare` calls its compiled comparison
+ * on `other` when that method's parameter is annotated with the compiled
+ * class `class_name`. An operand `pycc_ext_unpack_instance` would refuse as
+ * the wrong type answers 0, and the slot returns `NotImplemented` -- what a
+ * `@dataclass`'s own `__eq__` returns for another class -- instead of
+ * raising that ingress `TypeError`, so `p == None` is `False` as in CPython.
+ * A carrier of this module that no `tp_init` filled answers 1, so the
+ * wrapper refuses it with its own `uninitialized` message.
+ */
+static int pycc_ext_slot_operand_is(PyObject *other, const char *class_name)
+{
+    void *inst;
+    const unsigned char *cls;
+    size_t len = 0;
+
+    if (PyType_GetSlot(Py_TYPE(other), Py_tp_dealloc) != (void *)pycc_ext_instance_dealloc) {
+        return 0;
+    }
+    inst = ((PyccExtInstance *)other)->inst;
+    if (inst == NULL) {
+        return 1;
+    }
+    cls = pycc_rt_ext_instance_class(inst, &len);
+    return pycc_ext_carrier_class_isinstance(cls, len, class_name);
 }
 
 /*

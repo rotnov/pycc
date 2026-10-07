@@ -410,13 +410,22 @@ fn plan_ext(
     let mut ctors = ext_build::collect_constructors(typed_hir, &publications);
     ext_build::bind_ctor_keyword_names(typed_hir, &signatures, &mut ctors);
     let carriers = ext_build::collect_carrier_classes(typed_hir);
-    let inc_body = ext_build::generate_exports_inc(
+    // #1427: a comparison or hash dunder the artifact cannot install is a
+    // span-less `C0003`, reported exactly as an export gap is.
+    let slot_gaps = ext_build::collect_slot_dunders(typed_hir, &carriers);
+    let slots = slot_gaps.map_err(|gaps| {
+        let failure =
+            frontend::FrontendFailure::compile(&source_path.display().to_string(), "", gaps);
+        ExitCode::from(report_build_failure(failure))
+    })?;
+    let inc_body = ext_build::generate_exports_inc_with_slots(
         &output.module_name,
         &exports,
         &classes,
         &publications,
         &ctors,
         &carriers,
+        &slots,
     );
     write_ext_source(&shim, ext_build::SHIM_C)?;
     write_ext_source(&inc, &inc_body)?;

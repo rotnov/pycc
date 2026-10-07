@@ -408,7 +408,7 @@ pub(crate) fn render_ty(ty: &Ty) -> &'static str {
 
 /// The boundary's carriable signature, as both `C0003` gaps state it.
 /// `docs/RUNTIME.md`'s admissibility matrix is the canonical statement.
-const CARRIABLE_TYPES: &str = "a parameter must be `int`, `float`, `bool`, `str`, `memoryview` \
+pub(crate) const CARRIABLE_TYPES: &str = "a parameter must be `int`, `float`, `bool`, `str`, `memoryview` \
      (or its other spellings `ndarray` and `NDArray`), a CPython object (`Any`, `object`, a \
      foreign class, or a container of objects), an instance of a class compiled in this module \
      (not an enum or an exception class), or a `tuple` of `int`/`float`/`bool`, and a return \
