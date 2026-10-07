@@ -68,6 +68,7 @@ mod hash;
 mod object_box;
 mod object_comprehension;
 mod object_return;
+mod object_unbox;
 mod sequence;
 /// Set insertion, length and iteration helpers, and the insert of a set of
 /// user-class instances (#1343, Part 1 of #1336).
@@ -116,7 +117,9 @@ use ext::{
     EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_OBJECT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL,
     EXT_OBJ_RAISE_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL, EXT_OBJ_SETATTR_SYMBOL,
     EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
-    EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, ObjCollectionKind, entry_fn_name, is_module_entry_symbol,
+    EXT_OBJ_UNBOX_BOOL_SYMBOL, EXT_OBJ_UNBOX_FLOAT_SYMBOL, EXT_OBJ_UNBOX_INSTANCE_SYMBOL,
+    EXT_OBJ_UNBOX_INT_SYMBOL, EXT_OBJ_UNBOX_STR_SYMBOL, EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL,
+    ObjCollectionKind, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
 mod tests;
@@ -1983,6 +1986,12 @@ fn emit_expr_unchecked<'ctx>(
         // `is_owning_producer`/`int_value_is_a_duplicate_reference`
         // classification of this node (mirroring `MirExpr::Name`, not
         // `OptionalWrap`) for the corresponding compile-time classification.
+        // #1476 (Part 3 of #1387): an `object` read an `isinstance` guard
+        // narrowed -- see `object_unbox`.
+        MirExpr::ObjectUnbox(object, inner) => {
+            let object = emit_expr(context, builder, module, rt, user_functions, locals, object);
+            object_unbox::emit_unboxed(context, builder, module, rt, object, inner)
+        }
         MirExpr::OptionalUnwrap(value, inner) => {
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
             let Scalar::Optional(v) = scalar else {
@@ -3843,8 +3852,15 @@ fn emit_expr_unchecked<'ctx>(
         // why that leaves exactly one module-exec failure edge.
         MirExpr::ObjSubscript { base, index } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
-            let index_scalar =
-                emit_expr(context, builder, module, rt, user_functions, locals, index);
+            let index_scalar = object_unbox::emit_pack_operand(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                index,
+            );
             foreign_call::emit_subscript(context, builder, module, rt, base_scalar, index_scalar)
         }
         // Part 1 of #1371: a comparison or identity test with a CPython
@@ -3855,8 +3871,17 @@ fn emit_expr_unchecked<'ctx>(
         // CPython's `None` instead). `foreign_compare` carries the rest.
         MirExpr::ObjCompare { op, left, right } => {
             let operand = |expr: &MirExpr| {
-                (!matches!(expr, MirExpr::NoneLiteral))
-                    .then(|| emit_expr(context, builder, module, rt, user_functions, locals, expr))
+                (!matches!(expr, MirExpr::NoneLiteral)).then(|| {
+                    object_unbox::emit_pack_operand(
+                        context,
+                        builder,
+                        module,
+                        rt,
+                        user_functions,
+                        locals,
+                        expr,
+                    )
+                })
             };
             let l = operand(left);
             let pending_l =
@@ -3880,7 +3905,15 @@ fn emit_expr_unchecked<'ctx>(
             item,
             container,
         } => {
-            let item_scalar = emit_expr(context, builder, module, rt, user_functions, locals, item);
+            let item_scalar = object_unbox::emit_pack_operand(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                item,
+            );
             let pending = push_pending_int_release_if_scalar_temporary(rt, item, &item_scalar);
             let container_scalar = emit_expr(
                 context,
@@ -3931,7 +3964,7 @@ fn emit_expr_unchecked<'ctx>(
             let mut pendings = Vec::with_capacity(elements.len());
             let mut scalars = Vec::with_capacity(elements.len());
             for element in elements {
-                let scalar = emit_expr(
+                let scalar = object_unbox::emit_pack_operand(
                     context,
                     builder,
                     module,

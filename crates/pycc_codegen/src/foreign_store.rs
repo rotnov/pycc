@@ -48,7 +48,15 @@ pub(super) fn emit_set_attr<'ctx>(
     attr: &str,
     value: &MirExpr,
 ) {
-    let value_scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
+    let value_scalar = crate::object_unbox::emit_pack_operand(
+        context,
+        builder,
+        module,
+        rt,
+        user_functions,
+        locals,
+        value,
+    );
     let pending = push_pending_int_release_if_scalar_temporary(rt, value, &value_scalar);
     let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
     pop_pending_int_release(rt, pending);

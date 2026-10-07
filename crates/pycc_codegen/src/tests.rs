@@ -49,6 +49,7 @@ mod object_list_display;
 mod object_attr_store;
 // #1475: boxing a native value into an `object` slot.
 mod object_box;
+mod object_unbox;
 // Part 2b of #1371: membership in, and slices of, a CPython object.
 mod object_membership_slice;
 mod object_raise;

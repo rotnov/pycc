@@ -64,6 +64,12 @@
 //! - `raise` in a branch does not count as a terminator for the
 //!   early-return continuation shape; only `return` (directly, or via an
 //!   exhaustive nested `if`) does.
+//! - Since #1476 (Part 3 of #1387) a second recognizer,
+//!   `pycc_hir::isinstance_test`, narrows an `object` name to a native type
+//!   under `isinstance(name, C)` (the body) or `not isinstance(name, C)`
+//!   (the `orelse`, and the continuation after a body that definitely
+//!   terminates). The same scope cuts apply: no `and`/`or`, no tuple of
+//!   classes.
 //! - No narrowing-to-`None` shape: `if name is not None: ... else: <use
 //!   name as None>` is not implemented (there is no `Ty::None`-typed
 //!   *narrowing* target in this design -- `Ty::None` already exists as a
@@ -74,17 +80,30 @@
 use crate::env::{BindingState, Environment};
 use crate::{check_stmt, check_stmt_in_function};
 use pycc_diag::Diagnostic;
-use pycc_hir::{HirStmt, NoneTestPolarity, Ty, optional_none_test};
+use pycc_hir::{
+    HirStmt, IsInstancePolarity, NoneTestPolarity, Ty, isinstance_narrow_target, isinstance_test,
+    optional_none_test,
+};
 use std::collections::HashMap;
 
+/// Which branch of an `if` a recognized test narrows: the `body` (`x is
+/// not None`, `isinstance(x, C)`) or the `orelse` (`x is None`, `not
+/// isinstance(x, C)`). Only an `Orelse` test narrows the continuation after
+/// an `if` whose body definitely terminates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NarrowSide {
+    Body,
+    Orelse,
+}
+
 /// The result of recognizing an `if` statement's `test` as a
-/// narrowing-eligible shape: the bare name, the `Optional`'s inner type
-/// (from `env`'s *current* knowledge of the name, before the `if`), and
-/// the test's polarity.
+/// narrowing-eligible shape: the bare name, the type it narrows to (the
+/// `Optional`'s inner type, or since #1476 the native type an `object`
+/// narrows to under `isinstance`), and the branch it narrows.
 pub(crate) struct NarrowingTarget {
     pub(crate) name: String,
     pub(crate) inner: Ty,
-    pub(crate) polarity: NoneTestPolarity,
+    pub(crate) side: NarrowSide,
 }
 
 /// Recognizes `test` as a top-level `name is None` / `name is not None`
@@ -99,15 +118,55 @@ pub(crate) fn narrowing_target(
     env: &Environment,
     test: &pycc_hir::HirExpr,
 ) -> Option<NarrowingTarget> {
-    let (name, polarity) = optional_none_test(test)?;
-    match env.lookup_any(name) {
-        Some(Ty::Optional(inner)) => Some(NarrowingTarget {
-            name: name.to_string(),
-            inner: *inner,
-            polarity,
-        }),
-        _ => None,
+    if let Some((name, polarity)) = optional_none_test(test) {
+        return match env.lookup_any(name) {
+            Some(Ty::Optional(inner)) => Some(NarrowingTarget {
+                name: name.to_string(),
+                inner: *inner,
+                side: match polarity {
+                    NoneTestPolarity::IsNot => NarrowSide::Body,
+                    NoneTestPolarity::Is => NarrowSide::Orelse,
+                },
+            }),
+            _ => None,
+        };
     }
+    isinstance_narrowing_target(env, test)
+}
+
+/// #1476 (Part 3 of #1387): `isinstance(name, C)` / `not isinstance(name,
+/// C)` where `name` is declared `object`, `isinstance` is the builtin, and
+/// `C` is an unshadowed builtin scalar or admissible compiled class
+/// (`pycc_hir::isinstance_narrow_target`).
+fn isinstance_narrowing_target(
+    env: &Environment,
+    test: &pycc_hir::HirExpr,
+) -> Option<NarrowingTarget> {
+    let (name, class, polarity) = isinstance_test(test)?;
+    if env.lookup_function("isinstance").is_some()
+        || env.lookup_any(name) != Some(Ty::Object)
+        || env.lookup_any(class).is_some()
+    {
+        return None;
+    }
+    let inner = isinstance_narrow_target(class, |class| env.lookup_class(class))?;
+    Some(NarrowingTarget {
+        name: name.to_string(),
+        inner,
+        side: match polarity {
+            IsInstancePolarity::Positive => NarrowSide::Body,
+            IsInstancePolarity::Negated => NarrowSide::Orelse,
+        },
+    })
+}
+
+/// #1476: whether `value` is a bare read of a name the overlay narrows from
+/// a declared `object` -- the value the first-binding rule keeps at
+/// `object` (`check_assignment`), so that a branch binding the same local
+/// from the unnarrowed name still joins.
+pub(crate) fn is_bare_narrowed_object_read(env: &Environment, value: &pycc_hir::HirExpr) -> bool {
+    matches!(value, pycc_hir::HirExpr::Name(name)
+        if env.narrowed.contains_key(name) && env.lookup_any(name) == Some(Ty::Object))
 }
 
 /// Applies in-branch narrowing (item 1 of the design) to a `if`
@@ -123,18 +182,49 @@ pub(crate) fn apply_branch_narrowing(
     orelse_env: &mut Environment,
     target: &NarrowingTarget,
 ) {
-    match target.polarity {
-        NoneTestPolarity::IsNot => {
+    match target.side {
+        NarrowSide::Body => {
             body_env
                 .narrowed
                 .insert(target.name.clone(), target.inner.clone());
         }
-        NoneTestPolarity::Is => {
+        NarrowSide::Orelse => {
             orelse_env
                 .narrowed
                 .insert(target.name.clone(), target.inner.clone());
         }
     }
+}
+
+/// #1476: ends the narrowing an `if` applied to one of its branches when
+/// that branch ends, restoring the name's pre-`if` overlay entry, so that
+/// the join intersects what each branch leaves of the *enclosing*
+/// narrowing. Without it, `isinstance(o, bool)` nested under an `int`
+/// guard leaves `bool` in its body, the join meets `bool` against the
+/// other branch's `int`, and drops the outer guard's narrowing for the rest
+/// of its region. A branch that rebinds the name keeps its own state, which
+/// the join then reconciles as before.
+pub(crate) fn end_branch_narrowing(
+    env: &Environment,
+    body_env: &mut Environment,
+    orelse_env: &mut Environment,
+    target: &NarrowingTarget,
+    body: &[HirStmt],
+    orelse: &[HirStmt],
+) {
+    let (branch_env, branch) = match target.side {
+        NarrowSide::Body => (body_env, body),
+        NarrowSide::Orelse => (orelse_env, orelse),
+    };
+    if pycc_hir::killed_names(branch).contains(&target.name) {
+        return;
+    }
+    match env.narrowed.get(&target.name) {
+        Some(outer) => branch_env
+            .narrowed
+            .insert(target.name.clone(), outer.clone()),
+        None => branch_env.narrowed.remove(&target.name),
+    };
 }
 
 /// True only when `body`'s control flow unconditionally terminates the
@@ -176,7 +266,7 @@ pub(crate) fn apply_post_if_narrowing(env: &mut Environment, stmt: &HirStmt) {
     let Some(target) = narrowing_target(env, test) else {
         return;
     };
-    if matches!(target.polarity, NoneTestPolarity::Is) && definitely_terminates(body) {
+    if target.side == NarrowSide::Orelse && definitely_terminates(body) {
         env.narrowed.insert(target.name, target.inner);
     }
 }

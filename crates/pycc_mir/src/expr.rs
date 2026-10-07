@@ -12,8 +12,8 @@ use super::{
 };
 use crate::receiver_exact::{exact_callee, receiver_class};
 use pycc_hir::{
-    BinOpKind, ClassAttrValue, CompElt, ContainerReceiver, FStringPart, HirExpr, Ty, UnaryOpKind,
-    declares_name_outside_class_attrs,
+    BinOpKind, ClassAttrValue, CmpOpKind, CompElt, ContainerReceiver, FStringPart, HirExpr, Ty,
+    UnaryOpKind, declares_name_outside_class_attrs,
 };
 use std::collections::HashMap;
 
@@ -130,15 +130,12 @@ pub(super) fn lower_expr(
         // still-`Optional` declared representation looked up via `lookup`
         // just below. Checked before the plain `Name` arm so a narrowed
         // read never falls through to it.
+        //
+        // #1476: over an `object` slot narrowed by an `isinstance` guard the
+        // read is an `ObjectUnbox` instead (`crate::object_narrow`).
         HirExpr::Name(name) if super::narrowed_ty(scopes, name).is_some() => {
             let inner = super::narrowed_ty(scopes, name).expect("just matched Some above");
-            MirExpr::OptionalUnwrap(
-                Box::new(MirExpr::Name {
-                    name: name.clone(),
-                    ty: lookup(scopes, name),
-                }),
-                Box::new(inner),
-            )
+            super::object_narrow::narrowed_read(name, lookup(scopes, name), inner)
         }
         HirExpr::Name(name) => MirExpr::Name {
             name: name.clone(),
@@ -596,8 +593,14 @@ pub(super) fn lower_expr(
             }
         }
         HirExpr::Compare { op, left, right } => {
-            let left_lowered = lower_expr(left, scopes, classes, current_class);
-            let right_lowered = lower_expr(right, scopes, classes, current_class);
+            let mut left_lowered = lower_expr(left, scopes, classes, current_class);
+            let mut right_lowered = lower_expr(right, scopes, classes, current_class);
+            // #1476: an identity test compares the objects themselves, never
+            // a narrowed native copy, so both narrowed operands are read raw.
+            if matches!(op, CmpOpKind::Is | CmpOpKind::IsNot) {
+                left_lowered = super::object_narrow::object_operand(left_lowered);
+                right_lowered = super::object_narrow::object_operand(right_lowered);
+            }
             // Part 1 of #1371: an object operand takes CPython's own
             // comparison, never the native one below.
             let (left_lowered, right_lowered) =

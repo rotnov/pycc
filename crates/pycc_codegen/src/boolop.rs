@@ -84,6 +84,21 @@ impl<'ctx> Emitter<'_, 'ctx> {
         )
     }
 
+    /// Emits an operand of an `object`-valued node: a narrowed `object`
+    /// read stays the object it is (`object_unbox::emit_pack_operand`), so
+    /// its truth is CPython's and boxing it re-packs the same object.
+    fn emit_object_operand(&self, expr: &MirExpr) -> Scalar<'ctx> {
+        crate::object_unbox::emit_pack_operand(
+            self.context,
+            self.builder,
+            self.module,
+            self.rt,
+            self.user_functions,
+            self.locals,
+            expr,
+        )
+    }
+
     pub(super) fn truth(&self, scalar: Scalar<'ctx>) -> IntValue<'ctx> {
         truthy(self.context, self.builder, self.module, self.rt, scalar)
     }
@@ -199,7 +214,15 @@ fn emit_value<'ctx>(
     right: &MirExpr,
     ty: &Ty,
 ) -> Scalar<'ctx> {
-    let left_scalar = emitter.emit(left);
+    // #1476: an `object` result keeps a narrowed operand's own object.
+    let emit_operand = |operand: &MirExpr| {
+        if *ty == Ty::Object {
+            emitter.emit_object_operand(operand)
+        } else {
+            emitter.emit(operand)
+        }
+    };
+    let left_scalar = emit_operand(left);
     let left_truth = emitter.truth(left_scalar);
     let take_left = emitter.new_block("boolop_take_left");
     let eval_right = emitter.new_block("boolop_eval_right");
@@ -219,7 +242,7 @@ fn emit_value<'ctx>(
         left,
         &left_scalar,
     );
-    let right_scalar = emitter.emit(right);
+    let right_scalar = emit_operand(right);
     let right_value = if needs_boxing(right, ty) {
         boxed_value(emitter, right, right_scalar)
     } else {

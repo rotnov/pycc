@@ -290,6 +290,7 @@ pub(crate) fn infer_function_signatures_with_solver_all(
         // #1420: the `MethodCall` arm resolves a method on a user-class
         // instance through the module's own class table.
         class_defs: &hir.class_defs,
+        narrowed: HashMap::new(),
     };
     // Part 1 of #1026: a foreign import binds a definite name whose type is
     // `Ty::Object`. It is recorded in `opaque_bindings` so that every piece
@@ -375,6 +376,8 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             shadowed_producers: globals.shadowed_producers.clone(),
             finals: HashSet::new(),
             class_defs: globals.class_defs,
+            // #1476: a module-scope narrowing never reaches a function body.
+            narrowed: HashMap::new(),
         };
         for local_name in local_names.iter().copied() {
             env.bindings.remove(local_name);

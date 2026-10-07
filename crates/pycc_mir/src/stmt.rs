@@ -76,7 +76,23 @@ pub(super) fn lower_stmt(
             MirStmt::ExprStmt(expr)
         }
         HirStmt::Assign { target, value } => {
+            // #1476: a local's first binding from a bare narrowed `object`
+            // read keeps the object, so the slot is declared `object` as
+            // `pycc_types`' first-binding rule declares it. "First" means no
+            // earlier binding anywhere in the current frame, which -- the
+            // frame being per function, never per branch -- matches the
+            // checker's `lookup_any`, maybe-bound sibling branches included.
+            let first_object_binding = !scopes
+                .last()
+                .expect("at least one scope is always present")
+                .contains_key(target)
+                && super::object_narrow::is_bare_narrowed_object_read(value, scopes);
             let value = lower_expr(value, scopes, classes, current_class);
+            let value = if first_object_binding {
+                super::object_narrow::object_operand(value)
+            } else {
+                value
+            };
             // D-197 follow-up (#763/#770 review): if `target` is already
             // scoped as `Optional[inner]` -- from an earlier `AnnAssign`,
             // valued or not -- and this plain reassignment's own value
@@ -314,28 +330,37 @@ pub(super) fn lower_stmt(
             // its own, separate `narrowed` overlay). `test` here is the
             // original (pre-lowering) HIR node, matching the checker's own
             // recognizer, which is also HIR-level.
-            let narrowing = pycc_hir::optional_none_test(test).and_then(|(name, polarity)| {
-                match lookup(scopes, name) {
-                    Ty::Optional(inner) => Some((name.to_string(), polarity, *inner)),
-                    _ => None,
+            //
+            // #1476: `[not] isinstance(name, C)` on an `object` name narrows
+            // the same way (`crate::object_narrow::narrowing_target`).
+            let narrowing = super::object_narrow::narrowing_target(test, scopes, classes);
+            let narrow_for = |side| match &narrowing {
+                Some((name, inner, narrowed)) if *narrowed == side => {
+                    Some((name.as_str(), inner.clone()))
                 }
-            });
-            let narrows_body = matches!(narrowing, Some((_, pycc_hir::NoneTestPolarity::IsNot, _)));
-            let narrows_orelse = matches!(narrowing, Some((_, pycc_hir::NoneTestPolarity::Is, _)));
+                _ => None,
+            };
+            let before = super::narrowing_snapshot(scopes);
+            let body_narrow = narrow_for(super::object_narrow::NarrowSide::Body);
+            let (body_hir, orelse_hir) = (body, orelse);
+            let (body, mut body_end) =
+                super::lower_scoped_body(body_hir, scopes, classes, current_class, body_narrow);
 
-            let body_narrow = narrows_body.then(|| {
-                let (name, _, inner) = narrowing.as_ref().expect("narrows_body implies Some");
-                (name.as_str(), inner.clone())
-            });
-            let (body, body_end) =
-                super::lower_scoped_body(body, scopes, classes, current_class, body_narrow);
-
-            let orelse_narrow = narrows_orelse.then(|| {
-                let (name, _, inner) = narrowing.as_ref().expect("narrows_orelse implies Some");
-                (name.as_str(), inner.clone())
-            });
-            let (orelse, orelse_end) =
-                super::lower_scoped_body(orelse, scopes, classes, current_class, orelse_narrow);
+            let orelse_narrow = narrow_for(super::object_narrow::NarrowSide::Orelse);
+            let (orelse, mut orelse_end) =
+                super::lower_scoped_body(orelse_hir, scopes, classes, current_class, orelse_narrow);
+            // #1476: the guard's own narrowing ends with its branch, so the
+            // narrowed branch joins with the name's pre-`if` state -- a
+            // nested `isinstance(o, bool)` under an `isinstance(o, int)`
+            // guard keeps `o` an `int` after it. Mirrors
+            // `pycc_types::narrow::end_branch_narrowing`.
+            if let Some((name, _, side)) = &narrowing {
+                let (end, branch) = match side {
+                    super::object_narrow::NarrowSide::Body => (&mut body_end, body_hir),
+                    super::object_narrow::NarrowSide::Orelse => (&mut orelse_end, orelse_hir),
+                };
+                super::end_branch_narrowing(&before, end, name, branch);
+            }
 
             // Blocker fix (D-068 review of #780): an `if` always runs
             // exactly one of `body`/`orelse`, never neither, so the

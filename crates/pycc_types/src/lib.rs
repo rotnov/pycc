@@ -1033,6 +1033,18 @@ fn check_assignment_boxing(
     ty: Ty,
     value: &HirExpr,
 ) -> Result<(), Diagnostic> {
+    // #1476 (Part 3 of #1387): a local's first binding fixes its type, so a
+    // bare read of an `object` name narrowed by an `isinstance` guard
+    // declares the local `object`, as it did before the guard narrowed
+    // anything. Otherwise `if isinstance(o, int): y = o` / `else: y = o`
+    // would turn a program that compiles into a `T0023`. Every other use of
+    // the narrowed name keeps its native type.
+    let ty = if env.lookup_any(target).is_none() && narrow::is_bare_narrowed_object_read(env, value)
+    {
+        Ty::Object
+    } else {
+        ty
+    };
     check_assignment_of(env, target, ty, Some(value))
 }
 
@@ -2180,6 +2192,16 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                 }
                 narrow::check_stmt_sequence(&mut body_env, body)?;
                 narrow::check_stmt_sequence(&mut orelse_env, orelse)?;
+                if let Some(target) = &narrowing {
+                    narrow::end_branch_narrowing(
+                        env,
+                        &mut body_env,
+                        &mut orelse_env,
+                        target,
+                        body,
+                        orelse,
+                    );
+                }
                 join_if_branches(env, &body_env, &orelse_env)
             }
         }
@@ -2995,6 +3017,16 @@ fn check_stmt_in_function(
                     orelse,
                     return_ty.clone(),
                 )?;
+                if let Some(target) = &narrowing {
+                    narrow::end_branch_narrowing(
+                        env,
+                        &mut body_env,
+                        &mut orelse_env,
+                        target,
+                        body,
+                        orelse,
+                    );
+                }
                 join_if_branches(env, &body_env, &orelse_env)
             }
         }

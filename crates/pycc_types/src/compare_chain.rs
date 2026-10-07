@@ -31,6 +31,17 @@ pub(crate) fn compare_link_ty(
     // admits a single comparison between two non-literal operands, and
     // `foreign::compare::general_identity_ty` admits only two objects.
     if matches!(op, CmpOp::Is | CmpOp::IsNot) {
+        // #1476: identity is the object's own, so a narrowed `object` name
+        // is typed as the object it still is, never its narrowed native
+        // copy (`pycc_mir` reads it raw the same way).
+        let raw_ty = |operand: &HirExpr, ty: &Ty| {
+            if crate::narrow::is_bare_narrowed_object_read(env, operand) {
+                Ty::Object
+            } else {
+                ty.clone()
+            }
+        };
+        let (left_ty, right_ty) = (&raw_ty(left, left_ty), &raw_ty(right, right_ty));
         let other_ty = if matches!(left, HirExpr::NoneLiteral) {
             right_ty
         } else if matches!(right, HirExpr::NoneLiteral) {

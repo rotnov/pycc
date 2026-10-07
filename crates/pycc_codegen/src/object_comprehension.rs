@@ -115,7 +115,15 @@ pub(super) fn emit_object_comprehension<'ctx>(
         builder.position_at_end(keep_bb);
     }
 
-    let scalar = emit(elt);
+    let scalar = crate::object_unbox::emit_pack_operand(
+        context,
+        builder,
+        module,
+        rt,
+        cx.user_functions,
+        cx.locals,
+        elt,
+    );
     let item = emit_pack(context, builder, module, scalar, "objcomp_item");
     release_scalar_if_int_temporary(context, builder, rt, elt, &scalar);
     let collect = shim_fn(

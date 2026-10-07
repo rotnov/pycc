@@ -2763,6 +2763,116 @@ int pycc_ext_obj_to_str(PyObject *o, void **out)
 }
 
 /*
+ * #1476 (Part 3 of #1387): the read of an `object` name an
+ * `isinstance(o, int|float|bool|str)` guard narrowed back to a native type
+ * (`EXT_OBJ_UNBOX_*_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * Each helper writes the native value through `*out` and answers `0`, or
+ * answers `-1` with a CPython exception set. Unlike the explicit
+ * conversions above, the narrowed read is an *implicit* crossing, so each
+ * helper keeps the closed D-244 rule-7 check of the matching thunk-seam
+ * unpacker (`pycc_ext_unpack_int_at`, `_float_at`, `_bool_at`, `_str`)
+ * rather than CPython's conversion protocol: the guard has already
+ * established the type, so the check only refuses an object whose class
+ * was reassigned in between, and a `bool` under an `int` guard keeps its
+ * D-141 marker word. The thunk-seam unpackers themselves stay unchanged,
+ * because their messages name an argument position this read has none of.
+ *
+ * `int` has no bigint path: a value outside pycc's inline-integer range
+ * `[-2**62, 2**62-1]` raises `OverflowError` citing #1040, as at every other
+ * `ext` crossing. A `str` (or `str` subclass) is copied into a fresh pycc
+ * `PyStrObj` at refcount 1, the ownership `pycc_ext_obj_to_str` documents;
+ * the copy completes while the caller still holds `o`. Nothing here takes a
+ * CPython reference, so nothing joins the #1092 leak-only set.
+ */
+static int pycc_ext_obj_unbox_refuse(PyObject *o, const char *wanted)
+{
+    PyObject *type_name = PyType_GetName(Py_TYPE(o));
+
+    if (type_name == NULL) {
+        return -1;
+    }
+    PyErr_Format(PyExc_TypeError,
+                 "narrowed object is no longer %s: '%U' object (its class changed after "
+                 "the isinstance() guard)",
+                 wanted, type_name);
+    Py_DECREF(type_name);
+    return -1;
+}
+
+int pycc_ext_obj_unbox_int(PyObject *o, long long *out)
+{
+    long long raw;
+    int overflow = 0;
+
+    if (o == NULL || out == NULL) {
+        return -1;
+    }
+    if (PyBool_Check(o)) {
+        *out = pycc_rt_ext_bool_encode(o == Py_True);
+        return 0;
+    }
+    if (!PyLong_Check(o)) {
+        return pycc_ext_obj_unbox_refuse(o, "an int");
+    }
+    raw = PyLong_AsLongLongAndOverflow(o, &overflow);
+    if (raw == -1 && PyErr_Occurred()) {
+        return -1;
+    }
+    if (overflow != 0 || pycc_rt_ext_int_encode(raw, out) != 0) {
+        PyErr_SetString(PyExc_OverflowError,
+                        "an int narrowed by isinstance() is outside the inline-integer range "
+                        "[-2**62, 2**62-1] this pycc version's `ext` boundary supports "
+                        "(see #1040)");
+        return -1;
+    }
+    return 0;
+}
+
+int pycc_ext_obj_unbox_float(PyObject *o, double *out)
+{
+    if (o == NULL || out == NULL) {
+        return -1;
+    }
+    if (!PyFloat_Check(o)) {
+        return pycc_ext_obj_unbox_refuse(o, "a float");
+    }
+    *out = PyFloat_AsDouble(o);
+    return 0;
+}
+
+int pycc_ext_obj_unbox_bool(PyObject *o, char *out)
+{
+    if (o == NULL || out == NULL) {
+        return -1;
+    }
+    if (!PyBool_Check(o)) {
+        return pycc_ext_obj_unbox_refuse(o, "a bool");
+    }
+    *out = (char)(o == Py_True);
+    return 0;
+}
+
+int pycc_ext_obj_unbox_str(PyObject *o, void **out)
+{
+    const char *utf8;
+    Py_ssize_t size;
+
+    if (o == NULL || out == NULL) {
+        return -1;
+    }
+    if (!PyUnicode_Check(o)) {
+        return pycc_ext_obj_unbox_refuse(o, "a str");
+    }
+    utf8 = PyUnicode_AsUTF8AndSize(o, &size);
+    if (utf8 == NULL) {
+        return -1;
+    }
+    *out = pycc_rt_str_from_literal((const unsigned char *)utf8, (long long)size);
+    return 0;
+}
+
+/*
  * #1340: an f-string interpolation `f"{o}"` of a CPython object
  * (`EXT_OBJ_FORMAT_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *
@@ -3759,6 +3869,65 @@ static int pycc_ext_unpack_instance(PyObject *obj, const char *fn_name, Py_ssize
     } else {
         PyErr_Format(PyExc_TypeError, "%s() argument %zd must be %s.%s, not %U", fn_name,
                      index + 1, PYCC_EXT_MODULE_NAME_STR, class_name, type_name);
+    }
+    Py_DECREF(type_name);
+    return -1;
+}
+
+/*
+ * #1476 (Part 3 of #1387): the read of an `object` name an
+ * `isinstance(o, C)` guard narrowed to a regular class `C` compiled in this
+ * module (`EXT_OBJ_UNBOX_INSTANCE_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`). Writes the compiled instance the
+ * carrier holds through `*out` and answers `0`, or answers `-1` with a
+ * `TypeError` set.
+ *
+ * `pycc_ext_unpack_instance`'s exact admission -- a carrier of *this*
+ * module whose instance's run-time class has `class_name` on its MRO -- with
+ * messages that name no argument position. The guard (`PyObject_IsInstance`
+ * against the published carrier types) also holds for a carrier no
+ * `tp_init` filled (`C.__new__(C)`), refused with a `TypeError` where
+ * CPython would raise `AttributeError` at the first field read. A host-side
+ * Python subclass cannot reach here: a carrier type is not an acceptable
+ * base type, so the dealloc-slot test only rejects it defensively.
+ *
+ * The instance is borrowed, as at the argument ingress: compiled instances
+ * are never freed (D-107, D-154), and the carrier's link to it is weak.
+ */
+int pycc_ext_obj_unbox_instance(PyObject *o, const char *class_name, void **out)
+{
+    PyObject *type_name;
+    void *inst = NULL;
+    const unsigned char *cls;
+    size_t len = 0;
+    int carrier;
+
+    if (o == NULL || class_name == NULL || out == NULL) {
+        return -1;
+    }
+    carrier = PyType_GetSlot(Py_TYPE(o), Py_tp_dealloc) == (void *)pycc_ext_instance_dealloc;
+    if (carrier) {
+        inst = ((PyccExtInstance *)o)->inst;
+        if (inst != NULL) {
+            cls = pycc_rt_ext_instance_class(inst, &len);
+            if (pycc_ext_carrier_class_isinstance(cls, len, class_name)) {
+                *out = inst;
+                return 0;
+            }
+        }
+    }
+    type_name = PyType_GetFullyQualifiedName(Py_TYPE(o));
+    if (type_name == NULL) {
+        return -1;
+    }
+    if (carrier && inst == NULL) {
+        PyErr_Format(PyExc_TypeError,
+                     "the narrowed %U object is uninitialized (its __init__ never ran)",
+                     type_name);
+    } else {
+        PyErr_Format(PyExc_TypeError,
+                     "narrowed object must be a compiled %s.%s instance, not %U",
+                     PYCC_EXT_MODULE_NAME_STR, class_name, type_name);
     }
     Py_DECREF(type_name);
     return -1;
