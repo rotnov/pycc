@@ -40,7 +40,8 @@ pub(super) fn unsupported_statement(other: &Stmt, in_function: bool) -> Diagnost
         Stmt::Import(_) | Stmt::ImportFrom(_) => {
             "an `import` inside a block body \
              (only a module-level import, a CPython-backed `import X`, `import X as Y` \
-             or `from X import a, b` inside a module-level `if` or `try` block, or an import inside an \
+             or a CPython-backed `from X import a, b` inside a module-level `if` or `try` block, \
+             or an import inside an \
              `if TYPE_CHECKING:` guard, is supported)"
         }
         _ => pycc_ast::stmt_kind_name(other),

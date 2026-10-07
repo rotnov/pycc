@@ -458,3 +458,50 @@ fn an_embedded_build_runs_a_nested_from_import_like_cpython() {
     assert_eq!(stdout_of(&embedded), stdout_of(&reference));
     assert_eq!(stdout_of(&embedded), "(0.5, 0.5, 0.5)\ndone\n");
 }
+
+/// Under `--ext --foreign-relative-imports` the entry module's relative
+/// from-import may stand in a module-level `if`/`try` block too: it resolves
+/// against the package the artifact is imported under, an untaken branch
+/// imports nothing, and a missing sibling's `ModuleNotFoundError` is caught
+/// by `except ImportError`, exactly as the same `.py` installed there.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_nested_relative_from_import_binds_the_host_package_s_object() {
+    let dir = ScratchDir::new("block_from_relative").expect("scratch");
+    let artifact = if cfg!(windows) { "m.pyd" } else { "m.abi3.so" };
+    for (file, text) in [("top/__init__.py", ""), ("top/sib.py", "x = 41\n")] {
+        let path = dir.join(file);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&path, text).expect("write the package");
+    }
+    std::fs::create_dir_all(dir.join("src")).expect("mkdir src");
+    let body = "try:\n    from .sib import x\n    print(str(x))\n\
+                except ImportError:\n    print('no sib')\n\
+                try:\n    from .absent import q\n    print(str(q))\n\
+                except ImportError:\n    print('no absent')\n\
+                if False:\n    from .gone import g\nprint('done')\n";
+    let src = source(&dir.join("src"), body);
+    let build = pycc()
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(dir.join("src").join("m"))
+        .args(["--ext", "--foreign-relative-imports"])
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    let script = "import importlib\nimportlib.import_module('top.m')\n";
+    std::fs::copy(&src, dir.join("top/m.py")).expect("install m.py");
+    let reference = python(&dir, script);
+    std::fs::remove_file(dir.join("top/m.py")).expect("remove m.py");
+    std::fs::copy(
+        dir.join("src").join(artifact),
+        dir.join("top").join(artifact),
+    )
+    .expect("install the artifact");
+    let hosted = python(&dir, script);
+    assert_ok(&reference);
+    assert_ok(&hosted);
+    assert_eq!(stdout_of(&hosted), stdout_of(&reference));
+    assert_eq!(stdout_of(&hosted), "41\nno absent\ndone\n");
+}

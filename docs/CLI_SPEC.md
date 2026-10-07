@@ -269,8 +269,10 @@ directory once project mode exists.
                     `--lib` once that flag exists.
 --foreign-relative-imports
                     `--ext` only (exit 2 without it): the entry module's
-                    top-level relative from-imports (`from .x import a`,
-                    `from .. import m`, `from .sub.leaf import z`) bind
+                    relative from-imports (`from .x import a`,
+                    `from .. import m`, `from .sub.leaf import z`), at top
+                    level or nested in a module-level `if`/`try` block
+                    (#1383), bind
                     CPython objects of the package the artifact is imported
                     under, typed `object` like any other foreign
                     from-import (#1278), instead of project modules (the
@@ -286,8 +288,8 @@ directory once project mode exists.
                     changes nothing. A dependency module's relative imports
                     stay project imports (its body runs with the entry
                     module's globals, so it has no package of its own), and
-                    aliasing, `*`, and a relative import nested in a block
-                    keep their `C0001`s. `check`, `run`, `lock` and a native
+                    aliasing, `*`, and a relative import inside a function
+                    body keep their `C0001`s. `check`, `run`, `lock` and a native
                     `build` have no counterpart and keep D-222, so `pycc
                     check` of such a module still reports `T0021` or links
                     the sibling. An entry module whose only non-`pycc_std`
