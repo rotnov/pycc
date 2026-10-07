@@ -261,8 +261,14 @@ static Py_tss_t *pycc_ext_bridge_key = NULL;
  * inside the body's own `__import__`. The key is file-static, and each
  * artifact compiles its own copy of this shim, so another pycc artifact's
  * exec never touches it. Created once per process next to
- * `pycc_ext_bridge_key`, on the same never-replaced rule; the embedded
- * launcher never emits a relative import, so it never reads it.
+ * `pycc_ext_bridge_key`, on the same never-replaced rule.
+ *
+ * #1199: `pycc_ext_publish` reads it too, to find the module a top-level
+ * definition is bound on -- but only after the name it was handed resolved
+ * against this artifact's own export and class tables. The embedded
+ * launcher runs its program as `__main__` with both tables empty, so every
+ * publication call it makes is a no-op that never reads the key, and it
+ * never emits a relative import either.
  */
 static Py_tss_t *pycc_ext_exec_target_key = NULL;
 
@@ -4398,6 +4404,115 @@ static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const 
 
 
 /*
+ * #1199: binds one top-level definition on the executing module, called by
+ * LLVM-generated code right after the definition's `fnptr_` slot store (and
+ * after the last slot of a class statement), so the name becomes a module
+ * attribute exactly when CPython would bind it. Before #1199 every export
+ * was published before the body ran, and a foreign module that imported
+ * this one back mid-body could call a wrapper whose slot was still null.
+ *
+ * The name is resolved first, against `pycc_ext_methods[]` (module-level
+ * functions; never the PEP 562 hook table, which the exec slot adds after
+ * the body) and then the generated published-class lookup. A name in
+ * neither -- a function the driver did not export, or anything at all in
+ * the embedded launcher, whose tables are empty -- is not an error: codegen
+ * publishes from the MIR alone and may name a superset of the exports, so
+ * the answer is 0 without touching any state. Only a resolved name reads
+ * the exec-target key, and a NULL target there (no `Py_mod_exec` running
+ * on this thread) is a `SystemError`.
+ *
+ * A function becomes a `builtin_function_or_method` bound to the module,
+ * exactly what `PyModule_AddFunctions` would have made of the same row; a
+ * redefinition publishes again and replaces it, as rebinding a name does.
+ * A class is bound from its `pycc_ext_type_object_<Class>` static, which
+ * `pycc_ext_register_method_types` filled before the body.
+ *
+ * Returns 0, or -1 with an exception set. Not `static`: LLVM-generated code
+ * declares and calls it by this name (`EXT_PUBLISH_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`).
+ */
+int pycc_ext_publish(const char *name)
+{
+    PyMethodDef *row = NULL;
+    PyMethodDef *def;
+    PyObject **class_slot = NULL;
+    PyObject *module;
+    PyObject *modname;
+    PyObject *func;
+    int status;
+
+    for (def = pycc_ext_methods; def->ml_name != NULL; def++) {
+        if (strcmp(def->ml_name, name) == 0) {
+            row = def;
+            break;
+        }
+    }
+    if (row == NULL) {
+        class_slot = pycc_ext_publish_class_slot(name);
+        if (class_slot == NULL) {
+            return 0;
+        }
+    }
+    module = pycc_ext_exec_target_key == NULL
+        ? NULL
+        : (PyObject *)PyThread_tss_get(pycc_ext_exec_target_key);
+    if (module == NULL) {
+        PyErr_Format(PyExc_SystemError, "pycc: cannot publish '%s' outside its module body", name);
+        return -1;
+    }
+    if (row == NULL) {
+        if (*class_slot == NULL) {
+            PyErr_Format(PyExc_SystemError, "pycc: class '%s' has no type object", name);
+            return -1;
+        }
+        return PyModule_AddObjectRef(module, name, *class_slot);
+    }
+    modname = PyModule_GetNameObject(module);
+    if (modname == NULL) {
+        return -1;
+    }
+    func = PyCFunction_NewEx(row, module, modname);
+    Py_DECREF(modname);
+    if (func == NULL) {
+        return -1;
+    }
+    status = PyModule_AddObjectRef(module, row->ml_name, func);
+    Py_DECREF(func);
+    return status;
+}
+
+/*
+ * #1199's post-body safety net: binds every published class the body's
+ * `pycc_ext_publish` calls did not, so a completed import still exposes
+ * every type object it did before #1199. Codegen publishes a class once the
+ * last slot any of its type object's methods calls is stored, and every
+ * class owns at least one compiled item (a synthesized `__init__` when it
+ * declares none, D-225), so today this binds nothing. It exists so that a
+ * publication codegen ever misses becomes late visibility rather than a
+ * class the host can never reach. A name already in the module dict is
+ * left alone: either its
+ * publication ran, or the body rebound the name itself. Runs before the
+ * PEP 562 hooks are added, so the dict lookup sees the module's own
+ * bindings only.
+ */
+static int pycc_ext_publish_unbound_classes(PyObject *module)
+{
+    PyObject *dict = PyModule_GetDict(module);
+    const char *const *name;
+
+    for (name = pycc_ext_publish_class_names; *name != NULL; name++) {
+        PyObject **class_slot = pycc_ext_publish_class_slot(*name);
+        if (*class_slot == NULL || PyDict_GetItemString(dict, *name) != NULL) {
+            continue;
+        }
+        if (PyModule_AddObjectRef(module, *name, *class_slot) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/*
  * PEP 489 multi-phase initialization. The module body cannot run in
  * `PyInit_`: at that point no module object exists, so there is nothing to
  * execute against and no way to report a failure. It runs here, in the
@@ -4406,8 +4521,9 @@ static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const 
  *
  * Running it at all is not optional. `pycc` binds each `def` by *storing*
  * its address into a module-level function-pointer slot at the def's own
- * source position, so until the module body has executed every exported
- * wrapper would call a null pointer.
+ * source position, and (#1199) publishes the export only right after that
+ * store, through `pycc_ext_publish` below: before the body has reached a
+ * definition, its name is simply not an attribute of the module.
  */
 static int pycc_ext_exec_module(PyObject *module)
 {
@@ -4445,16 +4561,19 @@ static int pycc_ext_exec_module(PyObject *module)
         return -1;
     }
     /*
-     * One non-instantiable type object per class that exports a method,
-     * published under the bare class name. After the exception classes,
-     * because a user exception class is already registered under that same
-     * attribute and a second `PyModule_AddObjectRef` would clobber it --
-     * which is why a class carrying an exception tag never gets a type
-     * object at all. Before the module body, because nothing here depends
-     * on what the body produces: the wrappers reach the compiled code
-     * through the `fnptr_` globals the body stores, and the module is not
-     * importable until this function returns. Same -1-with-exception-set
-     * convention as everything else in this slot.
+     * One type object per class that exports a method or is constructible,
+     * created here but not yet added to the module (#1199): it is kept in
+     * its `pycc_ext_type_object_<Class>` static, and `pycc_ext_publish`
+     * binds it under the bare class name once the body has run the class
+     * statement. PEP 489 puts the module in `sys.modules` before this slot
+     * runs, so a foreign module the body imports can import this one back
+     * and read its attributes mid-body; a class bound here would be visible
+     * there before CPython would bind it. Created before the body anyway,
+     * because a compiled function the body calls may box an instance of the
+     * class into its carrier type, which must already exist. A class
+     * carrying an exception tag never gets a type object at all: the
+     * exception classes above already own that attribute. Same
+     * -1-with-exception-set convention as everything else in this slot.
      */
     if (pycc_ext_register_method_types(module) != 0) {
         return -1;
@@ -4541,14 +4660,18 @@ static int pycc_ext_exec_module(PyObject *module)
         return -1;
     }
     pycc_ext_bridge_release_to(mark);
+    if (pycc_ext_publish_unbound_classes(module) != 0) {
+        return -1;
+    }
     /*
      * #1467: the module's PEP 562 `__getattr__` / `__dir__`, published
-     * only now. Their wrappers call through `fnptr_` slots the body has
-     * just filled, and importlib reads attributes of the half-initialised
-     * module before this function runs, so a row in `pycc_ext_methods[]`
-     * would be called through a null slot. CPython's own hook likewise
-     * enters the dict only when its `def` executes. A re-import after
-     * `del sys.modules[...]` runs this again and rebinds them.
+     * only now, not at their `def` the way `pycc_ext_publish` binds every
+     * other function (#1199). Once in the dict, `__getattr__` answers every
+     * missing attribute -- including the ones importlib and a re-entrant
+     * host probe while the body is still running -- so binding it at its
+     * `def` would let it answer for names the rest of the body has yet to
+     * bind. A re-import after `del sys.modules[...]` runs this again and
+     * rebinds them.
      */
     if (PyModule_AddFunctions(module, pycc_ext_module_hooks) != 0) {
         return -1;
@@ -4573,7 +4696,11 @@ static struct PyModuleDef pycc_ext_moduledef = {
     PYCC_EXT_MODULE_NAME_STR,
     NULL,
     0,
-    pycc_ext_methods,
+    /*
+     * #1199: no `m_methods`. CPython would add every row before the body
+     * runs; `pycc_ext_publish` adds each one as its `def` executes instead.
+     */
+    NULL,
     pycc_ext_slots,
     NULL,
     NULL,

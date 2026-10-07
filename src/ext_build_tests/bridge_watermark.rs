@@ -89,11 +89,12 @@ fn module_exec_releases_to_its_own_mark_instead_of_clearing_the_table() {
          if (exec_status != 0) {"
     ));
     assert_eq!(
-        shim.matches("        pycc_ext_bridge_release_to(mark);\n        return -1;\n    }\n    pycc_ext_bridge_release_to(mark);\n    /*\n     * #1467:").count(),
+        shim.matches("        pycc_ext_bridge_release_to(mark);\n        return -1;\n    }\n    pycc_ext_bridge_release_to(mark);\n    if (pycc_ext_publish_unbound_classes(module) != 0) {").count(),
         1
     );
-    // #1467: the PEP 562 hooks are added after that release, and their
-    // failure path returns without touching the bridge table again.
+    // #1199's class safety net and #1467's PEP 562 hooks run after that
+    // release, and their failure paths return without touching the bridge
+    // table again.
     assert!(shim.contains(
         "    if (PyModule_AddFunctions(module, pycc_ext_module_hooks) != 0) {\n        \
          return -1;\n    }\n    return 0;\n}\n"

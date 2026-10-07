@@ -556,7 +556,48 @@ would return the dict value; and a host read of the module's own attributes
 from inside the body, after the `def` but before the body returns, does
 not see the hook yet. `tests/issue_1467_module_getattr.rs` pins every
 published shape against CPython, including a `tuple`-carrying hook, and pins
-the first residual; the second is recorded but not pinned by a test.
+the first residual; the second is recorded but not pinned by a test, and
+since #1199 below it is a property of the hooks alone.
+
+[#1199](https://github.com/rotnov/pycc/issues/1199) makes every other
+export visible as its definition executes, as CPython binds a module-level
+name. PEP 489 puts the module in `sys.modules` before `Py_mod_exec`, so a
+foreign module the body imports can import this one back mid-body; the
+moduledef therefore carries no `m_methods` table, and the compiled body
+calls the shim's `pycc_ext_publish(name)` right after it stores each
+top-level function's `fnptr_` slot (`crates/pycc_codegen/src/ext_publish.rs`),
+which binds that function's `pycc_ext_methods[]` row with
+`PyCFunction_NewEx` + `PyModule_AddObjectRef`. A redefined name is
+published again at each definition, so the module always holds the
+definition that last ran. A class is published once the last compiled item
+its MRO owns is bound -- for a class with its own methods (every class has
+one: a class declaring no `__init__` gets a synthesized one, D-225) that is
+its class statement's position, because a class's own items are lowered
+contiguously there (pinned by
+`src/ext_build_tests/publication_order.rs`). A name read before its
+definition runs therefore fails exactly as in CPython: `getattr` and
+`hasattr` see a partially initialized module's `AttributeError`, and
+`from my import late` a circular-import `ImportError`; a completed import,
+and a re-import after `del sys.modules[...]` (which re-runs the body on a
+fresh module object), expose every export. Three residuals remain: a class
+that owns no compiled item of its own (`class E(Base): pass`) is published
+as soon as its bases' methods are bound, possibly before its own class
+statement (over-visibility, never a crash); the synthesized exception
+classes are still published before the body, as above (they carry no
+`fnptr_` slot); and a class the body never published is bound after it,
+before the hooks, by a safety net that no ordinary program reaches. Every
+generated wrapper and `tp_init` now opens with a null guard on its
+`fnptr_` slot, so a call that still reaches an unbound slot raises a
+catchable `NameError: name '<item>' is not defined` instead of calling
+through a null pointer. That can happen only through an instance that
+escaped before its class statement ran -- a published `def make() ->
+object: return D(1)` called mid-body before `class D` -- and there pycc
+diverges from CPython twice: CPython raises `NameError` for `D` inside
+`make`, while pycc constructs the instance and raises at the later method
+call. [#1490](https://github.com/rotnov/pycc/issues/1490) tracks the
+construction itself, whose own `NameError` aborts the host when the
+missing slot is the constructor's. `tests/issue_1199_ext_reentrant_init.rs`
+pins these shapes against CPython and the guard's divergence on its own.
 
 [#1143](https://github.com/rotnov/pycc/issues/1143) extends that export set
 past module-level functions: a public `@staticmethod` and a public
@@ -1259,7 +1300,8 @@ hold. A subinterpreter is refused outright
 unaffected because CPython does not re-run `Py_mod_exec` for an extension
 module; the one divergent path is deleting the `sys.modules` entry and
 importing again, which re-runs the module body and lets the second instance
-overwrite state the first instance's wrappers still read. The synthesized
+overwrite state the first instance's wrappers still read; the second
+module object gets its exports bound afresh as that body runs (#1199). The synthesized
 exception classes sit inside that same contract: they are created once in
 `Py_mod_exec`, published as module attributes with `PyModule_AddObjectRef`, and
 held by a file-scope cache that the shim's refusal of subinterpreters and

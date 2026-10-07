@@ -1090,7 +1090,10 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
         !inc.contains("(*)(long long, long long, long long *"),
         "{inc}"
     );
-    assert!(!inc.contains("fnptr_pair"), "{inc}");
+    // The call goes through the thunk alone; `fnptr_pair` is read only by
+    // #1199's null guard, never cast to a function type.
+    assert!(!inc.contains("fnptr_pair)("), "{inc}");
+    assert_eq!(inc.matches("fnptr_pair").count(), 2, "{inc}");
     // A scalar-only export in the same module keeps the legacy spelling
     // byte for byte: #1050 widens the boundary without rewriting what
     // #1036 through #1049 already emit.
@@ -1774,14 +1777,15 @@ fn an_exported_method_gets_a_method_table_a_slot_table_and_a_non_instantiable_sp
         ),
         "{inc}"
     );
-    // The type enters the shim's carrier-type cache before the module
-    // attribute, and a failure of either releases the local reference.
+    // The type enters the shim's carrier-type cache, and a failure releases
+    // the local reference. It is not added to the module here (#1199):
+    // `pycc_ext_publish` binds it from its static once its class statement
+    // has run.
     assert!(
         inc.contains(
             "    type = PyType_FromSpec(&pycc_ext_type_spec_Grid);\n    \
              if (type == NULL) {\n        return -1;\n    }\n    \
-             if (pycc_ext_carrier_register(\"Grid\", type) < 0\n        \
-             || PyModule_AddObjectRef(module, \"Grid\", type) < 0) {\n        \
+             if (pycc_ext_carrier_register(\"Grid\", type) < 0) {\n        \
              Py_DECREF(type);\n        return -1;\n    }\n    \
              Py_XDECREF(pycc_ext_type_object_Grid);\n    pycc_ext_type_object_Grid = type;\n"
         ),
@@ -2362,14 +2366,18 @@ fn a_derived_class_table_carries_its_base_s_rows_and_its_own_tp_init() {
         "{inc}"
     );
     assert!(inc.contains("pycc_ext_tp_init_Derived"), "{inc}");
-    // Both classes reach the module, in publication order.
+    // Both classes reach the publication table, in publication order.
     let base_at = inc
-        .find("PyModule_AddObjectRef(module, \"Base\"")
-        .expect("Base registered");
+        .find("if (strcmp(name, \"Base\") == 0)")
+        .expect("Base publishable");
     let derived_at = inc
-        .find("PyModule_AddObjectRef(module, \"Derived\"")
-        .expect("Derived registered");
+        .find("if (strcmp(name, \"Derived\") == 0)")
+        .expect("Derived publishable");
     assert!(base_at < derived_at, "{inc}");
+    assert!(
+        !inc.contains("PyModule_AddObjectRef(module, \"Base\""),
+        "{inc}"
+    );
 }
 
 // --- Part 2b of #1142 (#1164): the buffer return position -------------------

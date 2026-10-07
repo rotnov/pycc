@@ -49,6 +49,7 @@ use str_rc::{decref_str_slot_before_store, incref_if_str_duplicate};
 mod rt_fns;
 use rt_fns::{RtFns, declare_rt_functions};
 mod ext;
+mod ext_publish;
 mod ext_thunk;
 mod foreign_attr;
 mod foreign_call;
@@ -101,9 +102,9 @@ use slot_bindings::{collect_module_bindings, collect_stmt_bindings};
 mod target_machine;
 pub use ext::{
     CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL, EXT_OBJ_IMPORT_FROM_SYMBOL,
-    EXT_THUNK_PREFIX, body_returns_buffer_slice, buffer_slice_out_names, ext_boundary_slots,
-    ext_thunk_out_tys, ext_thunk_param_tys, ext_thunk_required, ext_thunk_symbol,
-    is_ext_exportable_name, mangle_ext_name,
+    EXT_PUBLISH_SYMBOL, EXT_THUNK_PREFIX, body_returns_buffer_slice, buffer_slice_out_names,
+    ext_boundary_slots, ext_thunk_out_tys, ext_thunk_param_tys, ext_thunk_required,
+    ext_thunk_symbol, is_ext_exportable_name, mangle_ext_name,
 };
 use ext::{
     EXT_NAME_ERROR_SYMBOL, EXT_OBJ_BUILD_LIST_SYMBOL, EXT_OBJ_CALL_BORROWED_SYMBOL,
@@ -6091,6 +6092,7 @@ fn compile_to_object_with_observer(
     // CPython's `NameError: name 'foo' is not defined`.
     let mut def_iter = function_defs_in_order.iter().peekable();
     let copy_slots = copy_slots::CopySlots::new(mir);
+    let publish_plan = ext_publish::PublishPlan::new(mir, &copy_slots, options.ext);
     let mut fn_ordinal = 0usize;
     rt.exceptions.targets.borrow_mut().push(top_exception_exit);
     for item in &mir.items {
@@ -6195,6 +6197,15 @@ fn compile_to_object_with_observer(
                         );
                     }
                 }
+                // #1199: publish what this `def` (and its copies) made
+                // callable -- see `ext_publish`.
+                ext_publish::emit(
+                    &context,
+                    &builder,
+                    &module,
+                    entry_fn,
+                    publish_plan.names_at(ordinal),
+                );
             }
         }
     }

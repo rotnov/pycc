@@ -12,8 +12,8 @@ use super::getset::{ExtClassGetsets, getset_c};
 use super::instance_copy::{CarrierCopy, carrier_copy};
 use super::richcompare::{self, ExtSlotDunders};
 use super::{
-    ExtCtor, ExtPublishedClass, arg_slot_locals, buffer_releases, c_param_list, defaults, keywords,
-    source_level_name, unpack_args,
+    ExtCtor, ExtPublishedClass, arg_slot_locals, buffer_releases, c_param_list, defaults,
+    fnptr_null_guard, keywords, source_level_name, unpack_args,
 };
 use pycc_hir::HirModule;
 
@@ -40,6 +40,18 @@ pub(crate) const METHOD_TYPE_REGISTER_DECL: &str =
 /// [`USER_EXCEPTION_LOOKUP_DECL`]: super::USER_EXCEPTION_LOOKUP_DECL
 pub(crate) const COMPILED_CLASS_ISINSTANCE_DECL: &str =
     "static int pycc_ext_compiled_class_isinstance(PyObject *o, const char *name)";
+
+/// The exact C declaration of the generated published-class lookup the
+/// shim's `pycc_ext_publish` and its post-body safety net call (#1199). The
+/// `.inc` is included above both callers, so neither needs a forward
+/// declaration; the shim test and the generated-text test assert this one
+/// constant.
+pub(crate) const PUBLISH_CLASS_SLOT_DECL: &str =
+    "static PyObject **pycc_ext_publish_class_slot(const char *name)";
+
+/// The generated `NULL`-terminated array of every published class name, in
+/// publication order, which the shim's post-body safety net walks (#1199).
+pub(crate) const PUBLISH_CLASS_NAMES: &str = "pycc_ext_publish_class_names";
 
 /// The shim's own answer for a class name no published type descends from
 /// (`src/ext/pycc_ext_module.c`): it consults the object's `__class__` as
@@ -245,6 +257,7 @@ pub(crate) fn method_types_c(
         richcompare::hidden_carrier_types_c(publications, getsets, slots, &mut emitted_getters);
     out.push_str(&hidden);
     out.push_str(&compiled_class_isinstance_c(publications));
+    out.push_str(&publish_class_c(publications));
     out.push_str(&format!("{METHOD_TYPE_REGISTER_DECL}\n{{\n"));
     if publications.is_empty() && hidden_registration.is_empty() {
         out.push_str("    (void)module;\n    return 0;\n}\n");
@@ -252,12 +265,13 @@ pub(crate) fn method_types_c(
     }
     out.push_str("    PyObject *type;\n");
     for class in publications.iter().map(|published| &published.class) {
-        // `PyModule_AddObjectRef` and the carrier-type cache (#1435) each
-        // take their own reference, so on a failing arm the local one is
-        // released, which keeps a failed registration from leaking the
-        // type. On success the local reference moves into the class's file
-        // static (Part 7 of #1371), releasing the one a previous exec
-        // stored there.
+        // The carrier-type cache (#1435) takes its own reference, so on a
+        // failing arm the local one is released, which keeps a failed
+        // registration from leaking the type. On success the local
+        // reference moves into the class's file static (Part 7 of #1371),
+        // releasing the one a previous exec stored there. The type is not
+        // added to the module here (#1199): `pycc_ext_publish` binds it
+        // from that static once its class statement has run.
         if let Some(entry) = slots.iter().find(|entry| entry.class == *class) {
             let array = format!("pycc_ext_type_slots_{class}");
             out.push_str(&richcompare::unhashable_fixup(entry, &array));
@@ -265,8 +279,7 @@ pub(crate) fn method_types_c(
         out.push_str(&format!(
             "    type = PyType_FromSpec(&pycc_ext_type_spec_{class});\n    \
              if (type == NULL) {{\n        return -1;\n    }}\n    \
-             if (pycc_ext_carrier_register(\"{class}\", type) < 0\n        \
-             || PyModule_AddObjectRef(module, \"{class}\", type) < 0) {{\n        \
+             if (pycc_ext_carrier_register(\"{class}\", type) < 0) {{\n        \
              Py_DECREF(type);\n        return -1;\n    }}\n    \
              Py_XDECREF(pycc_ext_type_object_{class});\n    \
              pycc_ext_type_object_{class} = type;\n"
@@ -274,6 +287,37 @@ pub(crate) fn method_types_c(
     }
     out.push_str(&hidden_registration);
     out.push_str("    return 0;\n}\n");
+    out
+}
+
+/// The published-class tables per-definition publication reads (#1199):
+/// [`PUBLISH_CLASS_NAMES`] and [`PUBLISH_CLASS_SLOT_DECL`], which answers
+/// the address of a published class's `pycc_ext_type_object_<Class>` static
+/// for its name and `NULL` for any other name.
+///
+/// Emitted unconditionally -- an empty array and a function answering
+/// `NULL` when nothing is published -- so every artifact links. The type
+/// statics are filled by `pycc_ext_register_method_types` before the body
+/// runs; the module attribute is bound from them only when codegen's
+/// publication call for the class's name runs (`pycc_codegen`'s
+/// `ext_publish`), or by the safety net after the body for a class whose
+/// call never ran.
+fn publish_class_c(publications: &[ExtPublishedClass]) -> String {
+    let mut out = format!("static const char *const {PUBLISH_CLASS_NAMES}[] = {{\n");
+    for published in publications {
+        out.push_str(&format!("    \"{}\",\n", published.class));
+    }
+    out.push_str(&format!(
+        "    NULL,\n}};\n\n{PUBLISH_CLASS_SLOT_DECL}\n{{\n"
+    ));
+    for published in publications {
+        let class = &published.class;
+        out.push_str(&format!(
+            "    if (strcmp(name, \"{class}\") == 0) {{\n        \
+             return &pycc_ext_type_object_{class};\n    }}\n"
+        ));
+    }
+    out.push_str("    (void)name;\n    return NULL;\n}\n\n");
     out
 }
 
@@ -454,10 +498,12 @@ pub(crate) fn carrier_class_isinstance_c(classes: &[ExtCarrierClass]) -> String 
 /// textually, exactly as `wrapper_for` does for a receiver, so this
 /// declaration and codegen's own definition of the same symbol agree.
 ///
-/// **No null guard on the `fnptr_` slot,** matching `wrapper_for`'s own
-/// bare call: the module entry point binds every slot at import, so no host
-/// call can reach an unbound one, and guarding only here would make the
-/// constructor behave differently from every other export.
+/// **A null guard on the `fnptr_` slot** (#1199), the same
+/// [`super::fnptr_null_guard`] `wrapper_for` opens with, placed after the
+/// local declarations and before keyword binding, unpacking and
+/// `pycc_rt_instance_new`: a class is published only once its own items'
+/// slots are stored, so the guard is defence in depth, and it refuses with
+/// nothing to release.
 ///
 /// The `pycc_rt_instance_new` allocation is not released when the
 /// constructor raises. That is D-107/D-154's no-free design, the same
@@ -515,6 +561,7 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
          {{\n    void *inst;\n"
     ));
     out.push_str(&arg_slot_locals(&slots));
+    out.push_str(&fnptr_null_guard(&symbol, source_name, "-1"));
     match &prologue {
         Some(prologue) => out.push_str(&prologue.body),
         None => out.push_str(&format!(
