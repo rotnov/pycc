@@ -3131,11 +3131,12 @@ static void pycc_ext_instance_dealloc(PyObject *self)
 
 /*
  * #1435: the carrier type of each class, keyed by the class name its
- * instances' layout descriptors carry. A published class's own type object
- * is entered by the generated `pycc_ext_register_method_types`
- * (`pycc_ext_carrier_register`); any other class gets a carrier type whose
- * only method is the shared `__copy__` (#1455) the first time one of its
- * instances crosses
+ * instances' layout descriptors carry. A published class's own type object,
+ * and the hidden carrier type of an unpublished class with comparison slots
+ * (#1427) or field descriptors (#1448), is entered by the generated
+ * `pycc_ext_register_method_types` (`pycc_ext_carrier_register`); any other
+ * class -- one with neither -- gets a carrier type whose only method is the
+ * shared `__copy__` (#1455) the first time one of its instances crosses
  * (`pycc_ext_carrier_type`, defined after the companion because it needs
  * the module name). The dict holds a strong reference to every type for the
  * rest of the process, which the shim's refusal of subinterpreters licenses
@@ -3535,7 +3536,9 @@ static PyMethodDef pycc_ext_carrier_methods[] = {
 
 /*
  * #1435: the slots of a carrier type created on demand -- the shared
- * deallocator and, since #1455, the shared `__copy__`; no other method. The
+ * deallocator and, since #1455, the shared `__copy__`; no other method, and
+ * no descriptor or comparison slot, because a class that has either gets a
+ * generated hidden carrier type instead (#1427, #1448). The
  * spec's `Py_TPFLAGS_DISALLOW_INSTANTIATION` keeps the host from calling it,
  * since no `tp_init` exists to build the instance it would carry.
  */

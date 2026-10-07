@@ -1476,7 +1476,6 @@ fn a_constructor_buffer_parameter_its_body_stores_into_is_acquired_writable() {
             params: vec![Ty::MemoryView],
             param_writable: vec![true],
             slot_names: vec!["w".to_string()],
-            getsets: Vec::new(),
             keyword_names: None,
         }],
         &[],
@@ -2008,7 +2007,6 @@ fn grid_ctor(params: Vec<Ty>, slot_names: &[&str]) -> ExtCtor {
         param_writable: vec![false; params.len()],
         params,
         slot_names: slot_names.iter().map(ToString::to_string).collect(),
-        getsets: Vec::new(),
         keyword_names: None,
     }
 }

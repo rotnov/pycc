@@ -291,6 +291,9 @@ show("dataclass", lambda: (rc.Pt(1, 2) == rc.Pt(1, 2), rc.Pt(1, 2) == rc.Pt(1, 3
 show("dataclass other", lambda: (rc.Pt(1, 2) == None, rc.Pt(1, 2) != (1, 2), rc.Pt(1, 2) in [None, rc.Pt(1, 2)]))
 show("dataclass hash", lambda: (rc.Pt.__hash__ is None, {rc.Pt(1, 2)}))
 show("private", lambda: rc.give_private(lambda p: (type(p).__name__, p == 3, p != 3), 1))
+show("private self", lambda: rc.give_private(lambda p: p == p, 1))
+nc = rc.make_nc()
+show("unpublished self", lambda: nc == nc)
 "#;
 
 const DRIVER_OUT: &str = "issue (True, False)\n\
@@ -320,7 +323,9 @@ const DRIVER_OUT: &str = "issue (True, False)\n\
     dataclass (True, False, False)\n\
     dataclass other (False, True, True)\n\
     dataclass hash TypeError\n\
-    private ('_P', False, True)\n";
+    private ('_P', False, True)\n\
+    private self True\n\
+    unpublished self True\n";
 
 /// Each line differs from CPython by design (D-244's #1427 amendment);
 /// [`CPYTHON_EXT_ONLY_OUT`] is CPython's answer to the same lines.
@@ -338,14 +343,13 @@ const DRIVER_OUT: &str = "issue (True, False)\n\
 /// - `scalar other`: a comparison whose parameter carries any other checked
 ///   annotation (`other: int`) raises the boundary's ingress `TypeError` for
 ///   an operand of another type, where CPython runs the body.
-/// - `private self`, `unpublished self`: a hidden carrier type -- of a
-///   private class, or of `NC`, which is not published because its
-///   `__init__` takes a `dict` -- has no field descriptors yet (#1448), so
-///   the compiled body's `other.v` raises `AttributeError` where identity
-///   answered `True` before #1427. `unpublished` shows the type still
-///   compares (`n == 3` runs the compiled `__eq__`, which answers
-///   `NotImplemented` before reading a field) while the module, unlike
-///   CPython's, has no `NC` attribute.
+/// - `unpublished`: the hidden carrier type of `NC`, which is not published
+///   because its `__init__` takes a `dict`, compares (`n == 3` runs the
+///   compiled `__eq__`, which answers `NotImplemented` before reading a
+///   field) while the module, unlike CPython's, has no `NC` attribute.
+///   (Since #1448 a hidden carrier type also carries its field
+///   descriptors, so `private self` and `unpublished self`, whose compiled
+///   bodies read `other.v`, moved to [`DRIVER`].)
 /// - `uninitialized`: an object `tp_init` never filled has no instance for
 ///   the compiled method to run on: `TypeError: H.__hash__() called on an
 ///   uninitialized instance`, where CPython's body raises `AttributeError`.
@@ -353,10 +357,8 @@ const EXT_ONLY_DRIVER: &str = r#"show("reflected", lambda: (rc.Base(1) == rc.Ove
 show("typed other", lambda: rc.TypedBare(1) == 3)
 show("typed none", lambda: rc.TypedNone(1) == None)
 show("scalar other", lambda: rc.IntEq(1) == "x")
-show("private self", lambda: rc.give_private(lambda p: p == p, 1))
 n = rc.make_nc()
 show("unpublished", lambda: (type(n).__name__, hasattr(rc, "NC"), n == 3))
-show("unpublished self", lambda: n == n)
 u = rc.H.__new__(rc.H)
 show("uninitialized", lambda: (hash(u), u == rc.H(1)))
 "#;
@@ -365,18 +367,14 @@ const EXT_ONLY_OUT: &str = "reflected (True, False)\n\
     typed other False\n\
     typed none False\n\
     scalar other TypeError\n\
-    private self AttributeError\n\
     unpublished ('NC', False, False)\n\
-    unpublished self AttributeError\n\
     uninitialized TypeError\n";
 
 const CPYTHON_EXT_ONLY_OUT: &str = "reflected (False, False)\n\
     typed other AttributeError\n\
     typed none True\n\
     scalar other False\n\
-    private self True\n\
     unpublished ('NC', True, False)\n\
-    unpublished self True\n\
     uninitialized AttributeError\n";
 
 #[test]

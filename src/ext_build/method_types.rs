@@ -8,7 +8,7 @@
 //! constructor half.
 
 use super::export_name::ExtReceiver;
-use super::getset::getset_c;
+use super::getset::{ExtClassGetsets, getset_c};
 use super::instance_copy::{CarrierCopy, carrier_copy};
 use super::richcompare::{self, ExtSlotDunders};
 use super::{
@@ -105,16 +105,19 @@ pub(crate) const UNPUBLISHED_CLASS_ISINSTANCE: &str = "pycc_ext_unpublished_clas
 /// the module replaces it, so a type from before a reload is no longer
 /// consulted -- as a reloaded Python module's new class is not the old one.
 ///
-/// A class in `slots` (#1427) also gets its comparison and hash slots
-/// (`richcompare::slot_rows`), and a class in `slots` that is not published
-/// gets a hidden carrier type the same registration creates and enters in
-/// the carrier-type cache without adding it to the module
-/// (`richcompare::hidden_carrier_types_c`).
+/// A class in `getsets` gets its field descriptors as `Py_tp_getset`
+/// (#1442 for a constructible class, every published class since #1448),
+/// and a class in `slots` (#1427) also gets its comparison and hash slots
+/// (`richcompare::slot_rows`). A class in either list that is not published
+/// gets a hidden carrier type carrying both, which the same registration
+/// creates and enters in the carrier-type cache without adding it to the
+/// module (`richcompare::hidden_carrier_types_c`).
 ///
 /// [`exception_classes_c`]: super::exception_classes_c
 pub(crate) fn method_types_c(
     publications: &[ExtPublishedClass],
     ctors: &[ExtCtor],
+    getsets: &[ExtClassGetsets],
     slots: &[ExtSlotDunders],
 ) -> String {
     let mut out = String::new();
@@ -176,7 +179,12 @@ pub(crate) fn method_types_c(
         out.push_str("    {NULL, NULL, 0, NULL},\n};\n\n");
         if let Some(ctor) = ctor {
             out.push_str(&tp_init_c(ctor));
-            out.push_str(&getset_c(ctor, &mut emitted_getters));
+        }
+        // #1448: after `tp_init` and before the slots, the order a
+        // constructible class's text has had since #1427.
+        let table = getsets.iter().find(|table| table.class == *class);
+        if let Some(table) = table {
+            out.push_str(&getset_c(table, &mut emitted_getters));
         }
         let class_slots = slots.iter().find(|entry| entry.class == *class);
         if let Some(entry) = class_slots {
@@ -204,8 +212,9 @@ pub(crate) fn method_types_c(
         // it.
         out.push_str("    {Py_tp_dealloc, pycc_ext_instance_dealloc},\n");
         // #1442: installed only when the class has a descriptor, so a class
-        // with none keeps its slot array byte for byte.
-        if ctor.is_some_and(|ctor| !ctor.getsets.is_empty()) {
+        // with none keeps its slot array byte for byte; constructible or not
+        // since #1448.
+        if table.is_some() {
             out.push_str(&format!(
                 "    {{Py_tp_getset, pycc_ext_type_getset_{class}}},\n"
             ));
@@ -233,7 +242,7 @@ pub(crate) fn method_types_c(
         ));
     }
     let (hidden, hidden_registration) =
-        richcompare::hidden_carrier_types_c(slots, publications, &mut emitted_getters);
+        richcompare::hidden_carrier_types_c(publications, getsets, slots, &mut emitted_getters);
     out.push_str(&hidden);
     out.push_str(&compiled_class_isinstance_c(publications));
     out.push_str(&format!("{METHOD_TYPE_REGISTER_DECL}\n{{\n"));

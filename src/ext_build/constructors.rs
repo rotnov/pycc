@@ -276,7 +276,6 @@ fn ctor_descriptor(module: &HirModule, class: &str) -> Option<ExtCtor> {
             .collect(),
         defaults: defaults::carried_defaults(module, name, true),
         slot_names: instance_slot_names(module, class_def),
-        getsets: getset::collect_getsets(module, class_def, &mro_class_defs(module, class_def)),
         keyword_names: None,
     })
 }
@@ -315,9 +314,13 @@ fn instance_slot_names(module: &HirModule, class_def: &HirClassDef) -> Vec<Strin
 
 /// `class_def`'s MRO resolved to the definitions that carry its slots, most
 /// derived first -- [`instance_slot_names`]' input, shared with the getset
-/// collector (#1442) so both read one layout. Panics on an MRO entry this
-/// program does not define; see [`instance_slot_names`] for why.
-fn mro_class_defs<'m>(module: &'m HirModule, class_def: &HirClassDef) -> Vec<&'m HirClassDef> {
+/// collector (#1442, keyed by carrier class since #1448) so both read one
+/// layout. Panics on an MRO entry this program does not define; see
+/// [`instance_slot_names`] for why.
+pub(crate) fn mro_class_defs<'m>(
+    module: &'m HirModule,
+    class_def: &HirClassDef,
+) -> Vec<&'m HirClassDef> {
     class_def
         .mro
         .iter()
@@ -374,12 +377,6 @@ pub(crate) struct ExtCtor {
     /// called with and which, after [`ExtCtor::class`], make up the layout
     /// descriptor it is passed (#1388).
     pub(crate) slot_names: Vec<String>,
-    /// The attributes the class's type object exposes through
-    /// `Py_tp_getset` (#1442): its carriable slots and properties, so a
-    /// host-side or compiled object-typed `instance.field` read finds them;
-    /// a slot's descriptor is also writable since Part 1 of #1443 (see
-    /// `ext_build/getset.rs`).
-    pub(crate) getsets: Vec<ExtGetset>,
     /// The constructor's carried parameter names when `Py_tp_init` binds
     /// keywords (#1461), meaning exactly what [`ExtExport::keyword_names`]
     /// means; `None` keeps the hand-written keyword refusal.

@@ -1,5 +1,5 @@
-//! The `Py_tp_getset` descriptors a constructible published class carries
-//! (#1442), and their slot setters (Part 1 of #1443): which slots and
+//! The `Py_tp_getset` descriptors a carrier type carries (#1442, every
+//! carrier type since #1448), and their slot setters (Part 1 of #1443): which slots and
 //! properties get one, and the generated C each renders to. Lowered from real source through the `--ext`
 //! frontend, so the slot types are the ones D-258 really assigns (an `Any`
 //! or object-carrying container field is the opaque object).
@@ -7,9 +7,9 @@
 use super::super::getset::PropertySetter;
 use super::*;
 
-/// The constructors -- and so the descriptors -- of `source` built as an
-/// `--ext` module, plus the generated companion.
-fn ext_build(tag: &str, source: &str) -> (Vec<ExtCtor>, String) {
+/// The descriptor tables of `source` built as an `--ext` module, plus the
+/// generated companion.
+fn ext_build(tag: &str, source: &str) -> (Vec<ExtClassGetsets>, String) {
     let dir = pycc_scratch::ScratchDir::new(tag).expect("scratch");
     let src = dir.join("m.py");
     std::fs::write(&src, source).expect("write source");
@@ -23,16 +23,27 @@ fn ext_build(tag: &str, source: &str) -> (Vec<ExtCtor>, String) {
     let publications = collect_class_publications(&module, &exports);
     let ctors = collect_constructors(&module, &publications);
     let carriers = collect_carrier_classes(&module);
-    let inc = generate_exports_inc("m", &exports, &[], &publications, &ctors, &carriers);
-    (ctors, inc)
+    let getsets = collect_carrier_getsets(&module, &carriers);
+    let inc = generate_exports_inc_with_slots(
+        "m",
+        &exports,
+        &[],
+        &publications,
+        &ctors,
+        &carriers,
+        &getsets,
+        &[],
+    );
+    (getsets, inc)
 }
 
-fn getsets_of<'c>(ctors: &'c [ExtCtor], class: &str) -> &'c [ExtGetset] {
-    &ctors
+/// `class`'s descriptors: empty when it has no table, which is exactly
+/// when it has nothing to describe (or is a class #1448 skips).
+fn getsets_of<'c>(tables: &'c [ExtClassGetsets], class: &str) -> &'c [ExtGetset] {
+    tables
         .iter()
-        .find(|ctor| ctor.class == class)
-        .unwrap_or_else(|| panic!("`{class}` is constructible"))
-        .getsets
+        .find(|table| table.class == class)
+        .map_or(&[], |table| table.getsets.as_slice())
 }
 
 fn slot(name: &str, index: usize, ty: Ty) -> ExtGetset {
@@ -310,7 +321,7 @@ const SETTERS: &str = "from typing import List, Tuple\n\
     \x20   def scale(self) -> int:\n\
     \x20       return 10\n";
 
-fn setter_of(ctors: &[ExtCtor], class: &str, prop: &str) -> PropertySetter {
+fn setter_of(ctors: &[ExtClassGetsets], class: &str, prop: &str) -> PropertySetter {
     getsets_of(ctors, class)
         .iter()
         .find_map(|getset| match getset {

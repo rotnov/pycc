@@ -318,7 +318,7 @@ fn an_unpublished_class_gets_a_hidden_carrier_type_registered_up_front() {
     let exports = collect_exports(&module).expect("the module exports");
     let publications = collect_class_publications(&module, &exports);
     let mut emitted = Vec::new();
-    let (defs, registration) = hidden_carrier_types_c(&slots, &publications, &mut emitted);
+    let (defs, registration) = hidden_carrier_types_c(&publications, &[], &slots, &mut emitted);
     assert!(defs.contains("static PyType_Spec pycc_ext_carrier_spec__Private = {"));
     assert!(defs.contains("PYCC_EXT_MODULE_NAME_STR \"._Private\","));
     assert!(defs.contains(
@@ -340,6 +340,7 @@ fn an_unpublished_class_gets_a_hidden_carrier_type_registered_up_front() {
         &publications,
         &ctors,
         &carriers,
+        &[],
         &slots,
     );
     assert!(inc.contains("    {Py_tp_richcompare, pycc_ext_richcompare_Eq},\n"));

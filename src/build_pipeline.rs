@@ -419,6 +419,8 @@ fn plan_ext(
     let publications = ext_build::collect_class_publications(typed_hir, &exports);
     let mut ctors = ext_build::collect_constructors(typed_hir, &publications);
     ext_build::bind_ctor_keyword_names(typed_hir, &signatures, &mut ctors);
+    // #1448: every carrier type's descriptor table, published or not.
+    let getsets = ext_build::collect_carrier_getsets(typed_hir, &carriers);
     let inc_body = ext_build::generate_exports_inc_with_slots(
         &output.module_name,
         &exports,
@@ -426,6 +428,7 @@ fn plan_ext(
         &publications,
         &ctors,
         &carriers,
+        &getsets,
         &slots,
     );
     write_ext_source(&shim, ext_build::SHIM_C)?;
