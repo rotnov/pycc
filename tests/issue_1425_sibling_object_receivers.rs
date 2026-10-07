@@ -243,6 +243,7 @@ fn issue_1482_a_call_above_the_module_s_own_foreign_import_is_still_refused() {
 /// `gc.garbage.append`/`pop`, the def and method positions, the
 /// `isinstance` branch, and a native list observed through `len` (printing
 /// a native list is the separate #1220).
+#[cfg(not(windows))]
 const EMBEDDED: &str = "from dep2 import d, od, g\n\n\ndef push(n: int) -> None:\n    \
                         d.append(n)\n\n\nclass Box:\n    def look(self) -> None:\n        \
                         print(od.get(\"a\"))\n\n\nd.append(2)\npush(3)\nprint(len(d))\n\
@@ -250,6 +251,7 @@ const EMBEDDED: &str = "from dep2 import d, od, g\n\n\ndef push(n: int) -> None:
                         print(g.garbage.pop())\nif isinstance(d, list):\n    d.append(1)\n\
                         xs = [1, 2]\nxs.append(3)\nprint(len(xs))\n";
 
+#[cfg(not(windows))]
 fn build_embedded(dir: &Path) -> PathBuf {
     write(dir, "dep1.py", DEP1);
     write(dir, "dep2.py", DEP2);
