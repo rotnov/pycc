@@ -291,9 +291,11 @@ fn a_dependency_module_s_any_signature_compiles_in_an_ext_build() {
     assert_eq!(stdout, "True\n");
 }
 
-/// Interim answer for #1386: a public parameter annotated with a foreign
-/// class is the same `Ty::Object`, so it crosses as the object itself with
-/// no run-time class check -- exactly what CPython does with an annotation.
+/// A public parameter annotated with a foreign class is the same
+/// `Ty::Object`, so it crosses as the object itself with no run-time class
+/// check -- exactly what CPython does with an annotation, and what #1386
+/// decided (D-244's #1386 amendment; `tests/issue_1386_foreign_class_boundary.rs`
+/// pins the method, constructor and type-variable shapes).
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn a_foreign_class_parameter_passes_through_unchecked() {

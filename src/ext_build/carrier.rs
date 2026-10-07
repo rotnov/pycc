@@ -193,9 +193,10 @@ pub(crate) fn boundary_carrier(ty: &Ty) -> Option<BoundaryCarrier> {
         Ty::Bool => Some(BoundaryCarrier::Scalar("char", "bool")),
         Ty::Str => Some(BoundaryCarrier::Scalar("void *", "str")),
         // D-258 rule 5 (#1397): the opaque CPython object -- `Any`,
-        // `object`, an object-carrying container, and (until #1386 decides
-        // otherwise) a foreign-imported class -- crosses as the `PyObject *`
-        // itself, which is what `ty_to_basic_type` gives `Ty::Object`.
+        // `object`, an object-carrying container, and a foreign-imported
+        // class or type variable (unchecked against the class, D-244's #1386
+        // amendment) -- crosses as the `PyObject *` itself, which is what
+        // `ty_to_basic_type` gives `Ty::Object`.
         // `pycc_ext_unpack_object` admits any object and hands the compiled
         // body a strong reference it never releases (RUNTIME #1092's
         // leak-only rule), and `pycc_ext_pack_object` returns a new

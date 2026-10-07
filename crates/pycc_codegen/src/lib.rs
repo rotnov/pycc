@@ -4628,8 +4628,8 @@ fn build_call_to_with_leading_args<'ctx>(
                 // `object` parameter or, since Part 1 of #1367, a parameter
                 // annotated with a class a foreign import binds -- either
                 // way the callee is another pycc function taking the same
-                // `ptr` (a public one is refused `C0003` at the `--ext`
-                // boundary, #1386). The
+                // `ptr` (a public one called from the host gets the object
+                // through its `--ext` thunk instead, #1397/#1386). The
                 // borrowed pointer is passed through with no refcount
                 // change: the callee never releases it (#1092's leak-only
                 // rule, `docs/RUNTIME.md`).

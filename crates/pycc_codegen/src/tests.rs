@@ -15589,9 +15589,9 @@ fn a_private_helper_may_return_a_cpython_object_and_its_result_is_discarded() {
     // also a shape the front end produces.
     //
     // A public function returning `object` -- spellable since Part 1 of
-    // #1367 through a class a foreign import binds -- is refused `C0003` at
-    // the `--ext` boundary (#1386), so such a helper never reaches an `ext`
-    // export thunk.
+    // #1367 through a class a foreign import binds -- is exported since
+    // #1397 (unchecked against the class, #1386), but its thunk is a
+    // separate seam this test does not select.
     compile_ext_items(
         "object_returning_helper",
         with_foreign_numpy(vec![

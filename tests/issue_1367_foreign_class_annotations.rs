@@ -229,8 +229,8 @@ fn a_generic_taking_a_foreign_object_keeps_i0404() {
 
 /// `check` accepts a public function taking a foreign object, and since
 /// #1397 (D-258 rule 5) `build --ext` no longer refuses to export it: the
-/// boundary carries the object itself, unchecked against the class -- the
-/// interim answer until Part 2 (#1386) decides on a run-time class check.
+/// boundary carries the object itself, unchecked against the class, which
+/// Part 2 (#1386, D-244's #1386 amendment) decided.
 /// The build now reaches the C step; only the absence of `C0003` and of a
 /// type error is pinned, so the test does not depend on that step
 /// succeeding. `tests/issue_1397_ext_any_object.rs` runs the artifact.

@@ -465,8 +465,8 @@ fn every_gap_in_a_program_is_collected_before_the_build_gives_up() {
 /// D-258 rule 5 (#1397), replacing Part 1 of #1026 work item 12's refusal:
 /// the opaque CPython object is carried at a parameter position as the
 /// `PyObject *` itself. Reachable from Python source as an `Any`/`object`
-/// annotation, a container of objects, and -- the interim answer #1386 may
-/// still revisit -- a class a foreign import binds.
+/// annotation, a container of objects, and a class a foreign import binds
+/// (unchecked against the class, D-244's #1386 amendment).
 #[test]
 fn an_object_typed_parameter_is_carried_at_the_export_boundary() {
     let hir = module(vec![func("wrap", &[("x", Ty::Object)], Ty::Int)]);

@@ -1037,7 +1037,8 @@ static PyObject *pycc_ext_pack_str(void *result)
 /*
  * Unpacks one argument at a parameter whose type is the opaque CPython
  * object (D-258 rule 5, #1397): an `Any` or `object` annotation, a container
- * of objects, or a foreign-imported class (interim, pending #1386). Returns
+ * of objects, or a foreign-imported class or type variable, which is not
+ * checked against the class (D-244's #1386 amendment). Returns
  * 0; there is no type to refuse, because the declared type admits every
  * object -- which is also why `fn_name` and `index` are unused, kept only so
  * every scalar unpack helper shares one call shape.
