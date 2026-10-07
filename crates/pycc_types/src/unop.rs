@@ -40,6 +40,10 @@
 //!   instance is unconditionally truthy, and `truthy`'s `Scalar::Instance`
 //!   arm already returns the constant `1` for it -- `not <instance>` is
 //!   always `False`.
+//! * Since Part 10 of #1371, `not o` on a CPython object (`Ty::Object`) is
+//!   `bool` too: codegen's `truthy` runs the object's own
+//!   `PyObject_IsTrue` (`pycc_ext_obj_truthy`), whose failure takes the
+//!   foreign failure edge, and inverts it.
 //! * `~x` is `int -> int` only (`bool` included, since `pycc_types` treats
 //!   it as a numeric subtype of `int`); every other operand is `T0021`.
 
@@ -55,6 +59,12 @@ pub(crate) fn unary_result_type(op: UnaryOpKind, operand: Ty) -> Result<Ty, Diag
             _ => Err(unary_type_error(op, operand)),
         },
         UnaryOpKind::Not if is_truth_testable(&operand) => Ok(Ty::Bool),
+        // Part 10 of #1371: `not o` on a CPython object is CPython's own
+        // `PyObject_Not`, the negated `PyObject_IsTrue` that codegen's
+        // `truthy` already runs for an `if o:` condition. The result is a
+        // native `bool`, because CPython's `not` always yields one (unlike
+        // `==`, whose object result Part 1 keeps as `Ty::Object`).
+        UnaryOpKind::Not if operand == Ty::Object => Ok(Ty::Bool),
         UnaryOpKind::Not => Err(unary_type_error(op, operand)),
         UnaryOpKind::Invert => match operand {
             Ty::Bool | Ty::Int => Ok(Ty::Int),
@@ -66,7 +76,9 @@ pub(crate) fn unary_result_type(op: UnaryOpKind, operand: Ty) -> Result<Ty, Diag
 /// Whether codegen's `truthy` can compute a truth value for a value of type
 /// `ty`: `bool`, `int`, `float`, `str`, `None`, `Optional[_]` and a class
 /// instance. Containers, protocol values, `memoryview` and the opaque CPython
-/// object are not truth-testable here (see this module's doc comment).
+/// object are not truth-testable here (see this module's doc comment); `not`
+/// admits the object separately (Part 10 of #1371), and `and`/`or` and the
+/// conditional expression do the same in their own modules.
 ///
 /// Shared by `not` and by `and`/`or` (#1211, [`crate::boolop`]), which call
 /// it on every operand so that a boolean operator never admits an operand
@@ -155,6 +167,21 @@ mod tests {
         // `False`) truthiness for both `Ty::None` representations, with no
         // codegen change needed -- see this module's own doc comment.
         assert_eq!(unary_result_type(UnaryOpKind::Not, Ty::None), Ok(Ty::Bool));
+    }
+
+    #[test]
+    fn logical_not_on_a_cpython_object_types_as_bool() {
+        // Part 10 of #1371: CPython's `not` always yields a `bool`, so the
+        // result is native even though the operand is opaque.
+        assert_eq!(
+            unary_result_type(UnaryOpKind::Not, Ty::Object),
+            Ok(Ty::Bool)
+        );
+        // The other unary operators keep refusing an object operand.
+        for op in [UnaryOpKind::USub, UnaryOpKind::UAdd, UnaryOpKind::Invert] {
+            let err = unary_result_type(op, Ty::Object).unwrap_err();
+            assert_eq!(err.code, "T0021");
+        }
     }
 
     #[test]

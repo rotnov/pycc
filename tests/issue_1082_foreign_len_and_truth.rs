@@ -128,22 +128,22 @@ fn len_of_a_cpython_object_is_admitted_as_an_int() {
     }
 }
 
-/// `not o` stays refused, and with its own pre-existing diagnostic.
+/// `not o` is admitted since Part 10 of #1371.
 ///
-/// The one `truthy` call site PR 3a does *not* reach: `MirExpr::Not`
-/// evaluates its operand through `truthy` from a non-condition position,
-/// and `pycc_types`' `unop.rs` answers `T0021` for any non-`bool` operand
-/// before codegen sees it. That refusal predates PR 3a and is unrelated to
-/// the ten condition sites it deleted, so this pins that the deletion did
-/// not accidentally take it along.
+/// PR 3a left it as the one `truthy` call site it did not reach:
+/// `pycc_types`' `unop.rs` answered `T0021` for a non-`bool` operand before
+/// codegen saw it. Part 10 of #1371 types `not o` as a native `bool` over
+/// the same truth test, so it now checks like the condition sites.
 #[test]
-fn not_on_a_cpython_object_is_still_refused_with_t0021() {
+fn not_on_a_cpython_object_is_admitted() {
     let dir = ScratchDir::new("foreign_truthy_not").expect("scratch");
     let out = check(&dir, "import gc\n\nif not gc:\n    print(1)\n");
-    assert!(!out.status.success(), "{}", stdout_of(&out));
-    let text = format!("{}{}", stdout_of(&out), stderr_of(&out));
-    assert!(text.contains("T0021"), "{text}");
-    assert!(text.contains("unary operator Not is not defined"), "{text}");
+    assert!(
+        out.status.success(),
+        "{}{}",
+        stdout_of(&out),
+        stderr_of(&out)
+    );
 }
 
 /// Both operations are admitted inside a function body since #1316, which

@@ -2618,8 +2618,9 @@ fn emit_expr_unchecked<'ctx>(
         // helper an `if`/`while` condition's own test already calls (see
         // `MirStmt::If` above), then inverts the resulting `i1` -- so a
         // `not` over any operand `truthy` can classify (`bool`/`int`/
-        // `float`/`str`/`Optional`; `pycc_types::unop::unary_result_type`
-        // rejects every other operand before this ever runs) gets
+        // `float`/`str`/`Optional`, and a CPython object since Part 10 of
+        // #1371; `pycc_types::unop::unary_result_type` rejects every other
+        // operand before this ever runs) gets
         // `if`/`while`'s exact truthiness semantics for free, including
         // the `float`'s `UNE`-not-`ONE` NaN handling and `Optional`'s
         // present/payload AND. Every other truthy-call site releases any

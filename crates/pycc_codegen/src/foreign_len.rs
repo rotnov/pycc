@@ -263,9 +263,9 @@ pub(super) fn emit_len<'ctx>(
 /// exactly. The edge's branch is immediate, which matters most here: the
 /// condition-position caller has no expression guard after it.
 ///
-/// The one `truthy` call site this does *not* cover is `MirExpr::Not` -- `not o` never
-/// reaches here, because `pycc_types`' `unop.rs` answers `T0021` for a
-/// non-`bool` operand, before and after PR 3a alike.
+/// `MirExpr::Not` reaches here too since Part 10 of #1371: `not o` is this
+/// truth test inverted into a native `bool`, its `-1` taking the same
+/// immediate failure edge.
 pub(super) fn emit_truthy<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
