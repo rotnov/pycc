@@ -13,8 +13,8 @@
 //! the import sits, because lowering sees the import table only as it stands
 //! at each item.
 
-use super::spelling;
 use super::type_alias::legacy_type_alias_parts;
+use super::{ResolvedImport, ResolvedImports, spelling, statement_span};
 use crate::unsupported;
 use pycc_ast::visitor::{self, Visitor};
 use pycc_ast::{
@@ -34,15 +34,25 @@ use pycc_diag::Diagnostic;
 /// an annotation (`list[NDArray]`) is still inside it. A quoted annotation
 /// was already unquoted by the parser (#889), so it is a name here too.
 ///
-/// The carriers are found by the import's shape, not from the lowered
-/// import table: a module-level carrier import, or one nested in a
-/// module-level `if`/`try` body, declares its spelling even inside an
-/// `if TYPE_CHECKING:` block the lowering folds away, where CPython never
-/// runs it and a call `ndarray(n)` would raise `NameError` rather than reach
-/// pycc's producer. The import itself is exempt wherever it appears, so a
-/// repeated identical import and a guarded one are the same binding. The
-/// walk also descends into a folded `TYPE_CHECKING` body; a use there is
-/// refused too, which only fails closed.
+/// The carriers are found by the import's shape *and* the driver's answer,
+/// not from the lowered import table: a module-level carrier import, or one
+/// nested in a module-level `if`/`try` body, declares its spelling when
+/// `resolved` answers its statement [`ResolvedImport::Foreign`] -- even
+/// inside an `if TYPE_CHECKING:` block the lowering folds away (the driver
+/// is asked about those imports too), where CPython never runs it and a
+/// call `ndarray(n)` would raise `NameError` rather than reach pycc's
+/// producer. Any other answer declares nothing: a project `numpy.py` that
+/// defines its own `ndarray` is an ordinary project import, and a guarded
+/// from-import of a project module gets no answer at all, so the spelling
+/// keeps the meaning it has without the import. The import itself is
+/// exempt wherever it appears, so a repeated identical import and a guarded
+/// one are the same binding. The walk also descends into a folded
+/// `TYPE_CHECKING` body; a use there is refused too, which only fails
+/// closed.
+///
+/// A module-scope `del` of the spelling (outside every `def` and `class`)
+/// is left to `stmt::del::check_module_deletions`, which already refuses a
+/// `del` of any imported name, so the site is reported once.
 ///
 /// `failed` holds the indices of the module-level items whose lowering
 /// already reported a diagnostic. Those items are neither scanned nor
@@ -51,7 +61,11 @@ use pycc_diag::Diagnostic;
 ///
 /// A module with no carrier import (every module but the few that write
 /// it) returns before walking anything but its module-level imports.
-pub(crate) fn reject_carrier_misuse(body: &[Stmt], failed: &[usize]) -> Vec<Diagnostic> {
+pub(crate) fn reject_carrier_misuse(
+    body: &[Stmt],
+    resolved: &ResolvedImports<'_>,
+    failed: &[usize],
+) -> Vec<Diagnostic> {
     let live = || {
         body.iter()
             .enumerate()
@@ -60,7 +74,7 @@ pub(crate) fn reject_carrier_misuse(body: &[Stmt], failed: &[usize]) -> Vec<Diag
     };
     let mut carriers = Vec::new();
     for stmt in live() {
-        declared_carriers(stmt, &mut carriers);
+        declared_carriers(stmt, resolved, &mut carriers);
     }
     if carriers.is_empty() {
         return Vec::new();
@@ -68,6 +82,7 @@ pub(crate) fn reject_carrier_misuse(body: &[Stmt], failed: &[usize]) -> Vec<Diag
     let mut scan = CarrierScan {
         carriers,
         annotation_depth: 0,
+        scope_depth: 0,
         diagnostics: Vec::new(),
     };
     for stmt in live() {
@@ -125,11 +140,22 @@ pub(crate) fn splice_by_item(
 
 /// Appends the `(spelling, module)` of each carrier from-import `stmt`
 /// is, or holds in a nested `if`/`try` body (every clause, handler,
-/// `else` and `finally`), to `carriers`. A function or class body is not
-/// searched: an import there already fails its own item.
-fn declared_carriers<'a>(stmt: &'a Stmt, carriers: &mut Vec<(&'a str, &'a str)>) {
+/// `else` and `finally`), to `carriers`, when `resolved` answers it as
+/// foreign. A function or class body is not searched: an import there
+/// already fails its own item.
+fn declared_carriers<'a>(
+    stmt: &'a Stmt,
+    resolved: &ResolvedImports<'_>,
+    carriers: &mut Vec<(&'a str, &'a str)>,
+) {
     let bodies: Vec<&[Stmt]> = match stmt {
         Stmt::ImportFrom(import) => {
+            if !matches!(
+                resolved.get(statement_span(import.range)),
+                Some(ResolvedImport::Foreign)
+            ) {
+                return;
+            }
             let module = import.module.as_deref().unwrap_or("");
             for alias in &import.names {
                 let name = alias.name.as_str();
@@ -159,7 +185,7 @@ fn declared_carriers<'a>(stmt: &'a Stmt, carriers: &mut Vec<(&'a str, &'a str)>)
         _ => return,
     };
     for inner in bodies.into_iter().flatten() {
-        declared_carriers(inner, carriers);
+        declared_carriers(inner, resolved, carriers);
     }
 }
 
@@ -169,6 +195,9 @@ struct CarrierScan<'i> {
     carriers: Vec<(&'i str, &'i str)>,
     /// How many annotation positions enclose the current node.
     annotation_depth: u32,
+    /// How many `def` and `class` statements enclose the current node; `0`
+    /// is module scope.
+    scope_depth: u32,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -280,7 +309,10 @@ impl<'a> Visitor<'a> for CarrierScan<'_> {
             }
             _ => {}
         }
+        let scope = matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_));
+        self.scope_depth += u32::from(scope);
         visitor::walk_stmt(self, stmt);
+        self.scope_depth -= u32::from(scope);
     }
 
     fn visit_annotation(&mut self, expr: &'a Expr) {
@@ -293,7 +325,12 @@ impl<'a> Visitor<'a> for CarrierScan<'_> {
         if let Expr::Name(name) = expr {
             match name.ctx {
                 ExprContext::Load => self.check_read(&name.id, name.range),
-                // `Store` and `Del` (`del ndarray`) both bind the name.
+                // A module-scope `del ndarray` deletes an imported name, which
+                // `check_module_deletions` already refuses at the same site;
+                // the rest of the `del` statement (`del x[ndarray]`) is still
+                // scanned.
+                ExprContext::Del if self.scope_depth == 0 => {}
+                // `Store` and a `del` inside a `def` or `class` bind the name.
                 _ => self.check_binding(&name.id, name.range),
             }
         }

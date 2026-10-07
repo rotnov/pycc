@@ -1319,7 +1319,8 @@ one, even only inside an `if TYPE_CHECKING:` block, the spelling may only
 annotate; every other read or binding of it is a
 `C0001` ([DIAGNOSTICS.md](./DIAGNOSTICS.md)), while a repeated or
 `if TYPE_CHECKING:`-guarded copy of the same carrier import is the same
-binding and is accepted. Each name is its own
+binding and is accepted. Only an import resolved as foreign is a carrier
+import: a project `numpy.py` keeps its own `ndarray`. Each name is its own
 foreign binding, whose identity is the module *and* the name, so
 `import copy` followed by `from copy import copy` is the same shadowing refusal
 as any other rebinding of a foreign name.

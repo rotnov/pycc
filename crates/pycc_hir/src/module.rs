@@ -488,7 +488,8 @@ pub fn lower_module(
     // here, where the whole module is visible at once, then spliced in
     // after the diagnostics of the item each refusal sits in, so the list
     // keeps per-item source order.
-    let carrier_misuse = crate::import::reject_carrier_misuse(&module.body, &failed_items);
+    let carrier_misuse =
+        crate::import::reject_carrier_misuse(&module.body, resolved, &failed_items);
     let mut diagnostics = crate::import::splice_by_item(
         &module.body,
         &item_starts,

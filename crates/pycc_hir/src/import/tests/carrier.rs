@@ -14,11 +14,28 @@ const FOREIGN: &[&str] = &["numpy", "numpy.typing", "other", "ndarray"];
 /// Both carrier imports, as lowering records them.
 const IMPORTS: &str = "from numpy import ndarray\nfrom numpy.typing import NDArray\n";
 
+/// The post-check alone over `source`, answering every import request for
+/// a module in `FOREIGN` as foreign and treating the items in `failed` as
+/// already failed.
+fn scan(source: &str, failed: &[usize]) -> Vec<Diagnostic> {
+    let parsed = parse(source);
+    let mut resolved = ResolvedImports::default();
+    for request in project_import_requests(&parsed) {
+        if request
+            .module
+            .as_deref()
+            .is_some_and(|module| FOREIGN.contains(&module))
+        {
+            resolved.insert(request.span, ResolvedImport::Foreign);
+        }
+    }
+    reject_carrier_misuse(&parsed.body, &resolved, failed)
+}
+
 /// The post-check alone over `IMPORTS` followed by `body`, with no item
 /// failed.
 fn misuse(body: &str) -> Vec<Diagnostic> {
-    let source = format!("{IMPORTS}{body}");
-    reject_carrier_misuse(&parse(&source).body, &[])
+    scan(&format!("{IMPORTS}{body}"), &[])
 }
 
 /// The span of `name` inside the first occurrence of `context` in `source`.
@@ -118,7 +135,7 @@ fn a_repeated_or_guarded_carrier_import_is_accepted() {
 #[test]
 fn a_module_without_a_carrier_import_is_not_scanned() {
     let source = "ndarray = 1\nx = NDArray\n";
-    assert!(reject_carrier_misuse(&parse(source).body, &[]).is_empty());
+    assert!(scan(source, &[]).is_empty());
 }
 
 /// A carrier import only inside `if TYPE_CHECKING:` never runs in CPython,
@@ -157,9 +174,64 @@ fn a_carrier_import_in_any_nested_module_level_body_is_found() {
         "try:\n    pass\nfinally:\n    from numpy import ndarray\n",
     ] {
         let source = format!("{header}x = ndarray\n");
-        let diagnostics = reject_carrier_misuse(&parse(&source).body, &[]);
+        let diagnostics = scan(&source, &[]);
         assert_eq!(diagnostics.len(), 1, "{source}: {diagnostics:#?}");
     }
+}
+
+/// Only a foreign answer declares a carrier: a project `numpy.py` defining
+/// its own `ndarray` is an ordinary project import, so calling it is valid.
+#[test]
+fn a_project_module_numpy_declares_no_carrier() {
+    let dependency = Fixture::new("def ndarray(n: int) -> int:\n    return n\n");
+    dependency.lower_ok("from numpy import ndarray\nx = ndarray(1)\n");
+}
+
+/// A guarded from-import of a project module gets no answer from the
+/// driver, so it declares nothing either: the spelling keeps the meaning it
+/// has without the import.
+#[test]
+fn an_unanswered_carrier_import_declares_nothing() {
+    for source in [
+        "from numpy import ndarray\nx = ndarray\n",
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    \
+         from numpy import ndarray\nx = ndarray\n",
+    ] {
+        let parsed = parse(source);
+        let resolved = ResolvedImports::default();
+        assert!(
+            reject_carrier_misuse(&parsed.body, &resolved, &[]).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+/// A module-scope `del` of a carrier spelling is one diagnostic: the
+/// imported-name `del` rule's, not also the carrier scan's binding refusal.
+#[test]
+fn a_module_scope_del_of_a_carrier_is_reported_once() {
+    for source in [
+        "from numpy import ndarray\ndel ndarray\n",
+        "from numpy import ndarray\nif a:\n    del ndarray\n",
+        "from numpy import ndarray\ntry:\n    del (ndarray, b)\nexcept E:\n    pass\n",
+    ] {
+        let diagnostic = super::from_foreign::only_error(lower_foreign(source, FOREIGN));
+        assert_eq!(diagnostic.code, "C0001", "{source}");
+        assert!(
+            diagnostic
+                .message
+                .contains("a `del` of the imported name `ndarray`"),
+            "{source}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+/// The module-scope `del` exemption covers only the deleted name: a read
+/// inside the target is still refused.
+#[test]
+fn a_read_inside_a_module_scope_del_target_is_refused() {
+    assert_read_refused("del x[ndarray]\n", "x[ndarray]", "ndarray");
 }
 
 /// Neither an aliased carrier pair nor a carrier import inside a function
@@ -171,10 +243,7 @@ fn an_aliased_or_function_level_carrier_import_declares_nothing() {
         "from numpy import ndarray as nd\nx = ndarray\n",
         "def f() -> None:\n    from numpy import ndarray\nx = ndarray\n",
     ] {
-        assert!(
-            reject_carrier_misuse(&parse(source).body, &[]).is_empty(),
-            "{source}"
-        );
+        assert!(scan(source, &[]).is_empty(), "{source}");
     }
 }
 
@@ -199,10 +268,9 @@ fn a_failed_import_item_is_reported_once() {
 #[test]
 fn a_failed_item_is_skipped_by_the_scan() {
     let source = "from numpy import ndarray\nx = ndarray\n";
-    let body = &parse(source).body;
-    assert_eq!(reject_carrier_misuse(body, &[]).len(), 1);
-    assert!(reject_carrier_misuse(body, &[1]).is_empty());
-    assert!(reject_carrier_misuse(body, &[0]).is_empty());
+    assert_eq!(scan(source, &[]).len(), 1);
+    assert!(scan(source, &[1]).is_empty());
+    assert!(scan(source, &[0]).is_empty());
 }
 
 #[test]
@@ -375,6 +443,7 @@ fn each_statement_binding_is_refused() {
             "del ndarray",
             "ndarray",
         ),
+        ("class C:\n    del NDArray\n", "del NDArray", "NDArray"),
         ("type NDArray = int\n", "type NDArray", "NDArray"),
         ("type G[NDArray] = int\n", "[NDArray", "NDArray"),
         (
@@ -535,4 +604,28 @@ fn splice_by_item_places_each_diagnostic_after_its_item() {
     );
     let untouched = splice_by_item(body, &[0, 1, 1], 2, vec![at("only", 0)], Vec::new());
     assert_eq!(untouched.len(), 1);
+}
+
+/// Each refused site is reported once through the whole lowering, not by
+/// both the carrier scan and the item's own check.
+#[test]
+fn each_module_level_refusal_is_one_diagnostic() {
+    for body in [
+        "ndarray = 1\n",
+        "import ndarray\n",
+        "global ndarray\n",
+        "def ndarray() -> None:\n    pass\n",
+        "class NDArray:\n    pass\n",
+        "for ndarray in []:\n    pass\n",
+        "with a as ndarray:\n    pass\n",
+        "x = ndarray\n",
+        "print(NDArray)\n",
+        "type NDArray = int\n",
+        "NDArray: TypeAlias = int\n",
+        "from numpy import ndarray\nndarray = 2\n",
+    ] {
+        let source = format!("{IMPORTS}{body}");
+        let diagnostic = super::from_foreign::only_error(lower_foreign(&source, FOREIGN));
+        assert_eq!(diagnostic.code, "C0001", "{body}");
+    }
 }

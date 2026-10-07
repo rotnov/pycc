@@ -201,9 +201,9 @@ buffer-carrier pairs are the exception
 unaliased `from numpy import ndarray` or `from numpy.typing import NDArray`
 is admitted and keeps the spelling's buffer-annotation meaning, while
 `from numpy import NDArray` or `from numpy.typing import ndarray` is still
-refused. In a module that writes a carrier import -- at module level, or in
-a module-level `if`/`try` body, including an `if TYPE_CHECKING:` block that
-never runs -- every read of the
+refused. In a module that writes a carrier import the driver resolves as
+foreign -- at module level, or in a module-level `if`/`try` body, including
+an `if TYPE_CHECKING:` block that never runs -- every read of the
 spelling outside a type annotation is refused at the read with ``reading
 `NDArray` outside a type annotation is not supported yet: `from numpy.typing
 import NDArray` keeps the name's buffer-annotation meaning in pycc (D-244),
@@ -219,7 +219,9 @@ buffer-annotation meaning in pycc (D-244)``. Both are C0001. Repeating the
 carrier import, or guarding it with `if TYPE_CHECKING:`, is the same binding
 and is accepted. A module-level item whose own lowering already failed is
 not scanned, so `from other import ndarray` reports only its own spelling
-refusal.
+refusal, and a module-scope `del ndarray` reports only the imported-name
+`del` refusal. A project `numpy.py` or `numpy/typing.py` makes the import
+an ordinary project import, which declares no carrier.
 Every other from-import shape of such a module keeps its C0001: an aliased
 name (`from X import a as b`, [#963](https://github.com/rotnov/pycc/issues/963)),
 the wildcard, and a from-import inside a function, class, loop, `with` or
