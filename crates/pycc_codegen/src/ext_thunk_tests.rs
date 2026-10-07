@@ -468,6 +468,24 @@ fn the_export_predicate_admits_exactly_the_two_pep_562_module_hooks() {
 }
 
 #[test]
+fn the_export_predicate_admits_a_classes_comparison_and_hash_slot_dunders() {
+    // #1427: the driver wraps these for `tp_richcompare`/`tp_hash`, on a
+    // published class or on the carrier type of a private one, so a
+    // tuple-carrying comparison needs its thunk whatever the class is named.
+    for dunder in [
+        "__lt__", "__le__", "__eq__", "__ne__", "__gt__", "__ge__", "__hash__",
+    ] {
+        assert!(crate::is_ext_exportable_name(&format!("Grid.{dunder}")));
+        assert!(crate::is_ext_exportable_name(&format!("_Grid.{dunder}")));
+    }
+    assert!(!crate::is_ext_exportable_name("__eq__"));
+    assert!(!crate::is_ext_exportable_name(".__eq__"));
+    assert!(!crate::is_ext_exportable_name("Grid.__eq__.static"));
+    assert!(!crate::is_ext_exportable_name("Grid.__bool__"));
+    assert!(!crate::is_ext_exportable_name("0gen_Grid.__eq__"));
+}
+
+#[test]
 fn the_export_predicate_refuses_an_empty_segment_and_a_specialization() {
     // `is_public_name`'s underlying rule (`!starts_with('_')`) is `true` for
     // the empty string, so each empty segment is refused explicitly rather

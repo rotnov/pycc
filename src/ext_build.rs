@@ -411,7 +411,7 @@ mod defaults;
 pub(crate) use carrier::*;
 mod export_name;
 mod exports_inc;
-pub(crate) use exports_inc::generate_exports_inc;
+pub(crate) use exports_inc::{generate_exports_inc, generate_exports_inc_with_slots};
 mod getset;
 pub(crate) use getset::ExtGetset;
 mod inherited;
@@ -425,6 +425,11 @@ mod module_hooks;
 pub(crate) use method_types::*;
 pub(crate) use module_hooks::{EntryHooks, is_module_hook};
 mod publication;
+mod richcompare;
+pub(crate) use richcompare::{ExtSlotDunders, collect_slot_dunders};
+#[cfg(test)]
+pub(crate) use richcompare::{SLOT_DUNDERS, is_slot_dunder_method};
+
 use publication::namespace_owner;
 pub(crate) use publication::{ExtPublishedClass, collect_class_publications};
 mod wrappers;

@@ -10,6 +10,7 @@
 use super::export_name::ExtReceiver;
 use super::getset::getset_c;
 use super::instance_copy::{CarrierCopy, carrier_copy};
+use super::richcompare::{self, ExtSlotDunders};
 use super::{
     ExtCtor, ExtPublishedClass, arg_slot_locals, buffer_releases, c_param_list, defaults, keywords,
     source_level_name, unpack_args,
@@ -104,8 +105,18 @@ pub(crate) const UNPUBLISHED_CLASS_ISINSTANCE: &str = "pycc_ext_unpublished_clas
 /// the module replaces it, so a type from before a reload is no longer
 /// consulted -- as a reloaded Python module's new class is not the old one.
 ///
+/// A class in `slots` (#1427) also gets its comparison and hash slots
+/// (`richcompare::slot_rows`), and a class in `slots` that is not published
+/// gets a hidden carrier type the same registration creates and enters in
+/// the carrier-type cache without adding it to the module
+/// (`richcompare::hidden_carrier_types_c`).
+///
 /// [`exception_classes_c`]: super::exception_classes_c
-pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCtor]) -> String {
+pub(crate) fn method_types_c(
+    publications: &[ExtPublishedClass],
+    ctors: &[ExtCtor],
+    slots: &[ExtSlotDunders],
+) -> String {
     let mut out = String::new();
     for published in publications {
         out.push_str(&format!(
@@ -167,6 +178,10 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
             out.push_str(&tp_init_c(ctor));
             out.push_str(&getset_c(ctor, &mut emitted_getters));
         }
+        let class_slots = slots.iter().find(|entry| entry.class == *class);
+        if let Some(entry) = class_slots {
+            out.push_str(&richcompare::slot_functions_c(entry, &mut emitted_getters));
+        }
         out.push_str(&format!(
             "static PyType_Slot pycc_ext_type_slots_{class}[] = {{\n    \
              {{Py_tp_methods, pycc_ext_type_methods_{class}}},\n"
@@ -195,6 +210,11 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
                 "    {{Py_tp_getset, pycc_ext_type_getset_{class}}},\n"
             ));
         }
+        // #1427: likewise only when the class resolves a comparison or
+        // `__hash__`.
+        if let Some(entry) = class_slots {
+            out.push_str(&richcompare::slot_rows(entry));
+        }
         out.push_str("    {0, NULL},\n};\n\n");
         // A non-constructible class keeps the `DISALLOW_INSTANTIATION` flag
         // Part 1 emitted; a constructible one must not refuse its own
@@ -212,9 +232,12 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
              {flags},\n    pycc_ext_type_slots_{class},\n}};\n\n"
         ));
     }
+    let (hidden, hidden_registration) =
+        richcompare::hidden_carrier_types_c(slots, publications, &mut emitted_getters);
+    out.push_str(&hidden);
     out.push_str(&compiled_class_isinstance_c(publications));
     out.push_str(&format!("{METHOD_TYPE_REGISTER_DECL}\n{{\n"));
-    if publications.is_empty() {
+    if publications.is_empty() && hidden_registration.is_empty() {
         out.push_str("    (void)module;\n    return 0;\n}\n");
         return out;
     }
@@ -226,6 +249,10 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
         // type. On success the local reference moves into the class's file
         // static (Part 7 of #1371), releasing the one a previous exec
         // stored there.
+        if let Some(entry) = slots.iter().find(|entry| entry.class == *class) {
+            let array = format!("pycc_ext_type_slots_{class}");
+            out.push_str(&richcompare::unhashable_fixup(entry, &array));
+        }
         out.push_str(&format!(
             "    type = PyType_FromSpec(&pycc_ext_type_spec_{class});\n    \
              if (type == NULL) {{\n        return -1;\n    }}\n    \
@@ -236,6 +263,7 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
              pycc_ext_type_object_{class} = type;\n"
         ));
     }
+    out.push_str(&hidden_registration);
     out.push_str("    return 0;\n}\n");
     out
 }

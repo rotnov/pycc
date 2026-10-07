@@ -54,7 +54,7 @@ fn an_init_only_class_is_published_with_only_the_copy_row_and_a_constructor() {
     // (#1455), a real `tp_init`,
     // the slot descriptors, no `DISALLOW_INSTANTIATION`, and a module
     // attribute under the class's own name.
-    let c = method_types_c(&publications, &ctors);
+    let c = method_types_c(&publications, &ctors, &[]);
     for needle in [
         "static PyMethodDef pycc_ext_type_methods_ParseConf[] = {\n    \
          {\"__copy__\", (PyCFunction)(void (*)(void))pycc_ext_instance_copy, METH_NOARGS, NULL},\n    \
@@ -101,7 +101,7 @@ fn a_class_with_only_the_implicit_object_init_is_published_and_takes_no_argument
         vec![("Empty", 0, 0)]
     );
     // No slot, so no descriptor table: the slot array stays as it was.
-    let c = method_types_c(&publications, &ctors);
+    let c = method_types_c(&publications, &ctors, &[]);
     assert!(c.contains("{Py_tp_init, pycc_ext_tp_init_Empty}"), "{c}");
     assert!(!c.contains("Py_tp_getset"), "{c}");
 }
@@ -174,7 +174,7 @@ fn an_init_only_class_the_host_cannot_construct_or_name_gets_no_type_object() {
         );
         assert!(ctors.is_empty(), "{label}: yielded {ctors:?}");
         assert!(
-            !method_types_c(&publications, &ctors).contains("PyType_Spec"),
+            !method_types_c(&publications, &ctors, &[]).contains("PyType_Spec"),
             "{label}: rendered a type object"
         );
     }

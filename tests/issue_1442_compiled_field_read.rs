@@ -69,8 +69,8 @@ fn assert_ok(run: &Output) {
 /// property and an unannotated `__eq__` that reads both off its object-typed
 /// operand -- lark's own `__eq__` verbatim, whose `return NotImplemented`
 /// widens its return to the object (D-258's #1418 amendment). The host
-/// reaches it through `eq`, because a host `==` on a compiled instance still
-/// compares identity (#1427).
+/// reaches it through `eq`; a host `==` runs the same body through the
+/// carrier type's `tp_richcompare` since #1427.
 /// `Fields` has one slot of every carried type plus a bigint, `Base` and
 /// `Derived` share an inherited property, and `Partial`'s `__init__` never
 /// calls `Base`'s, so `Base`'s slots stay unassigned (#1148). Every class

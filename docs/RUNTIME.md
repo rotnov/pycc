@@ -867,6 +867,76 @@ constructor has; and the refusals above. An embedded executable compiles the
 same shim and the same generated table, so a carrier there inherits the same
 `__copy__`; that path is not separately tested.
 
+*Comparing and hashing through the carrier type*
+([#1427](https://github.com/rotnov/pycc/issues/1427), D-244's #1427
+amendment). CPython runs `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `hash()` and
+a dict or set lookup through a type's `tp_richcompare` and `tp_hash` slots,
+never through its method table, so a compiled class's `__eq__`, `__ne__`,
+`__lt__`, `__le__`, `__gt__`, `__ge__` and `__hash__` are installed as those
+two slots on its carrier type (`src/ext_build/richcompare.rs`) and get no
+method row; `PyType_Ready` publishes the slot wrappers under the dunder names,
+so `mod.C.__eq__` exists as in CPython. Each name resolves by type lookup -- the
+first MRO class whose own body binds it, whatever kind of binding -- and runs
+through the receiver-exact copy (D-254), with its parameter and return rows
+from the table below. The generated `tp_richcompare` is CPython's
+`object_richcompare` with the class's methods in it: a defined comparison's
+result goes back unchanged, `NotImplemented` included, so the host tries the
+reflected operand and finally falls back to identity for `==`/`!=` or
+`TypeError` for ordering; an undefined `__ne__` inverts the type's own `==`
+unless that is `NotImplemented` or raised; an undefined `__eq__` is identity.
+A defined comparison whose parameter is annotated with a compiled class -- a
+`@dataclass`'s synthesized `__eq__`, or `def __eq__(self, other: "C")` --
+first asks `pycc_ext_slot_operand_is` whether `other` is an instance of that
+class, by the same run-time MRO table the parameter's unpacking uses, and
+answers `NotImplemented` when it is not, so `p == None` is `False` rather than
+that row's ingress `TypeError`.
+`tp_hash` follows the data model's rule: the first MRO class binding
+`__hash__` or `__eq__` decides, so a class whose nearest binding is `__eq__`
+alone is unhashable (`PyObject_HashNotImplemented`, published as
+`__hash__ = None`; the slot row holds the `pycc_ext_unhashable` marker,
+which `pycc_ext_unhashable_slots` replaces at module exec before
+`PyType_FromSpec` reads it, because on Windows a static initializer
+naming a `python3.dll` function holds the import thunk's address and
+`PyType_Ready` publishes `None` only for the exact function); a compiled `__hash__` is called through
+`pycc_ext_finish_hash`, which refuses a non-`int` result with CPython's
+`TypeError`, maps `-1` to `-2` and hashes an `int` outside `Py_hash_t`
+CPython's way; and a class binding neither name but defining an ordering keeps
+`object`'s identity hash (`pycc_ext_identity_hash`), installed explicitly
+because CPython does not inherit `tp_hash` beside an overridden
+`tp_richcompare`. A class resolving none of the seven names keeps `object`'s
+slots and generates exactly the C it did before. A published class carries the
+slots on its own type object. Every other carrier class that resolves one --
+a private class, or one whose `__init__` keeps it unpublished -- gets a hidden
+carrier type, built like the on-demand one (#1435) plus the slots and entered
+in the carrier-type cache at module exec (`pycc_ext_carrier_register`), so no
+instance of it crosses on a slotless type. A binding the artifact cannot
+install is refused with `C0003` before any toolchain runs, on every class of
+the module, since an instance of any class can cross as `Any`: a
+`@staticmethod`, `@classmethod`, `@property` or class attribute under one of
+the seven names, a method whose signature the table below cannot carry, and
+any of them on a PEP 695 generic class, whose specializations share one
+carrier type. A `Protocol` class has no instances and gets no slots.
+Deviations, pinned by `tests/issue_1427_ext_richcompare.rs` beside CPython's
+own answers: published types are flat, so a subclass overriding a comparison
+is not tried first as the reflected operand (`Base(1) == Over(1)` runs
+`Base.__eq__`); a hand-written comparison whose parameter is annotated with a
+compiled class never runs on an operand that is not an instance of it, so
+whatever its body would answer for one is replaced by the reflected or
+identity answer (a body answering `True` for a non-instance makes `c == None`
+`True` in CPython and `False` here; a body reading `other.v` raises `AttributeError` in CPython);
+a comparison whose parameter has any other annotation the boundary checks
+(`other: int`) raises the boundary's ingress `TypeError` for an operand of
+another type where CPython runs the body (`c == "x"`); a carrier type with no field descriptors -- a hidden one or a
+non-constructible published one -- makes the compiled body's `other.v` on an
+`Any` operand raise `AttributeError`
+([#1448](https://github.com/rotnov/pycc/issues/1448)), where before #1427 the
+host answered by identity without running the body; and a carrier no
+`tp_init` filled raises `TypeError: C.__hash__() called on an uninitialized
+instance` where CPython's body raises `AttributeError`. The embed launcher
+installs none of these slots (it publishes no type), which is why compiled code
+still may not use a pycc instance as a subscript key, comparison operand or
+list-display element ([#1470](https://github.com/rotnov/pycc/issues/1470)).
+
 The table below is the canonical statement of what the `ext` boundary carries
 today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,
 `docs/DIAGNOSTICS.md` and the `C0003` explanation cross-reference it rather than
@@ -1822,8 +1892,11 @@ above. Four rules fix what that carrier is.
   `Ty::Instance` of a non-enum class with no exception type tag and no
   builtin exception on its MRO; a `Protocol`-typed value, an enum member and
   an exception instance stay `I0404`. A subscript key, a comparison operand
-  and a list-display element stay refused, because the class's
-  `__hash__`/`__eq__` would not run there (below). A `@classmethod`'s own
+  and a list-display element stay refused: an `--ext` carrier type compares
+  and hashes through the class's own dunders since #1427 ("Comparing and
+  hashing through the carrier type" above), but the embed launcher's
+  carriers do not, and the checker does not know which artifact it compiles
+  for ([#1470](https://github.com/rotnov/pycc/issues/1470)). A `@classmethod`'s own
   `cls` is refused by name (`Environment::in_classmethod`): it is typed as
   an instance but is a null receiver, and an alias that slips past the
   syntactic check reaches the packer's `NULL` guard, which raises
@@ -1841,9 +1914,11 @@ above. Four rules fix what that carrier is.
   `True` ([#1448](https://github.com/rotnov/pycc/issues/1448)). Published types are
   flat, so the host's own `isinstance(derived, mod.Base)` is `False`; a
   compiled `isinstance(x, Base)` on a carrier that comes back answers from
-  the run-time class's MRO instead (above), and matches CPython. A class's dunder
-  overrides (`__eq__`, `__hash__`, `__repr__`, ...) are not wired to type
-  slots, so the host sees `object`'s identity equality and default `repr`.
+  the run-time class's MRO instead (above), and matches CPython. Since #1427 a
+  class's comparison and hash dunders are wired to its carrier type's slots
+  ("Comparing and hashing through the carrier type" above), but its other
+  dunder overrides (`__repr__`, `__str__`, `__bool__`, `__len__`, ...) are
+  not, so the host sees `object`'s default `repr`.
   And an instance whose `self` escapes during `__init__` is packed before
   `tp_init` links the constructed carrier, so that escape gets a different
   carrier than the host's object.

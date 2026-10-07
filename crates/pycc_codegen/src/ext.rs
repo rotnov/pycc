@@ -694,11 +694,14 @@ pub fn ext_thunk_symbol(name: &str) -> String {
 /// [`ext_thunk_required`], so a disagreement emits the wrong C declaration
 /// for a `tuple`-carrying method.
 ///
-/// Since #1467 the one name class this answers `true` for beyond that
-/// lexical verdict is the two PEP 562 module hooks, `__getattr__` and
-/// `__dir__`: the driver admits them through `is_module_hook`, not through
-/// `classify_export_name`, so the parity test compares this function with
-/// `classify_export_name(name).is_some() || is_module_hook(name)`.
+/// Two name classes are answered `true` beyond that lexical verdict: the
+/// PEP 562 module hooks `__getattr__` and `__dir__` (#1467), which the
+/// driver admits through `is_module_hook`, and `<Class>.<slot dunder>`
+/// (#1427), which it admits through `is_slot_dunder_method`, neither through
+/// `classify_export_name`. So the parity test compares this function with
+/// `classify_export_name(name).is_some() || is_module_hook(name) ||
+/// is_slot_dunder_method(name)` -- the last for #1427's comparison and
+/// `__hash__` slots, admitted for any non-empty class segment.
 ///
 /// The public-name test is D-038's predicate, spelled out rather than
 /// delegated to `pycc_hir::is_public_name` because this crate deliberately
@@ -764,6 +767,9 @@ pub fn is_ext_exportable_name(name: &str) -> bool {
     if name == "__getattr__" || name == "__dir__" {
         return true;
     }
+    if is_slot_dunder_method_name(name) {
+        return true;
+    }
     let mut segments = name.split('.');
     // `str::split` always yields at least one segment, so the fallback is
     // unreachable rather than a second refusal path; an empty first segment
@@ -796,6 +802,29 @@ pub fn is_ext_exportable_name(name: &str) -> bool {
             segments.next().is_none() && (kind == "static" || kind == "classmethod")
         }
     }
+}
+
+/// The special methods the `--ext` driver installs as a type slot rather
+/// than a `PyMethodDef` row (#1427): the six rich comparisons and
+/// `__hash__`. Mirrors `src/ext_build/richcompare.rs`'s `SLOT_DUNDERS`;
+/// the parity test in `src/ext_build_tests/exports.rs` keeps the two equal.
+const SLOT_DUNDERS: [&str; 7] = [
+    "__lt__", "__le__", "__eq__", "__ne__", "__gt__", "__ge__", "__hash__",
+];
+
+/// #1427: whether `name` is `<Class>.<slot dunder>` -- a comparison or
+/// `__hash__` method the driver wraps for a `tp_richcompare`/`tp_hash`
+/// slot. The class segment may be private: an unpublished class whose
+/// instance crosses gets a carrier type carrying the same slots, so its
+/// wrapper needs the thunk exactly as a published one's does. A `0gen_`
+/// name is refused by the caller before this runs.
+fn is_slot_dunder_method_name(name: &str) -> bool {
+    let mut segments = name.split('.');
+    let class = segments.next().unwrap_or("");
+    let Some(method) = segments.next() else {
+        return false;
+    };
+    !class.is_empty() && segments.next().is_none() && SLOT_DUNDERS.contains(&method)
 }
 
 /// The boundary slots a value of type `ty` occupies when it crosses the

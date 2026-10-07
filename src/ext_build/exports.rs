@@ -192,8 +192,10 @@ pub(crate) fn carrier_class_names(module: &HirModule) -> BTreeSet<String> {
 /// `pycc_codegen::is_ext_exportable_name` (work item 8's parity test) and
 /// makes the mirror a harmless superset. The entry module's PEP 562 hooks
 /// (#1467) are layered on the same way, by [`collect_exports_with_hooks`]
-/// from its `hooks` set rather than from `classify_export_name`, so the parity test compares the mirror with
-/// that verdict `|| is_module_hook(name)`.
+/// from its `hooks` set rather than from `classify_export_name`, and the
+/// comparison and hash slot dunders (#1427) by `super::collect_slot_dunders`,
+/// so the parity test compares the mirror with that verdict
+/// `|| is_module_hook(name) || is_slot_dunder_method(name)`.
 ///
 /// The boundary carries `int`, `float`, `bool`, `str` and a `tuple` of
 /// those scalars in either direction, and `None` as a return type only

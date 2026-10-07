@@ -828,12 +828,35 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
         "__getattribute__",
         "_getattr",
         "Grid.__getattr__",
+        // #1427: the comparison and hash slot dunders, on a public or a
+        // private class, which the driver admits through `richcompare`.
+        "Grid.__eq__",
+        "_Grid.__lt__",
+        "Grid.__hash__",
+        "Grid.__eq__.static",
+        "Grid.__bool__",
+        "__eq__",
+        ".__eq__",
+        "0gen_Grid.__eq__",
     ] {
         assert_eq!(
-            classify_export_name(name).is_some() || is_module_hook(name),
+            classify_export_name(name).is_some()
+                || is_module_hook(name)
+                || is_slot_dunder_method(name),
             pycc_codegen::is_ext_exportable_name(name),
             "predicates disagree on {name:?}"
         );
+    }
+    // #1427: every slot dunder the driver installs, on a public and a
+    // private class, so the two crates' `SLOT_DUNDERS` lists cannot drift.
+    for dunder in SLOT_DUNDERS {
+        for name in [format!("Grid.{dunder}"), format!("_Grid.{dunder}")] {
+            assert!(is_slot_dunder_method(&name), "{name:?}");
+            assert!(
+                pycc_codegen::is_ext_exportable_name(&name),
+                "codegen does not export {name:?}"
+            );
+        }
     }
     assert!(classify_export_name("Grid.scale.0super_Base.classmethod").is_none());
 }

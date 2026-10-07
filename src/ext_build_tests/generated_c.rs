@@ -521,6 +521,10 @@ fn the_embedded_shim_is_the_tracked_c_file_and_declares_the_limited_api_floor() 
         // point the generated companion is included at, or every generated
         // buffer local would be an undeclared type in clang.
         "} PyccExtBufferView;",
+        // #1427: what the generated comparison and hash slots call.
+        "static Py_hash_t pycc_ext_finish_hash(PyObject *res)",
+        "static Py_hash_t pycc_ext_identity_hash(PyObject *self)",
+        "static int pycc_ext_slot_operand_is(PyObject *other, const char *class_name);",
     ] {
         assert!(SHIM_C.contains(helper), "{helper}");
     }

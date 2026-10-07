@@ -90,9 +90,9 @@ const SOURCE: &str = "from typing import Any\n\
 /// `NotImplemented`, for two handled operands and an unhandled one. `ns` is
 /// the module's namespace.
 ///
-/// It calls `__eq__` through `eq` because the artifact does not publish a
-/// comparison method to the host yet (`C.__eq__` there is `object`'s own
-/// slot wrapper): wiring `tp_richcompare` is #1427.
+/// It calls `__eq__` through `eq`, which pins the method's own return; a
+/// host `==` runs the same body through the carrier type's
+/// `tp_richcompare` since #1427 (`tests/issue_1427_ext_richcompare.rs`).
 fn report(load: &str) -> String {
     format!(
         "{load}\n\

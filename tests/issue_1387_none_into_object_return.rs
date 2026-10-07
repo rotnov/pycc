@@ -306,11 +306,10 @@ fn the_subject_s_feed_token_shape_matches_cpython() {
 }
 
 /// The subject's `ParserState.__eq__(self, other) -> bool` signature (line
-/// 51), unannotated as in lark, and its `__ne__` counterpart. Dunder methods
-/// are not exported to the host, so the script reaches them through public
-/// module functions that call them explicitly -- a host `==` on the instance
-/// would compare identity, the pre-existing divergence
-/// `docs/TYPE_SYSTEM.md`'s `object` row records.
+/// 51), unannotated as in lark, and its `__ne__` counterpart. The script
+/// reaches them through public module functions that call them explicitly;
+/// a host `==` on the instance runs them through the carrier type's
+/// `tp_richcompare` since #1427 (`tests/issue_1427_ext_richcompare.rs`).
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn the_subject_s_unannotated_eq_matches_cpython() {

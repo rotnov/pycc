@@ -368,11 +368,11 @@ pub(crate) fn is_packable_operand(ty: &Ty) -> bool {
 /// The instance arm (#1435) is deliberately *not* part of
 /// [`is_packable_operand`]: a call argument, positional or keyword, crosses
 /// as the instance's `PyccExtInstance` carrier (`pycc_ext_obj_pack_instance`).
-/// The carrier inherits `object`'s identity hash and identity equality, and
-/// the class's own `__hash__`/`__eq__` overrides are not wired to its type
-/// slots, so a subscript key or a comparison operand would silently run
-/// CPython's default instead of the class's method -- those positions, and
-/// a list-display element, stay refused until the dunders are wired.
+/// Since #1427 an `--ext` carrier type compares and hashes through the
+/// class's own dunders, but the embed launcher's carriers still inherit
+/// `object`'s identity hash and equality and this checker does not know
+/// which artifact it compiles for, so a subscript key, a comparison operand
+/// and a list-display element stay refused (#1470).
 ///
 /// A `@classmethod`'s own `cls` is typed as an instance of its class but
 /// holds none (see `Environment::in_classmethod`), so it is refused by name
