@@ -13,14 +13,18 @@
 //! raises `AttributeError`, an object whose `__class__` property answers
 //! `int` or a compiled class passes the guard but raises `TypeError` at the
 //! narrowed read, a `str` subclass handed to a native `str`
-//! parameter comes back a plain `str`, and a native use of an `int`,
+//! parameter or flowing through a native expression (a conditional
+//! expression's arm, an annotated binding) comes back a plain `str`, and a
+//! native use of an `int`,
 //! `float` or `str` subclass instance runs the base type's operation, not
 //! an override.
 //!
 //! Two guards do not narrow: one on a class that has a compiled subclass
 //! keeps the object, so an override runs through CPython's own lookup
 //! ([`a_class_with_a_compiled_subclass_keeps_the_object`]), and one whose
-//! class name a module function shadows is refused.
+//! class name a module function shadows is refused. An `else` that
+//! rebinds the name ends the narrowing for the rest of the block
+//! ([`an_else_that_rebinds_the_name_leaves_the_continuation_an_object`]).
 //!
 //! The hosted tests are `#[ignore]`d for the reason every `ext` test is;
 //! the refusals need no interpreter and run everywhere.
@@ -172,6 +176,19 @@ def _echo(s: str) -> str:
 def relay(o: object) -> object:
     if isinstance(o, str):
         return _echo(o)
+    return None
+
+
+def pick(o: object, flag: bool) -> object:
+    if isinstance(o, str):
+        return o if flag else "x"
+    return None
+
+
+def annotated(o: object) -> object:
+    if isinstance(o, str):
+        y: str = o
+        return y
     return None
 
 
@@ -385,6 +402,8 @@ for f in (lambda: m.as_int(2**70), lambda: m.as_token(m.Token.__new__(m.Token)),
     except Exception as e:
         print(type(e).__name__, e)
 print(type(m.relay(S('a'))).__name__, m.as_str(S('a')))
+s = S('b')
+print(type(m.pick(s, True)).__name__, m.pick(s, True) is s, type(m.annotated(s)).__name__)
 "#;
 
 /// The deliberate deviations, each against CPython's own answer:
@@ -397,7 +416,12 @@ print(type(m.relay(S('a'))).__name__, m.as_str(S('a')))
 ///   read raises `TypeError` where CPython runs the guarded body on it;
 /// - a `str` subclass handed to a native `str` parameter is copied as a
 ///   plain `str`, and a native use runs `str`'s own `+`, not a subclass's
-///   overriding `__add__`.
+///   overriding `__add__`;
+/// - a narrowed read that flows through a native expression -- a
+///   conditional expression's arm, an annotated binding -- is a native
+///   value, so boxing it back copies a `str` subclass into a new plain
+///   `str`: only a narrowed read that is itself the boxed operand keeps
+///   the object (the identity peephole, `pycc_codegen::object_unbox`).
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn the_narrowed_read_deviations_are_the_documented_ones() {
@@ -409,7 +433,7 @@ fn the_narrowed_read_deviations_are_the_documented_ones() {
         stdout_of(&oracle),
         "1180591620717411303425\n\
          AttributeError 'Token' object has no attribute 'value'\n\
-         7\n3\nS over\n"
+         7\n3\nS over\nS True S\n"
     );
     let compiled = run(DEVIATIONS, &out_dir, &dir);
     assert_ok(&compiled);
@@ -421,7 +445,7 @@ fn the_narrowed_read_deviations_are_the_documented_ones() {
          TypeError isinstance() held for a 'FakeInt' object, but only an int has the native \
          representation the narrowed read needs\n\
          TypeError narrowed object must be a compiled narrowing.Token instance, not FakeToken\n\
-         str a!\n"
+         str a!\nstr False str\n"
     );
 }
 
@@ -637,6 +661,72 @@ fn a_function_spelled_like_a_guarded_class_is_refused() {
         rendered.contains(
             "error[I0404]: testing a CPython object with `isinstance` against the function `int`"
         ),
+        "{rendered}"
+    );
+}
+
+/// `if not isinstance(o, int): return ...` narrows the rest of the block
+/// only when the surviving `else` leaves `o` alone. Here it rebinds `o` to
+/// a `float`, directly or in an `elif` arm, and the comparison after the
+/// `if` must see that `float`, not unbox it as an `int`.
+const REBOUND: &str = r#"def rebound_else(o: object) -> object:
+    if not isinstance(o, int):
+        return "no"
+    else:
+        o = 1.5
+    return o == 1.5
+
+
+def rebound_elif(o: object, flag: bool) -> object:
+    if not isinstance(o, int):
+        return "no"
+    elif flag:
+        o = 2.5
+    return o == 2.5
+"#;
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_else_that_rebinds_the_name_leaves_the_continuation_an_object() {
+    let dir = ScratchDir::new("ext_1476_rebound").expect("scratch");
+    let src_dir = dir.join("src");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&src_dir).expect("create the source directory");
+    std::fs::create_dir_all(&out_dir).expect("create the output directory");
+    let build = pycc()
+        .arg("build")
+        .arg(write(&src_dir, "rebound.py", REBOUND))
+        .arg("-o")
+        .arg(out_dir.join("rebound"))
+        .arg("--ext")
+        .output()
+        .expect("pycc should spawn");
+    assert_ok(&build);
+    let script = "import rebound as m\n\
+                  for v in (3, 'a'):\n    \
+                  print(m.rebound_else(v), m.rebound_elif(v, True), m.rebound_elif(v, False))\n";
+    for path in [&src_dir, &out_dir] {
+        let output = run(script, path, &dir);
+        assert_ok(&output);
+        assert_eq!(
+            stdout_of(&output),
+            "True True False\nno no no\n",
+            "{path:?}"
+        );
+    }
+}
+
+/// A native use after the `if` is refused: the continuation reads the
+/// object.
+#[test]
+fn a_native_use_after_an_else_that_rebinds_the_name_is_refused() {
+    let rendered = refused(
+        "ext_1476_rebound_native",
+        "def f(o: object) -> int:\n    if not isinstance(o, int):\n        return 0\n    \
+         else:\n        o = 1.5\n    return o + 1\n",
+    );
+    assert!(
+        rendered.contains("error[T0021]: operator Add is not defined for `object` and `int`"),
         "{rendered}"
     );
 }

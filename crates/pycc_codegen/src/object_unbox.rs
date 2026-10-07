@@ -24,6 +24,15 @@
 //! [`emit_pack_operand`] evaluates such an operand as the object it still
 //! is instead; every `foreign_pack::emit_pack` caller and
 //! `object_box::emit_boxed` evaluate their operand through it.
+//!
+//! The peephole looks only at the operand itself. A narrowed read inside a
+//! native expression (a conditional expression's arm, an annotated
+//! binding) is a native value by then and is packed anew, so a `str`
+//! subclass is flattened there. That is D-258's documented `str`-subclass
+//! deviation, pinned by `tests/issue_1476_isinstance_narrowing.rs`, not a
+//! gap to close here. An arm that yields the borrowed object and one that
+//! yields a fresh native value share no representation, so they cannot be
+//! merged into one operand.
 
 use super::*;
 use crate::foreign_fail::{ForeignFailEdge, route_negative};

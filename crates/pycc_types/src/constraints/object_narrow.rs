@@ -124,7 +124,8 @@ pub(super) fn kill_names_in(narrowed: &mut HashMap<String, Ty>, names: &HashSet<
 }
 
 /// After collecting `stmt`: a name it rebinds anywhere is no longer
-/// narrowed, and a negated guard whose body definitely terminates narrows
+/// narrowed, and a negated guard whose body definitely terminates and whose
+/// `else` leaves the name alone (`pycc_hir::continuation_narrows`) narrows
 /// the rest of the block.
 pub(super) fn after_statement(
     signatures: &HashMap<String, SignatureTerms>,
@@ -136,9 +137,9 @@ pub(super) fn after_statement(
     if !env.narrowed.is_empty() && !matches!(stmt, HirStmt::Try { .. } | HirStmt::TryStar { .. }) {
         kill(env, stmt);
     }
-    if let HirStmt::If { test, body, .. } = stmt
-        && pycc_hir::definitely_terminates(body)
+    if let HirStmt::If { test, body, orelse } = stmt
         && let Some((name, inner, IsInstancePolarity::Negated)) = guard(signatures, env, test)
+        && pycc_hir::continuation_narrows(body, orelse, &name)
     {
         env.narrowed.insert(name, inner);
     }

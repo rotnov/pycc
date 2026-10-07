@@ -290,6 +290,25 @@ fn a_negated_guard_narrows_the_else_branch_and_a_terminating_body_the_continuati
     assert_eq!(body[1], print_mir(unboxed("o", Ty::Int)));
 }
 
+/// An `else` that rebinds the name leaves the continuation reading the
+/// object (#1476 review): unboxing it there would read a rebound `float`
+/// as an `int`.
+#[test]
+fn an_else_that_rebinds_the_name_leaves_the_continuation_an_object() {
+    let body = function_body(vec![
+        HirStmt::If {
+            test: not(isinstance("o", "int")),
+            body: vec![HirStmt::Return(None)],
+            orelse: vec![HirStmt::Assign {
+                target: "o".to_string(),
+                value: name("p"),
+            }],
+        },
+        print(name("o")),
+    ]);
+    assert_eq!(body[1], print_mir(object_name("o")));
+}
+
 #[test]
 fn a_first_binding_from_a_narrowed_name_keeps_the_object() {
     let body = function_body(vec![HirStmt::If {

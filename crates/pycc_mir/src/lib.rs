@@ -1895,7 +1895,7 @@ pub fn build(hir: &HirModule) -> MirModule {
             // shape uniformly, mirroring
             // `pycc_types::check_with_environment_all`'s own identical no-op
             // call at its module top level.
-            apply_post_if_narrowing(stmt, &mut scopes, &classes);
+            object_narrow::apply_post_if_narrowing(stmt, &mut scopes, &classes);
         }
     }
     for (index, item) in hir.items.iter().enumerate() {
@@ -2201,45 +2201,9 @@ fn narrowed_ty(scopes: &[HashMap<String, Ty>], name: &str) -> Option<Ty> {
         .find_map(|scope| scope.get(&narrowed_scope_key(name)).cloned())
 }
 
-/// Issue #769 (Part 2 of #747), the early-return continuation shape: if
-/// `stmt` is `if name is None: <body that definitely terminates>`, `name`
-/// is known to be present (the `Optional`'s inner type) for every
-/// statement *after* `stmt` in the same sequential statement list --
-/// mirroring `pycc_types::narrow::apply_post_if_narrowing` one layer down,
-/// using the same shared `pycc_hir::optional_none_test` /
-/// `pycc_hir::definitely_terminates` recognizers that module's own doc
-/// comment explains in full. Unlike [`push_narrowing`]'s in-branch use in
-/// `stmt::lower_stmt`'s own `HirStmt::If` arm (which pairs every push with
-/// a [`kill_narrowing`] once that one branch finishes lowering), this
-/// sentinel is deliberately never popped by its own caller -- it is meant
-/// to persist for the rest of the enclosing sequence, exactly like
-/// `pycc_types::narrow`'s own overlay entry does when applied directly to
-/// (not a clone of) the real `env`. Only [`lower_stmt_sequence`] below
-/// calls this, once per statement, immediately after lowering it.
-///
-/// Since #1476 the same holds for `if not isinstance(name, C): <body that
-/// definitely terminates>` on an `object` name (`object_narrow`).
-fn apply_post_if_narrowing(
-    stmt: &HirStmt,
-    scopes: &mut [HashMap<String, Ty>],
-    classes: &HashMap<String, HirClassDef>,
-) {
-    let HirStmt::If { test, body, .. } = stmt else {
-        return;
-    };
-    let Some((name, inner, object_narrow::NarrowSide::Orelse)) =
-        object_narrow::narrowing_target(test, scopes, classes)
-    else {
-        return;
-    };
-    if pycc_hir::definitely_terminates(body) {
-        push_narrowing(scopes, &name, inner);
-    }
-}
-
 /// Issue #769 (Part 2 of #747): lowers a sequential list of statements --
 /// a function body, or any `if`/`while`/`for` body -- applying the
-/// early-return continuation narrowing ([`apply_post_if_narrowing`]) after
+/// early-return continuation narrowing ([`object_narrow::apply_post_if_narrowing`]) after
 /// each one. The narrowing-aware replacement for the raw `stmts.iter()
 /// .map(|s| lower_stmt(s, scopes, classes, current_class)).collect()`
 /// pattern every sequential body lowering in this crate used before this
@@ -2262,7 +2226,7 @@ fn lower_stmt_sequence(
     let mut out = Vec::with_capacity(stmts.len());
     for stmt in stmts {
         out.push(lower_stmt(stmt, scopes, classes, current_class));
-        apply_post_if_narrowing(stmt, scopes, classes);
+        object_narrow::apply_post_if_narrowing(stmt, scopes, classes);
     }
     out
 }
@@ -2285,7 +2249,7 @@ fn narrowing_snapshot(scopes: &[HashMap<String, Ty>]) -> HashMap<String, Ty> {
 /// [`narrowing_snapshot`], undoing every `push_narrowing`/`kill_narrowing`
 /// mutation made since the snapshot was taken, whether from a direct
 /// `push_narrowing` call or indirectly from a nested
-/// [`apply_post_if_narrowing`] hit deeper in the body being restored from.
+/// [`object_narrow::apply_post_if_narrowing`] hit deeper in the body being restored from.
 fn restore_narrowing(scopes: &mut [HashMap<String, Ty>], snapshot: HashMap<String, Ty>) {
     let top = scopes
         .last_mut()
@@ -2359,7 +2323,7 @@ fn join_narrowed(
 /// never per-block -- see this module's existing scope-stack convention) is
 /// shared, mutable state threaded through every nested body, unlike the
 /// checker's own per-branch `Environment` *clones*. Without this wrapper, a
-/// narrowing fact established by [`apply_post_if_narrowing`] deep inside one
+/// narrowing fact established by [`object_narrow::apply_post_if_narrowing`] deep inside one
 /// branch (e.g. a nested early-return guard) would persist in that shared
 /// frame past the branch's own close and incorrectly narrow reads in a
 /// sibling branch or in code after the enclosing construct entirely.

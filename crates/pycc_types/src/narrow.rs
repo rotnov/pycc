@@ -48,7 +48,7 @@
 //!
 //! would incorrectly narrow `x` after the outer `if` even though `x` can
 //! still be `None` when `flag` is `False` (the outer `if`'s body does not
-//! terminate on every path). [`definitely_terminates`] is a new, strictly
+//! terminate on every path). [`pycc_hir::definitely_terminates`] is a new, strictly
 //! narrower predicate: true only when the body's *last* statement is
 //! itself unconditionally terminating -- a bare `return`, or an `if` whose
 //! `body` **and** non-empty `orelse` both recursively terminate. `raise` is
@@ -230,21 +230,6 @@ pub(crate) fn end_branch_narrowing(
     };
 }
 
-/// True only when `body`'s control flow unconditionally terminates the
-/// enclosing function on every path through it -- see this module's own
-/// doc comment for the full rationale and the unsound `contains_return`
-/// example this predicate exists to replace.
-///
-/// A thin re-export of `pycc_hir::definitely_terminates`, not an
-/// independent copy: that predicate is shared with `pycc_mir`'s own
-/// `OptionalUnwrap` lowering, for the identical "shared dependency of both,
-/// `pycc_mir` cannot depend on `pycc_types`" reason
-/// `pycc_hir::optional_none_test` is shared -- see its own doc comment for
-/// the full soundness rationale.
-pub(crate) fn definitely_terminates(body: &[HirStmt]) -> bool {
-    pycc_hir::definitely_terminates(body)
-}
-
 /// Issue #769 (Part 2 of #747), the early-return continuation shape: if
 /// `stmt` is `if name is None: <body that definitely terminates>`, `name`
 /// is known to be present (the `Optional`'s inner type) for every
@@ -262,14 +247,21 @@ pub(crate) fn definitely_terminates(body: &[HirStmt]) -> bool {
 /// terminates>` is *not* handled the mirror way (narrowing the
 /// continuation to a `None` type) -- see this module's own "no
 /// narrowing-to-`None`" scope-cut note.
+///
+/// Only when the surviving `else` leaves `name` alone
+/// (`pycc_hir::continuation_narrows`, shared with the solver and MIR):
+/// `if x is None: return` followed by `else: x = None` reaches the rest of
+/// the block with `x` rebound, not narrowed (#1476 review).
 pub(crate) fn apply_post_if_narrowing(env: &mut Environment, stmt: &HirStmt) {
-    let HirStmt::If { test, body, .. } = stmt else {
+    let HirStmt::If { test, body, orelse } = stmt else {
         return;
     };
     let Some(target) = narrowing_target(env, test) else {
         return;
     };
-    if target.side == NarrowSide::Orelse && definitely_terminates(body) {
+    if target.side == NarrowSide::Orelse
+        && pycc_hir::continuation_narrows(body, orelse, &target.name)
+    {
         env.narrowed.insert(target.name, target.inner);
     }
 }

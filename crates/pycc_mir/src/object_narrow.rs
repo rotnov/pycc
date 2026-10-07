@@ -11,7 +11,7 @@
 //! position by position.
 
 use super::{MirExpr, narrowed_ty};
-use pycc_hir::{HirClassDef, HirExpr, IsInstancePolarity, NoneTestPolarity, Ty};
+use pycc_hir::{HirClassDef, HirExpr, HirStmt, IsInstancePolarity, NoneTestPolarity, Ty};
 use std::collections::HashMap;
 
 /// Which branch of an `if` a recognized test narrows. Only `Orelse` also
@@ -101,6 +101,46 @@ pub(super) fn object_operand(value: MirExpr) -> MirExpr {
     match value {
         MirExpr::ObjectUnbox(object, _) => *object,
         other => other,
+    }
+}
+
+/// Issue #769 (Part 2 of #747), the early-return continuation shape: if
+/// `stmt` is `if name is None: <body that definitely terminates>`, `name`
+/// is known to be present (the `Optional`'s inner type) for every
+/// statement *after* `stmt` in the same sequential statement list --
+/// mirroring `pycc_types::narrow::apply_post_if_narrowing` one layer down,
+/// using the same shared `pycc_hir::optional_none_test` /
+/// `pycc_hir::definitely_terminates` recognizers that module's own doc
+/// comment explains in full. Unlike [`super::push_narrowing`]'s in-branch use in
+/// `stmt::lower_stmt`'s own `HirStmt::If` arm (which pairs every push with
+/// a [`super::kill_narrowing`] once that one branch finishes lowering), this
+/// sentinel is deliberately never popped by its own caller -- it is meant
+/// to persist for the rest of the enclosing sequence, exactly like
+/// `pycc_types::narrow`'s own overlay entry does when applied directly to
+/// (not a clone of) the real `env`. Only [`super::lower_stmt_sequence`]
+/// calls this, once per statement, immediately after lowering it.
+///
+/// Since #1476 the same holds for `if not isinstance(name, C): <body that
+/// definitely terminates>` on an `object` name.
+///
+/// Only when the surviving `else` leaves the name alone
+/// (`pycc_hir::continuation_narrows`, shared with both checker walkers):
+/// an `else` that rebinds `o` reaches the rest of the block with `o`
+/// rebound, and unboxing it there as the guarded class would raise where
+/// CPython computes with the new value (#1476 review).
+pub(super) fn apply_post_if_narrowing(
+    stmt: &HirStmt,
+    scopes: &mut [HashMap<String, Ty>],
+    classes: &HashMap<String, HirClassDef>,
+) {
+    let HirStmt::If { test, body, orelse } = stmt else {
+        return;
+    };
+    let Some((name, inner, NarrowSide::Orelse)) = narrowing_target(test, scopes, classes) else {
+        return;
+    };
+    if pycc_hir::continuation_narrows(body, orelse, &name) {
+        super::push_narrowing(scopes, &name, inner);
     }
 }
 

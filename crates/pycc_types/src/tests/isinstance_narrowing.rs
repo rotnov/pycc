@@ -107,6 +107,47 @@ fn a_negated_guard_narrows_the_else_branch_and_the_continuation() {
     );
 }
 
+/// The continuation is reached only through the `else`; one that rebinds
+/// the name, directly, in an `elif` arm or in a loop inside it, leaves the
+/// continuation reading the object, not the guarded class (#1476 review).
+#[test]
+fn an_else_that_rebinds_the_name_does_not_narrow_the_continuation() {
+    still_object(
+        "def f(o: object) -> int:\n    if not isinstance(o, int):\n        return 0\n    else:\n        \
+         o = 1.5\n    return o + 1\n",
+    );
+    still_object(
+        "def f(o: object, flag: bool) -> int:\n    if not isinstance(o, int):\n        return 0\n    \
+         elif flag:\n        o = 2.5\n    return o + 1\n",
+    );
+    still_object(
+        "def f(o: object, n: int) -> int:\n    if not isinstance(o, int):\n        return 0\n    else:\n        \
+         while n > 0:\n            o = 1.5\n            n = n - 1\n    return o + 1\n",
+    );
+    // An `else` that leaves the name alone still narrows it.
+    checks(
+        "def f(o: object, n: int) -> int:\n    if not isinstance(o, int):\n        return 0\n    else:\n        \
+         n = n + 1\n    return o + n\n",
+    );
+}
+
+/// The same holds for the `Optional` early-exit shape the check phase
+/// shares the predicate with.
+#[test]
+fn an_else_that_rebinds_an_optional_does_not_narrow_the_continuation() {
+    let rebound = diagnostics(
+        "def f(x: int | None) -> int:\n    if x is None:\n        return 0\n    else:\n        \
+         x = None\n    return x + 1\n",
+    );
+    assert!(rebound.iter().any(|d| d.code == "T0021"), "{rebound:#?}");
+    assert!(
+        diagnostics(
+            "def f(x: int | None) -> int:\n    if x is None:\n        return 0\n    return x + 1\n"
+        )
+        .is_empty()
+    );
+}
+
 #[test]
 fn rebinding_the_name_ends_the_narrowing() {
     still_object(
