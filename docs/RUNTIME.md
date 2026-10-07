@@ -2817,7 +2817,7 @@ an optional root (#1290) that is not installed, with none.
 | Policy | Behavior |
 |---|---|
 | `auto` | Default. Permit every CPython-backed import root present in the source; an embedded build bundles its pinned dependency closure from `pycc.lock` (#1242). |
-| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. An allowed root's pinned transitive closure is bundled with it without separate entries (#1242); a submodule from-import (`from json.decoder import X`) is classified by its root, and a plain dotted `import` is `C0001` today. |
+| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. An allowed root's pinned transitive closure is bundled with it without separate entries (#1242); a submodule from-import (`from json.decoder import X`) is classified by its root, and so is a plain dotted `import a.b` or `import a.b as c` ([#1381](https://github.com/rotnov/pycc/issues/1381)). |
 | `deny` | Reject every CPython-backed import with `I0402`. Native pycc modules remain available and the artifact has no CPython/libpython dependency. `--pure` is the CLI shorthand. |
 
 - A source-level `import` is sufficient intent under `auto`; pycc does not ask

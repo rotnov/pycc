@@ -211,7 +211,9 @@ pub enum ResolvedImport<'a> {
     /// undotted `X` (#1278), at top level or nested in such a block
     /// (#1383) -- or, since Part 1 of #1138, a dotted `X` whose root is
     /// neither a project module nor a project package -- whose names bind
-    /// the module's attributes. A nested from-import gets no answer but
+    /// the module's attributes. Since #1381 it is also recorded for a
+    /// plain dotted `import X.Y` (binding the root `X`) and `import X.Y as
+    /// Z` (binding the leaf `X.Y` to `Z`) whose root is foreign. A nested from-import gets no answer but
     /// this one (`src/modules.rs`'s `resolve`); see its `missing` for why
     /// every other absolute foreign shape stays unanswered. Under `pycc build
     /// --ext --foreign-relative-imports` (#1366) it is also recorded for

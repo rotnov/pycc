@@ -857,8 +857,6 @@ fn load_foreign(entry: &Path) -> Result<LoadedProgram, FrontendFailure> {
     load_with(entry, None, RelativeImports::ForeignFromEntry, true)
 }
 
-/// The `(module_path, name, level)` of every foreign from-import binding of
-/// the loaded program's entry module.
 /// `(local_name, module_path)` of every plain foreign import of the entry
 /// module, in source order (#1381).
 fn entry_foreign_plain_imports(program: &LoadedProgram) -> Vec<(String, String)> {
@@ -882,6 +880,8 @@ fn entry_foreign_plain_imports(program: &LoadedProgram) -> Vec<(String, String)>
         .collect()
 }
 
+/// The `(module_path, name, level)` of every foreign from-import binding of
+/// the loaded program's entry module.
 fn entry_foreign_from_imports(program: &LoadedProgram) -> Vec<(String, String, u32)> {
     program
         .modules
