@@ -309,8 +309,9 @@ fn each_admitted_key_type_reaches_its_own_packer() {
 /// A failed load stops the module body on the module-exec failure
 /// edge, rather than continuing with a `NULL` object.
 ///
-/// This is the one new unconditional `EXT_MODULE_EXEC_FAILED` edge PR
-/// 3b adds (#1096): a failed *key packer* does not get its own, because
+/// This is the one new `EXT_MODULE_EXEC_FAILED` edge PR 3b adds (outside
+/// every module-level `try`; inside one it is bridged, Part 1 of #1096): a
+/// failed *key packer* does not get its own, because
 /// `pycc_ext_obj_getitem` tolerates a `NULL` key and returns `NULL`
 /// itself, folding that case into this same branch.
 #[test]
@@ -430,8 +431,8 @@ fn a_foreign_for_loop_switches_three_ways_on_the_iterator_status() {
     );
 }
 
-/// **Two** new unconditional `EXT_MODULE_EXEC_FAILED` edges, and
-/// exactly two (#1096): a `NULL` from `pycc_ext_obj_get_iter` and a
+/// **Two** new `EXT_MODULE_EXEC_FAILED` edges outside every module-level
+/// `try`, and exactly two: a `NULL` from `pycc_ext_obj_get_iter` and a
 /// `-1` from `pycc_ext_obj_iter_next`. Clean exhaustion is
 /// deliberately not one of them, which is why the shim helper is
 /// three-valued rather than NULL-signalling.

@@ -3766,7 +3766,8 @@ fn emit_expr_unchecked<'ctx>(
         // Part 2 of #1026: the string-keyed runtime sibling of the
         // compile-time-slot `AttrGet` directly above. `foreign_attr::emit`
         // carries the whole contract, including the `NULL` check it emits,
-        // the module-exec failure edge that check branches to, and which
+        // the foreign failure edge that check branches to (`foreign_fail.rs`),
+        // and which
         // side owns the "CPython raised" transition.
         MirExpr::ObjAttrGet { base, attr, .. } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
@@ -3781,7 +3782,7 @@ fn emit_expr_unchecked<'ctx>(
         // `ZeroDivisionError`. `foreign_call` carries the rest of the
         // contract, including the argument marshalling, the ownership rule,
         // and the two `NULL` checks that route a failure to the
-        // module-exec failure edge.
+        // foreign failure edge (`foreign_fail.rs`).
         MirExpr::ObjMethodCall {
             base, method, args, ..
         } => {
@@ -3856,7 +3857,7 @@ fn emit_expr_unchecked<'ctx>(
         // below is CPython's own -- base, then key -- and
         // `foreign_call::emit_subscript` carries the rest of the contract,
         // including why the packed key needs no `NULL` check of its own and
-        // why that leaves exactly one module-exec failure edge.
+        // why that leaves exactly one foreign failure edge.
         MirExpr::ObjSubscript { base, index } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             let index_scalar = object_unbox::emit_pack_operand(
@@ -6093,6 +6094,10 @@ fn compile_to_object_with_observer(
     let copy_slots = copy_slots::CopySlots::new(mir);
     let mut fn_ordinal = 0usize;
     rt.exceptions.targets.borrow_mut().push(top_exception_exit);
+    // Part 1 of #1096: while this target is the innermost one, no
+    // module-level `try` encloses the statement being emitted, so a foreign
+    // failure keeps its direct module-exec `-1` edge (`foreign_fail.rs`).
+    rt.exceptions.module_exec_exit.set(Some(top_exception_exit));
     for item in &mir.items {
         match item {
             MirItem::TopLevelStmt(stmt) => {
@@ -6199,6 +6204,7 @@ fn compile_to_object_with_observer(
         }
     }
     rt.exceptions.targets.borrow_mut().pop();
+    rt.exceptions.module_exec_exit.set(None);
     // Module-level Python code has no `return` (T0024) -- every top-level
     // `str` local's single exit point is program completion right here, so
     // this is where its accepted refcounting scope (D-061's Task 7

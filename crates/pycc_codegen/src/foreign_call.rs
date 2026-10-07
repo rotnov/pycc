@@ -17,9 +17,10 @@
 //!
 //! The call counterpart of `foreign_attr.rs`, which this module reuses for
 //! `expect_object_pointer`. Every failure edge is `foreign_fail.rs`'s: the
-//! module-exec return inside `pycc_ext_module_exec`, and the bridge plus an
-//! immediate branch to the innermost exception target inside any other
-//! function (#1316). `emit_iter_loop` alone keeps the
+//! module-exec return inside `pycc_ext_module_exec` when no module-level
+//! `try` encloses the operation, and otherwise the bridge plus an immediate
+//! branch to the innermost exception target (#1316, Part 1 of #1096).
+//! `emit_iter_loop` alone keeps the
 //! `expect_module_exec_entry` assertion, because `pycc_types` still admits
 //! `for x in <object>:` only in a module body (Part 2 of #1333); its two
 //! halves, which a comprehension over an object shares (Part 1 of #1255),
@@ -210,12 +211,12 @@ pub(super) struct ForeignIterLoop<'ctx> {
 /// [`EXT_OBJ_ITER_NEXT_SYMBOL`]).
 ///
 /// `pycc_types` admits the statement only in a module body (Part 2 of
-/// #1333), so the edge is always the module-exec return there. A list or
-/// set comprehension over an object (Part 1 of #1255,
-/// `object_comprehension.rs`) shares the two halves in any function, which
-/// is why each takes its edge from [`ForeignFailEdge::for_current`]; inside
-/// `pycc_ext_module_exec` that edge emits the same `EXT_MODULE_EXEC_FAILED`
-/// return this loop always had.
+/// #1333), so the edge is always a [`ForeignFailEdge::ModuleExec`] there:
+/// the module-exec return outside every module-level `try`, bridged inside
+/// one (Part 1 of #1096). A list or set comprehension over an object
+/// (Part 1 of #1255, `object_comprehension.rs`) shares the two halves in
+/// any function, which is why each takes its edge from
+/// [`ForeignFailEdge::for_current`].
 pub(super) fn emit_iter_loop<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -357,9 +358,10 @@ pub(super) fn emit_iter_header<'ctx>(
 /// # Failure edge
 ///
 /// A missing method returns `NULL` with CPython's `AttributeError` set,
-/// which `foreign_fail::route_null` routes: the module-exec return inside
-/// `pycc_ext_module_exec`, the bridge and an immediate branch to the
-/// innermost exception target in any other function (#1316). The branch is
+/// which `foreign_fail::route_null` routes: the module-exec return in a
+/// module body outside every module-level `try`, the bridge and an
+/// immediate branch to the innermost exception target anywhere else
+/// (#1316, #1096). The branch is
 /// immediate because the arguments are evaluated next, with no guard in
 /// between.
 pub(super) fn emit_lookup<'ctx>(

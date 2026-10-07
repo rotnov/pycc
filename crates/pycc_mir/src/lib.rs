@@ -784,7 +784,8 @@ pub enum MirExpr {
     /// A dedicated node rather than a coercion bolted onto the `AnnAssign`
     /// lowering's existing widening chain, for [`MirExpr::ObjLen`]'s reason:
     /// this one *can fail* -- a non-tuple, a wrong arity, or an item
-    /// `PyNumber_Float` refuses -- so it needs the module-exec failure edge
+    /// `PyNumber_Float` refuses -- so it needs the module body's foreign
+    /// failure edge
     /// that `IntBoundary` and `OptionalWrap` have no notion of.
     ///
     /// `arity` is carried rather than rediscovered, and is always at least
@@ -1755,8 +1756,9 @@ pub enum MirStmt {
     /// A failed import whose exception is an `ImportError` -- a missing
     /// name of a from-import included -- becomes a pycc raise of
     /// `ImportError`/`ModuleNotFoundError` (#1293), so an enclosing handler
-    /// runs; any other failure returns `-1` from `Py_mod_exec` directly (the
-    /// #1096 residual).
+    /// runs; any other failure is bridged by the object bridge inside a
+    /// module-level `try`, and returns `-1` from `Py_mod_exec` directly
+    /// outside every one (Part 1 of #1096).
     ForeignImport {
         bindings: Vec<(String, String, Option<FromImport>)>,
     },

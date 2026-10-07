@@ -6,19 +6,27 @@
 //! see. Each emitter therefore routes that failure itself, and where it goes
 //! depends only on the function being emitted into:
 //!
-//! - **The module-exec entry** ([`EXT_MODULE_EXEC_SYMBOL`]) returns
-//!   [`EXT_MODULE_EXEC_FAILED`] immediately, leaving CPython's exception set
-//!   and unmodified. This is the edge every foreign operation took before
-//!   #1316, emitted bit-identically: the host reports the real exception
-//!   and the module body's remaining statements never run.
-//! - **Any other function** -- an exported function, a private helper, a
-//!   method -- has no such edge: its return type is its own. There the
-//!   failure calls the shim's total [`EXT_OBJ_ERROR_BRIDGE_SYMBOL`], which
-//!   turns CPython's exception into a pending pycc exception (keeping the
-//!   original for the host, `docs/RUNTIME.md`), and then branches
+//! - **The module-exec entry** ([`EXT_MODULE_EXEC_SYMBOL`]) outside every
+//!   module-level `try` returns [`EXT_MODULE_EXEC_FAILED`] immediately,
+//!   leaving CPython's exception set and unmodified. This is the edge every
+//!   foreign operation took before #1316, emitted bit-identically: the host
+//!   reports the real exception and the module body's remaining statements
+//!   never run.
+//! - **Anywhere else** -- an exported function, a private helper, a method,
+//!   or since Part 1 of #1096 a module-exec statement that a module-level
+//!   `try` encloses (its body, a handler, its `else` or its `finally`) --
+//!   the failure calls the shim's total [`EXT_OBJ_ERROR_BRIDGE_SYMBOL`],
+//!   which turns CPython's exception into a pending pycc exception (keeping
+//!   the original for the host, `docs/RUNTIME.md`), and then branches
 //!   **immediately** to the innermost exception target through
 //!   [`jump_to_exception_target`], releasing any live bigint temporaries on
-//!   the way exactly as `guard_statement_effects` does.
+//!   the way exactly as `guard_statement_effects` does. In the module body
+//!   that is how an enclosing `except`/`finally` runs, as in CPython.
+//!
+//! Which module-exec case applies is read from the exception-target stack,
+//! not threaded through the emitters: the direct return is kept exactly
+//! when the innermost target is the entry's own `top_exception_exit`,
+//! recorded as `ExceptionCodegenState::module_exec_exit`.
 //!
 //! The branch is immediate rather than left to `emit_expr`'s post-node
 //! guard for two reasons: a method call evaluates its arguments *between*
@@ -37,7 +45,9 @@ use inkwell::builder::Builder;
 /// into its entry block, whichever edge they take.
 #[derive(Clone, Copy)]
 pub(super) enum ForeignFailEdge<'ctx> {
-    /// Inside `pycc_ext_module_exec`: return [`EXT_MODULE_EXEC_FAILED`].
+    /// Inside `pycc_ext_module_exec`: return [`EXT_MODULE_EXEC_FAILED`]
+    /// when no module-level `try` encloses the operation, and otherwise
+    /// bridge and branch exactly as [`Self::Function`] does (#1096).
     ModuleExec(FunctionValue<'ctx>),
     /// Inside any other function: bridge, then branch to the innermost
     /// exception target.
@@ -85,11 +95,19 @@ fn obj_error_bridge_fn<'ctx>(
 /// Emits the failure side of `edge` at the builder's current position,
 /// which it terminates.
 ///
+/// [`ForeignFailEdge::ModuleExec`] returns [`EXT_MODULE_EXEC_FAILED`] only
+/// while the innermost exception target is the entry's recorded
+/// `module_exec_exit` -- no module-level `try` encloses the operation, so a
+/// handler could not run anyway, and the import fails with CPython's
+/// exception untouched. Outside the window in which that exit is recorded
+/// both sides of the comparison are `None`, so the direct return holds
+/// there too. Every other case bridges and branches, as
+/// [`ForeignFailEdge::Function`] always does (Part 1 of #1096).
+///
 /// The bridge's `int` result is deliberately unread: the bridge is total
 /// (`src/ext/pycc_ext_module.c`), so a pycc exception is pending on every
 /// return and there is no unbridged fallback to branch to -- unlike the
-/// import bridge's `foreign_import_unbridged` block, which a function body
-/// could not take anyway.
+/// import bridge's `foreign_import_unbridged` block, which itself ends here.
 pub(super) fn emit_failure<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -97,23 +115,22 @@ pub(super) fn emit_failure<'ctx>(
     rt: &RtFns<'ctx>,
     edge: ForeignFailEdge<'ctx>,
 ) {
-    match edge {
-        ForeignFailEdge::ModuleExec(_) => {
-            builder
-                .build_return(Some(
-                    &context
-                        .i64_type()
-                        .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
-                ))
-                .expect("build_return should not fail");
-        }
-        ForeignFailEdge::Function(_) => {
-            builder
-                .build_call(obj_error_bridge_fn(context, module), &[], "foreign_bridged")
-                .expect("build_call should not fail for pycc_ext_obj_error_bridge");
-            jump_to_exception_target(context, builder, rt);
-        }
+    if let ForeignFailEdge::ModuleExec(_) = edge
+        && rt.exceptions.targets.borrow().last().copied() == rt.exceptions.module_exec_exit.get()
+    {
+        builder
+            .build_return(Some(
+                &context
+                    .i64_type()
+                    .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
+            ))
+            .expect("build_return should not fail");
+        return;
     }
+    builder
+        .build_call(obj_error_bridge_fn(context, module), &[], "foreign_bridged")
+        .expect("build_call should not fail for pycc_ext_obj_error_bridge");
+    jump_to_exception_target(context, builder, rt);
 }
 
 /// Branches on `failed` to a `{label}_fail` block that takes `edge`, and

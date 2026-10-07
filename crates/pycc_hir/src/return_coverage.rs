@@ -36,8 +36,10 @@ pub fn block_always_returns(body: &[HirStmt]) -> bool {
             | HirStmt::DeleteSlice { .. }
             | HirStmt::DeleteAttr { .. }
             // #1291: a nested foreign import never returns. Its failure is
-            // either a pycc raise (an `ImportError`, bridged by #1293) or a
-            // direct exit from `Py_mod_exec` (any other exception, #1096).
+            // either a pycc raise (an `ImportError` by #1293, any other
+            // exception inside a module-level `try` by Part 1 of #1096) or a
+            // direct exit from `Py_mod_exec` (a non-`ImportError` outside
+            // every `try`).
             | HirStmt::ForeignImport { .. }
             // PR-12 Task 3 (D-117): a comprehension statement never contains a
             // `return` (its `elt`/`cond`/`key`/`value` are expressions, not

@@ -88,16 +88,19 @@ pub(super) fn expect_object_pointer(scalar: Scalar<'_>) -> PointerValue<'_> {
 /// [`ForeignFailEdge`] (#1316), whose edge depends on the function being
 /// emitted into:
 ///
-/// - in `pycc_ext_module_exec` it is the **module-exec failure edge**
-///   `foreign_import.rs` already uses for a failed `pycc_ext_obj_import`:
-///   return [`EXT_MODULE_EXEC_FAILED`] immediately, leaving CPython's own
+/// - in `pycc_ext_module_exec` with no module-level `try` enclosing the
+///   load it is the **module-exec failure edge**: return
+///   [`EXT_MODULE_EXEC_FAILED`] immediately, leaving CPython's own
 ///   exception set and unmodified, so the interpreter reports the real
 ///   exception;
-/// - in any other function (a user function reading a module-level foreign
-///   name) it calls `pycc_ext_obj_error_bridge`, which moves CPython's
+/// - anywhere else -- inside a module-level `try` (Part 1 of #1096) or in
+///   any other function (a user function reading a module-level foreign
+///   name) -- it calls `pycc_ext_obj_error_bridge`, which moves CPython's
 ///   exception into pycc's pending state, and branches to the innermost
 ///   exception target -- the enclosing `try`'s handler, or the function's
 ///   own `exception_exit` -- exactly as a failed pycc operation does.
+///
+/// `foreign_fail::emit_failure` owns that rule.
 ///
 /// The nested case (`a.b.c` nests this node inside itself) is answered
 /// twice over: this check stops the outer load from ever seeing the inner
@@ -138,10 +141,12 @@ pub(super) fn emit<'ctx>(
 /// admits only at module scope. Every other foreign operation routes its
 /// failure through [`ForeignFailEdge`], which works in any function.
 ///
-/// The guard runs *before* any block is appended: the failure edge returns
-/// `i64 -1`, so emitting it into a function with a different return type
-/// would be an LLVM verifier error rather than a diagnosable one. Reaching
-/// it from anywhere else is a front-end defect.
+/// The guard runs *before* any block is appended: those callers build a
+/// [`ForeignFailEdge::ModuleExec`] edge, which returns `i64 -1` when no
+/// module-level `try` encloses the operation, so emitting it into a
+/// function with a different return type would be an LLVM verifier error
+/// rather than a diagnosable one. Reaching it from anywhere else is a
+/// front-end defect: the operations are admitted only in a module body.
 pub(super) fn expect_module_exec_entry<'ctx>(builder: &Builder<'ctx>) -> FunctionValue<'ctx> {
     let function = builder
         .get_insert_block()

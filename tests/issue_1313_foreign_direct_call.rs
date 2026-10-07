@@ -296,24 +296,19 @@ fn a_raising_direct_call_raises_cpythons_exception_in_the_host() {
     assert_eq!(out, "TypeError 'module' object is not callable\n");
 }
 
-/// A documented divergence (#1096): a failed foreign operation leaves the
-/// module body on the module-exec failure edge, which a module-level `try`
-/// cannot catch. CPython prints `caught`; the compiled import fails with
-/// the same `TypeError`. Asserted on each side so the day #1096 lands this
-/// test is the one that flips.
+/// Part 1 of #1096: a failed foreign call inside a module-level `try` is
+/// bridged to the enclosing handler, so the compiled import prints `caught`
+/// and completes exactly as CPython does. This test asserted the old
+/// uncatchable edge until #1096 flipped it.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn a_raising_direct_call_is_not_yet_catchable_in_the_module_body() {
-    let (compiled, oracle) = compiled_and_oracle(
+fn a_raising_direct_call_is_catchable_in_the_module_body() {
+    let out = assert_matches_cpython(
         "obj_call_try",
         "pycc_obj_call_try_mod",
         "from operator import add\ntry:\n    add(1, \"x\")\nexcept TypeError:\n    print(\"caught\")\n",
     );
-    assert_eq!(oracle, "caught\nno error\n");
-    assert_eq!(
-        compiled,
-        "TypeError unsupported operand type(s) for +: 'int' and 'str'\n"
-    );
+    assert_eq!(out, "caught\nno error\n");
 }
 
 /// The borrowing entry point takes its own reference on the callee for the

@@ -8,8 +8,8 @@
 //! to; each target is then an ordinary `MirExpr::ObjSubscript` of that
 //! tuple. The only failure edge is the `NULL` result, routed through
 //! `foreign_fail.rs` like every other object operation: the module-exec
-//! return in a module body, the error bridge plus the innermost exception
-//! target anywhere else. Because the targets are assigned only after this
+//! return in a module body outside every module-level `try`, the error
+//! bridge plus the innermost exception target anywhere else (#1096). Because the targets are assigned only after this
 //! call succeeds, a raising unpack binds none of them -- CPython's own
 //! order.
 //!

@@ -236,8 +236,8 @@
 //! which CPython answers with `TypeError: 'module' object is not
 //! callable`. That is now the intended reading: the call is compiled and
 //! the host raises exactly that `TypeError`, on the same failure edge
-//! every other object operation uses: uncatchable in a module body
-//! (#1096), catchable in a function body (#1316).
+//! every other object operation uses: catchable by an enclosing `try` in a
+//! function body (#1316) and in the module body (Part 1 of #1096).
 //!
 //! [`reject_object_read`] serves the one site that keys on a *named*
 //! binding rather than on a consumed value: `lookup_bound_name` (D-105's

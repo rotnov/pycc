@@ -23,10 +23,12 @@
 //! `emit_stmt` emits it where its block runs. Its failure edge first asks
 //! the shim to bridge the failure (#1293): an `ImportError` becomes a
 //! pending pycc exception and control branches to the innermost exception
-//! target, so an enclosing `except`/`finally` runs as in CPython; any other
-//! exception still returns from the entry point directly (the #1096
-//! residual, `docs/RUNTIME.md`). A top-level import has nothing to enclose
-//! it and keeps the direct return.
+//! target, so an enclosing `except`/`finally` runs as in CPython. Any other
+//! exception takes the edge every module-body foreign failure takes (Part 1
+//! of #1096, `foreign_fail.rs`): bridged by the object bridge when a
+//! module-level `try` encloses the import, and otherwise the direct return
+//! from the entry point. A top-level import has nothing to enclose it and
+//! keeps the direct return.
 //!
 //! **Ownership** (`docs/RUNTIME.md`). The module object is imported exactly
 //! once, during `pycc_ext_module_exec`, into a module-level global, and is
@@ -65,9 +67,9 @@ pub(super) enum FailureEdge<'a, 'ctx> {
     /// handler can enclose.
     ReturnFailed,
     /// Bridge an `ImportError` into a pending pycc exception and branch to
-    /// the innermost exception target, falling back to the direct return
-    /// for anything the shim does not bridge: a nested
-    /// `MirStmt::ForeignImport` (#1293).
+    /// the innermost exception target, falling back to the module-exec
+    /// foreign failure edge (Part 1 of #1096) for anything the import
+    /// bridge does not map: a nested `MirStmt::ForeignImport` (#1293).
     Bridge { rt: &'a RtFns<'ctx> },
 }
 
@@ -261,8 +263,11 @@ fn emit_import_from_call<'ctx>(
 /// `pycc_ext_import_error_bridge` is asked first: a non-zero answer means an
 /// `ImportError` is now a pending pycc exception, and control branches to
 /// the innermost exception target exactly as an explicit `raise` does
-/// (`emit_body`); a zero answer takes the same direct return, from a block
-/// named `foreign_import_unbridged`. Both edges serve both forms: a
+/// (`emit_body`); a zero answer reaches a block named
+/// `foreign_import_unbridged`, which takes `foreign_fail::emit_failure`'s
+/// module-exec edge: the object bridge and the same branch when a
+/// module-level `try` encloses the import, and the direct return when none
+/// does (Part 1 of #1096). Both edges serve both forms: a
 /// top-level from-import (#1278) takes [`FailureEdge::ReturnFailed`], and
 /// one nested in a module-level block (#1383) takes
 /// [`FailureEdge::Bridge`], whose shim maps CPython's "cannot import name"
@@ -343,7 +348,18 @@ pub(super) fn emit<'ctx>(
                 .build_conditional_branch(raised, target, unbridged_bb)
                 .expect("build_conditional_branch should not fail");
             builder.position_at_end(unbridged_bb);
-            return_failed(context, builder);
+            // Anything the import bridge does not map -- the imported
+            // module's own `ValueError`, say -- takes the edge every other
+            // module-body foreign failure takes (Part 1 of #1096): bridged
+            // by the total object bridge to an enclosing module-level
+            // `try`, or the direct return when none encloses the import.
+            crate::foreign_fail::emit_failure(
+                context,
+                builder,
+                module,
+                rt,
+                crate::foreign_fail::ForeignFailEdge::ModuleExec(entry_fn),
+            );
         }
     }
     builder.position_at_end(cont_bb);
