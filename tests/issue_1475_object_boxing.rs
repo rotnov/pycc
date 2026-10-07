@@ -276,6 +276,14 @@ def mirror() -> object:
     return loop_item
 
 
+shadowed: object = "module"
+
+
+def shadow() -> int:
+    shadowed = 1
+    return shadowed + 1
+
+
 def big() -> object:
     n = 2 ** 70
     return n
@@ -287,7 +295,7 @@ for name in [
     "call_int", "call_str", "call_bool", "call_none", "call_kw", "call_private",
     "branch_int", "branch_str", "rebound", "bind", "ret_float", "ret_bool",
     "ret_none_call", "ctor", "method", "static", "super_init", "classm",
-    "setter", "attr_store", "exc_ctor", "eq_explicit", "eq_explicit_native", "mirror",
+    "setter", "attr_store", "exc_ctor", "eq_explicit", "eq_explicit_native", "mirror", "shadow",
 ]:
     r = getattr(m, name)()
     print(name, type(r).__name__, r)
@@ -309,7 +317,7 @@ const EXPECTED: &str = "call_int int 3\ncall_str str s\ncall_bool bool True\n\
                         ret_float float 2.5\nret_bool bool True\nret_none_call NoneType None\n\
                         ctor int 7\nmethod bool False\nstatic str t\nsuper_init float 2.5\n\
                         classm int 9\nsetter str set\nattr_store str z\nexc_ctor int 5\n\
-                        eq_explicit bool True\neq_explicit_native NotImplementedType NotImplemented\nmirror int 5\n\
+                        eq_explicit bool True\neq_explicit_native NotImplementedType NotImplemented\nmirror int 5\nshadow int 2\n\
                         call_inst C 1\nTrue True\nint\nTrue False False\nTrue C 4\n";
 
 /// Builds [`MODULE`] as `boxing` in `out`, its source in `src`.

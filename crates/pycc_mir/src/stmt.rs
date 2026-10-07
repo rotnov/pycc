@@ -108,11 +108,21 @@ pub(super) fn lower_stmt(
                 Some(Ty::Optional(inner)) if value.ty() != Ty::Optional(inner.clone()) => {
                     MirExpr::OptionalWrap(Box::new(value), inner)
                 }
-                // Part 2 of #1387: a native value rebinding an
+                // Part 2 of #1387 (#1475): a native value rebinding an
                 // `object`-typed name is boxed into the name's
-                // `PyObject *` slot.
-                Some(slot_ty) => crate::object_box::box_into(value, &slot_ty),
-                None => value,
+                // `PyObject *` slot. Only the current frame's own binding
+                // counts: a function body's first `x = 1` is a fresh local
+                // even when the module binds an `object` `x`, exactly as
+                // `pycc_types`' `function_local_names` treats it, so it
+                // must not box against the outer frame.
+                _ => match scopes
+                    .last()
+                    .expect("at least one scope is always present")
+                    .get(target)
+                {
+                    Some(slot_ty) => crate::object_box::box_into(value, slot_ty),
+                    None => value,
+                },
             };
             // The first assignment fixes a binding's representation.
             // In particular, assigning `bool` to an existing `int` is
