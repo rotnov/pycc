@@ -10,7 +10,9 @@
 //! every line. The deliberate deviations are pinned separately: an `int`
 //! past 64 bits raises `OverflowError` at a narrowed read, a compiled-class
 //! carrier whose `__init__` never ran raises `TypeError` where CPython
-//! raises `AttributeError`, a `str` subclass handed to a native `str`
+//! raises `AttributeError`, an object whose `__class__` property answers
+//! `int` or a compiled class passes the guard but raises `TypeError` at the
+//! narrowed read, a `str` subclass handed to a native `str`
 //! parameter comes back a plain `str`, and a native use of a subclass
 //! instance runs the base type's operation, not an override.
 //!
@@ -344,34 +346,123 @@ fn every_narrowing_shape_matches_cpython_in_an_ext_module() {
     assert_eq!(stdout_of(&compiled), EXPECTED);
 }
 
-/// The deliberate deviations, each against CPython's own answer: an `int`
-/// past 64 bits does not fit the native `int` a narrowed read produces
-/// (#1040), a carrier whose `__init__` never ran has no native instance to
-/// hand over, a `str` subclass handed to a native `str` parameter is
-/// copied as a plain `str`, and a native use runs `str`'s own `+`, not a
-/// subclass's overriding `__add__`.
+/// [`the_narrowed_read_deviations_are_the_documented_ones`]'s driver. The
+/// two `__class__` spoofs pass CPython's `isinstance` (which consults a
+/// `__class__` attribute) without being an `int` or a compiled `Token`.
+const DEVIATIONS: &str = r#"import narrowing as m
+
+
+class S(str):
+    def __add__(self, other):
+        return 'over'
+
+
+class FakeInt:
+    __class__ = property(lambda self: int)
+
+    def __add__(self, other):
+        return 7
+
+
+class FakeToken:
+    __class__ = property(lambda self: m.Token)
+    value = 1
+
+    def doubled(self):
+        return 2
+
+
+for f in (lambda: m.as_int(2**70), lambda: m.as_token(m.Token.__new__(m.Token)),
+          lambda: m.as_int(FakeInt()), lambda: m.as_token(FakeToken())):
+    try:
+        print(f())
+    except Exception as e:
+        print(type(e).__name__, e)
+print(type(m.relay(S('a'))).__name__, m.as_str(S('a')))
+"#;
+
+/// The deliberate deviations, each against CPython's own answer:
+/// - an `int` past 64 bits does not fit the native `int` a narrowed read
+///   produces (#1040);
+/// - a carrier whose `__init__` never ran has no native instance to hand
+///   over;
+/// - an object whose `__class__` property answers `int` or a compiled class
+///   passes the guard but has no native representation, so the narrowed
+///   read raises `TypeError` where CPython runs the guarded body on it;
+/// - a `str` subclass handed to a native `str` parameter is copied as a
+///   plain `str`, and a native use runs `str`'s own `+`, not a subclass's
+///   overriding `__add__`.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn the_narrowed_read_deviations_are_the_documented_ones() {
     let dir = ScratchDir::new("ext_1476_deviations").expect("scratch");
     let (src_dir, out_dir) = build_module(&dir);
-    let script = "import narrowing as m\n\
-                  for f in (lambda: m.as_int(2**70), \
-                  lambda: m.as_token(m.Token.__new__(m.Token))):\n    \
-                  try:\n        print(f())\n    \
-                  except Exception as e:\n        print(type(e).__name__)\n\
-                  class S(str):\n    \
-                  def __add__(self, other):\n        return 'over'\n\
-                  print(type(m.relay(S('a'))).__name__, m.as_str(S('a')))\n";
-    let oracle = run(script, &src_dir, &dir);
+    let oracle = run(DEVIATIONS, &src_dir, &dir);
     assert_ok(&oracle);
     assert_eq!(
         stdout_of(&oracle),
-        "1180591620717411303425\nAttributeError\nS over\n"
+        "1180591620717411303425\n\
+         AttributeError 'Token' object has no attribute 'value'\n\
+         7\n3\nS over\n"
     );
-    let compiled = run(script, &out_dir, &dir);
+    let compiled = run(DEVIATIONS, &out_dir, &dir);
     assert_ok(&compiled);
-    assert_eq!(stdout_of(&compiled), "OverflowError\nTypeError\nstr a!\n");
+    assert_eq!(
+        stdout_of(&compiled),
+        "OverflowError an int narrowed by isinstance() is outside the inline-integer range \
+         [-2**62, 2**62-1] this pycc version's `ext` boundary supports (see #1040)\n\
+         TypeError the narrowed narrowing.Token object is uninitialized (its __init__ never ran)\n\
+         TypeError isinstance() held for a 'FakeInt' object, but only an int has the native \
+         representation the narrowed read needs\n\
+         TypeError narrowed object must be a compiled narrowing.Token instance, not FakeToken\n\
+         str a!\n"
+    );
+}
+
+/// A module-level class spelled like a builtin shadows it, in CPython and
+/// in the guard: `isinstance(o, int)` tests the compiled `int`, and the
+/// guarded body reads `o` as that class's instance, not as a native `int`.
+const SHADOWING: &str = r#"class int:
+    def __init__(self, v: float) -> None:
+        self.v = v
+
+
+def kind(o: object) -> str:
+    if isinstance(o, int):
+        return "compiled"
+    return "other"
+
+
+def field(o: object) -> float:
+    if isinstance(o, int):
+        return o.v
+    return 0.0
+"#;
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_module_class_named_int_is_the_class_the_guard_narrows_to() {
+    let dir = ScratchDir::new("ext_1476_shadowing").expect("scratch");
+    let src_dir = dir.join("src");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&src_dir).expect("create the source directory");
+    std::fs::create_dir_all(&out_dir).expect("create the output directory");
+    let build = pycc()
+        .arg("build")
+        .arg(write(&src_dir, "shadowing.py", SHADOWING))
+        .arg("-o")
+        .arg(out_dir.join("shadowing"))
+        .arg("--ext")
+        .output()
+        .expect("pycc should spawn");
+    assert_ok(&build);
+    let script = "import shadowing as m\n\
+                  print(m.kind(m.int(1.5)), m.kind(3), m.field(m.int(1.5)), m.field(3))\n";
+    for path in [&src_dir, &out_dir] {
+        let output = run(script, path, &dir);
+        assert_ok(&output);
+        assert_eq!(stdout_of(&output), "compiled other 1.5 0.0\n", "{path:?}");
+    }
 }
 
 fn refused(name: &str, body: &str) -> String {

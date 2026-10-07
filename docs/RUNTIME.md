@@ -2178,8 +2178,11 @@ entry block, and answers `0`, or `-1` with a CPython exception set, which
 takes the function's foreign failure edge (the IR label
 `object_unbox_failed`; the module-exec `-1` at module scope). The scalar
 helpers keep the closed D-244 rule-7 check of the matching argument
-unpacker rather than CPython's conversion protocol, so they refuse only an
-object whose class was reassigned after the guard (`TypeError`); a `bool`
+unpacker rather than CPython's conversion protocol. The guard is CPython's
+own `isinstance`, which consults a `__class__` attribute, so an object whose
+`__class__` property answers the guarded class without being one (a mock, a
+proxy) passes it and is refused at the read with `TypeError`, a deliberate
+deviation where CPython runs the guarded body on it; a `bool`
 under an `int` guard keeps its D-141 marker word, and an `int` outside the
 inline range raises `OverflowError` citing
 [#1040](https://github.com/rotnov/pycc/issues/1040). A `str` (or `str`
@@ -2191,7 +2194,8 @@ dunder or method of `type(o)`. The instance helper admits exactly what
 instance's run-time class has `class_name` on its MRO -- and hands back the
 compiled instance borrowed (compiled instances are never freed, D-107,
 D-154); a carrier whose `__init__` never ran passes the guard and is refused
-here with `TypeError`. No helper takes a CPython reference, so nothing joins
+here with `TypeError`, as is a non-carrier whose `__class__` property answers
+the compiled class. No helper takes a CPython reference, so nothing joins
 the #1092 leak-only set. **The identity peephole:** a narrowed read in a
 position that packs its value back into a `PyObject *` -- every
 `foreign_pack::emit_pack` operand (a foreign call argument, a

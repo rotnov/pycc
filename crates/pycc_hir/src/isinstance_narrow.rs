@@ -55,23 +55,34 @@ pub fn isinstance_test(test: &HirExpr) -> Option<(&str, &str, IsInstancePolarity
 /// table. The caller has already established that `class` is not shadowed
 /// by a local, parameter or global binding.
 ///
-/// - `int`, `float`, `bool` and `str` narrow to the same scalar type.
 /// - A compiled class narrows to `Ty::Instance` when
-///   [`HirClassDef::admits_isinstance_narrowing`] holds.
+///   [`HirClassDef::admits_isinstance_narrowing`] holds, and otherwise keeps
+///   the operand `object`.
+/// - Failing that, `int`, `float`, `bool` and `str` narrow to the same
+///   scalar type.
 /// - Every other class -- `list`, `dict`, `tuple`, a foreign class, an
 ///   unknown name -- keeps the operand `object`.
+///
+/// The compiled class is consulted first because a module-level
+/// `class int: ...` shadows the builtin, in CPython and in the guard
+/// itself (`pycc_mir`'s `obj_compare::lower_object_isinstance`).
+/// Narrowing such an `object` to the builtin `int` would type the guarded
+/// body against a class the guard does not test.
 pub fn isinstance_narrow_target<'a>(
     class: &str,
     lookup_class: impl FnOnce(&str) -> Option<&'a HirClassDef>,
 ) -> Option<Ty> {
+    if let Some(def) = lookup_class(class) {
+        return def
+            .admits_isinstance_narrowing()
+            .then(|| Ty::Instance(Box::new(def.name.clone())));
+    }
     match class {
         "int" => Some(Ty::Int),
         "float" => Some(Ty::Float),
         "bool" => Some(Ty::Bool),
         "str" => Some(Ty::Str),
-        _ => lookup_class(class)
-            .filter(|def| def.admits_isinstance_narrowing())
-            .map(|def| Ty::Instance(Box::new(def.name.clone()))),
+        _ => None,
     }
 }
 

@@ -118,13 +118,16 @@ pub(super) fn lower_object_isinstance(
         HirExpr::Name(name) if !scopes.iter().any(|scope| scope.contains_key(name)) => Some(name),
         _ => None,
     };
+    // A module-level class spelled like a builtin (`class int: ...`)
+    // shadows the builtin too, so the compiled class is consulted first
+    // (#1476: `pycc_hir::isinstance_narrow_target` narrows in the same
+    // order, so a guard and the narrowing it licenses name one class).
+    let compiled = unshadowed.filter(|name| classes.contains_key(*name));
     let builtin = unshadowed.and_then(|name| ObjBuiltinClass::from_name(name));
-    let class = match (builtin, unshadowed) {
-        (Some(builtin), _) => ObjIsInstanceClass::Builtin(builtin),
-        (None, Some(name)) if classes.contains_key(name) => {
-            ObjIsInstanceClass::Compiled(name.clone())
-        }
-        (None, _) => ObjIsInstanceClass::Object(Box::new(lower_expr(
+    let class = match (compiled, builtin) {
+        (Some(name), _) => ObjIsInstanceClass::Compiled(name.clone()),
+        (None, Some(builtin)) => ObjIsInstanceClass::Builtin(builtin),
+        (None, None) => ObjIsInstanceClass::Object(Box::new(lower_expr(
             class_arg,
             scopes,
             classes,

@@ -108,6 +108,24 @@ fn a_regular_class_and_an_erased_generic_base_narrow_to_an_instance() {
     assert_eq!(target(&hir, "S"), Some(Ty::Instance(Box::new("S".into()))));
 }
 
+/// A module-level class spelled like a builtin shadows it: the guard tests
+/// the compiled class, so the narrowing names it too, or nothing when the
+/// class is not admissible.
+#[test]
+fn a_compiled_class_spelled_like_a_builtin_shadows_it() {
+    let hir = lower_ok(
+        "from enum import Enum\n\
+         class int:\n    pass\n\
+         class str(Enum):\n    A = 1\n",
+    );
+    assert_eq!(
+        target(&hir, "int"),
+        Some(Ty::Instance(Box::new("int".into())))
+    );
+    assert_eq!(target(&hir, "str"), None);
+    assert_eq!(target(&hir, "float"), Some(Ty::Float));
+}
+
 #[test]
 fn enums_exceptions_protocols_and_pep695_generics_do_not_narrow() {
     let hir = lower_ok(

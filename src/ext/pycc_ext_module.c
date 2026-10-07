@@ -2772,10 +2772,14 @@ int pycc_ext_obj_to_str(PyObject *o, void **out)
  * conversions above, the narrowed read is an *implicit* crossing, so each
  * helper keeps the closed D-244 rule-7 check of the matching thunk-seam
  * unpacker (`pycc_ext_unpack_int_at`, `_float_at`, `_bool_at`, `_str`)
- * rather than CPython's conversion protocol: the guard has already
- * established the type, so the check only refuses an object whose class
- * was reassigned in between, and a `bool` under an `int` guard keeps its
- * D-141 marker word. The thunk-seam unpackers themselves stay unchanged,
+ * rather than CPython's conversion protocol, and a `bool` under an `int`
+ * guard keeps its D-141 marker word. The guard is CPython's own
+ * `PyObject_IsInstance`, which also consults a `__class__` attribute: an
+ * object whose `__class__` property answers `int` (a mock, a proxy) passes
+ * the guard without being a `PyLong`, has no native representation to
+ * hand over, and is refused here with a `TypeError` where CPython would run
+ * the guarded body on it -- a deliberate, loud deviation (#1476, pinned by
+ * `tests/issue_1476_isinstance_narrowing.rs`). The thunk-seam unpackers themselves stay unchanged,
  * because their messages name an argument position this read has none of.
  *
  * `int` has no bigint path: a value outside pycc's inline-integer range
@@ -2793,9 +2797,9 @@ static int pycc_ext_obj_unbox_refuse(PyObject *o, const char *wanted)
         return -1;
     }
     PyErr_Format(PyExc_TypeError,
-                 "narrowed object is no longer %s: '%U' object (its class changed after "
-                 "the isinstance() guard)",
-                 wanted, type_name);
+                 "isinstance() held for a '%U' object, but only %s has the native "
+                 "representation the narrowed read needs",
+                 type_name, wanted);
     Py_DECREF(type_name);
     return -1;
 }

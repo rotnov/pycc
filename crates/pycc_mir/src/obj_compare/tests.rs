@@ -203,6 +203,26 @@ fn isinstance_against_a_compiled_class_carries_the_class_name() {
     assert_eq!(lowered.ty(), Ty::Bool);
 }
 
+/// #1476: a module-level class spelled like a builtin shadows the builtin,
+/// as in CPython, so the guard tests the compiled class.
+#[test]
+fn a_compiled_class_spelled_like_a_builtin_shadows_the_builtin() {
+    let lowered = lower_discarded_with(
+        isinstance(numpy_attr("pi"), HirExpr::Name("int".to_string())),
+        vec![("int".to_string(), plain_class("int", &["int", "object"]))],
+    );
+    assert!(
+        matches!(
+            &lowered,
+            MirExpr::ObjIsInstance {
+                class: ObjIsInstanceClass::Compiled(name),
+                ..
+            } if name == "int"
+        ),
+        "{lowered:?}"
+    );
+}
+
 /// A local spelled like a compiled class shadows it: the class argument is
 /// then the evaluated local, not the published family.
 #[test]
