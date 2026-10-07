@@ -44,15 +44,15 @@ fn refused(source: &str, code: &str, message: &str) {
     }
 }
 
-/// Any diagnostic at all: the shape is refused, whatever names it.
-fn rejected(source: &str) {
-    for prefix in ["", SOLVER] {
-        let source = format!("{prefix}{source}");
-        assert!(
-            !diagnostics(&source).is_empty(),
-            "{source}\nexpected a refusal"
-        );
-    }
+/// The probe `o + 1` is refused because `o` is still the object: a narrowed
+/// `o` would make it native, and a refusal for any other reason would not
+/// name `object`.
+fn still_object(source: &str) {
+    refused(
+        source,
+        "T0021",
+        "operator Add is not defined for `object` and `int`",
+    );
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn outside_the_guard_the_name_is_still_an_object() {
         "operator Add is not defined for `object` and `int`",
     );
     // The `else` branch of a positive guard is not narrowed.
-    rejected(
+    still_object(
         "def f(o: object) -> int:\n    if isinstance(o, int):\n        return 0\n    else:\n        return o + 1\n",
     );
 }
@@ -102,29 +102,63 @@ fn a_negated_guard_narrows_the_else_branch_and_the_continuation() {
         "def f(o: object) -> int:\n    if not isinstance(o, int):\n        return 0\n    return o + 1\n",
     );
     // A body that does not terminate narrows nothing after it.
-    rejected(
+    still_object(
         "def f(o: object) -> int:\n    if not isinstance(o, int):\n        pass\n    return o + 1\n",
     );
 }
 
 #[test]
 fn rebinding_the_name_ends_the_narrowing() {
-    rejected(
+    still_object(
         "def f(o: object, p: object) -> int:\n    if isinstance(o, int):\n        o = p\n        return o + 1\n    return 0\n",
     );
 }
 
 #[test]
 fn a_loop_that_rebinds_the_name_is_not_narrowed_on_entry() {
-    rejected(
+    still_object(
         "def f(o: object, p: object) -> int:\n    if isinstance(o, int):\n        while o:\n            \
          x = o + 1\n            o = p\n    return 0\n",
     );
 }
 
 #[test]
+fn a_try_body_is_narrowed_up_to_its_rebinding_and_its_handlers_are_not() {
+    // The body is walked in order: the read before the rebinding is native.
+    checks(
+        "def f(o: object, p: object) -> int:\n    if isinstance(o, int):\n        try:\n            \
+         x = o + 1\n            o = p\n            return x\n        except Exception:\n            \
+         return 0\n    return -1\n",
+    );
+    // A `try` that does not rebind the name keeps it narrowed throughout.
+    checks(
+        "def f(o: object) -> int:\n    if isinstance(o, int):\n        try:\n            \
+         return o + 1\n        except Exception:\n            return o + 2\n        \
+         finally:\n            print(o + 3)\n    return -1\n",
+    );
+    // A handler can run after the body's rebinding.
+    still_object(
+        "def f(o: object, p: object) -> int:\n    if isinstance(o, int):\n        try:\n            \
+         o = p\n        except Exception:\n            return o + 1\n    return -1\n",
+    );
+    // The `finally` can run after any path's rebinding: the body's, a
+    // handler's, the `else`'s, or a handler's `as` name.
+    for rebinding in [
+        "try:\n            o = p\n        except Exception:\n            pass\n",
+        "try:\n            pass\n        except Exception:\n            o = p\n",
+        "try:\n            pass\n        except Exception:\n            pass\n        else:\n            o = p\n",
+        "try:\n            pass\n        except Exception as o:\n            pass\n",
+    ] {
+        still_object(&format!(
+            "def f(o: object, p: object) -> int:\n    if isinstance(o, int):\n        {rebinding}        \
+             finally:\n            print(o + 1)\n    return -1\n"
+        ));
+    }
+}
+
+#[test]
 fn a_shadowed_class_name_or_isinstance_does_not_narrow() {
-    rejected(
+    still_object(
         "def isinstance(a: object, b: object) -> bool:\n    return True\n\n\n\
          def f(o: object) -> int:\n    if isinstance(o, int):\n        return o + 1\n    return 0\n",
     );
@@ -170,8 +204,10 @@ fn a_first_binding_from_the_narrowed_name_is_an_object_slot() {
     );
     // A non-bare read is native: `y` is an `int` slot, and a later object
     // rebinding is refused.
-    rejected(
+    refused(
         "def f(o: object, p: object) -> int:\n    if isinstance(o, int):\n        y = o + 0\n        y = p\n        return y\n    return 0\n",
+        "T0023",
+        "cannot assign `object` to `y`, previously inferred as `int`",
     );
 }
 
@@ -225,7 +261,7 @@ fn an_unannotated_parameter_is_not_narrowed() {
         "def _g(x):\n    if isinstance(x, int):\n        return x + 1\n    return 0\n\n\n\
          def g() -> int:\n    return _g(2)\n",
     );
-    rejected(
+    still_object(
         "def _g(x):\n    if isinstance(x, int):\n        return x + 1\n    return 0\n\n\n\
          def g(o: object) -> int:\n    return _g(o)\n",
     );
@@ -256,7 +292,7 @@ fn a_guarded_branch_that_rebinds_the_name_still_joins() {
 
 #[test]
 fn a_maybe_bound_rebinding_ends_the_narrowing_after_the_if() {
-    rejected(
+    still_object(
         "def f(o: object, p: object, b: bool) -> int:\n    if not isinstance(o, int):\n        return 0\n    \
          if b:\n        o = p\n    return o + 1\n",
     );

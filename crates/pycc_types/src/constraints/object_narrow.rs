@@ -13,9 +13,13 @@
 //! - a negated guard whose body definitely terminates narrows the rest of
 //!   the block ([`after_statement`]);
 //! - any statement that rebinds the name ends the narrowing after it, and a
-//!   loop or `try` that rebinds it anywhere ends it before it, because its
-//!   body can run after its own rebinding ([`before_statement`], the check
-//!   phase's `apply_kill_prescan`).
+//!   loop that rebinds it anywhere ends it before it, because its body can
+//!   run after its own rebinding ([`before_statement`], the check phase's
+//!   `apply_kill_prescan`);
+//! - a `try` body is walked in order, each handler starts without the
+//!   names the body rebinds anywhere, and the `finally` without the names
+//!   any path rebinds ([`kill_names`]), as the check phase's
+//!   `check_try_stmt` and its path join do.
 //!
 //! The recognizer and the class gate are `pycc_hir`'s, shared with the
 //! check phase and the MIR lowering; only the scope lookups are this
@@ -81,9 +85,11 @@ pub(super) fn is_bare_narrowed_read(env: &ConstraintEnvironment<'_, '_>, value: 
     matches!(value, HirExpr::Name(name) if env.narrowed.contains_key(name))
 }
 
-/// Before collecting `stmt`: a loop body or `try` body runs again, or a
-/// handler runs, after a rebinding inside it, so every name `stmt` rebinds
-/// anywhere stops being narrowed for the whole statement.
+/// Before collecting `stmt`: a loop body runs again after a rebinding inside
+/// it, so every name a loop rebinds anywhere stops being narrowed for the
+/// whole loop. A `try` is not killed here: its body is walked sequentially
+/// and [`kill_names`] drops the body's rebindings from each handler, as the
+/// check phase does.
 pub(super) fn before_statement(env: &mut ConstraintEnvironment<'_, '_>, stmt: &HirStmt) {
     if env.narrowed.is_empty() {
         return;
@@ -94,11 +100,16 @@ pub(super) fn before_statement(env: &mut ConstraintEnvironment<'_, '_>, stmt: &H
             | HirStmt::ForRange { .. }
             | HirStmt::ForList { .. }
             | HirStmt::ForObject { .. }
-            | HirStmt::Try { .. }
-            | HirStmt::TryStar { .. }
     ) {
         kill(env, stmt);
     }
+}
+
+/// Drops every name in `names` from the overlay: a `try` handler can run
+/// after any rebinding in the body, and a `finally` after any rebinding on
+/// any path, so those names are not narrowed there.
+pub(super) fn kill_names(env: &mut ConstraintEnvironment<'_, '_>, names: &HashSet<String>) {
+    env.narrowed.retain(|name, _| !names.contains(name));
 }
 
 /// After collecting `stmt`: a name it rebinds anywhere is no longer

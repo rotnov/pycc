@@ -72,8 +72,13 @@ pub(super) fn collect_try_constraints(
     )?;
     solver::join_loop_body_solver(env, &body_env, &pre_existing);
     let mut fallthrough = Vec::new();
+    // #1476: a handler can run after any rebinding in the body, so the
+    // body's rebindings are not narrowed in it (the check phase's
+    // `apply_kill_prescan` on each handler environment).
+    let body_kills = pycc_hir::killed_names(shape.body);
     for handler in shape.handlers {
         let mut henv = env.clone();
+        object_narrow::kill_names(&mut henv, &body_kills);
         // Bind the `as` name in the handler environment.
         // Inside the handler body, the binding is definite.
         let binding_type = if shape.star {
@@ -129,6 +134,15 @@ pub(super) fn collect_try_constraints(
     let mut excluded = pre_existing;
     excluded.extend(shape.handlers.iter().filter_map(|h| h.name.clone()));
     solver::promote_try_fallthrough(env, &fallthrough, &excluded);
+    // #1476: the finally body runs after any path, so a name any path
+    // rebinds is not narrowed in it.
+    let mut path_kills = body_kills;
+    path_kills.extend(pycc_hir::killed_names(shape.orelse));
+    for handler in shape.handlers {
+        path_kills.extend(handler.name.iter().cloned());
+        path_kills.extend(pycc_hir::killed_names(&handler.body));
+    }
+    object_narrow::kill_names(env, &path_kills);
     // The finally body always runs — collect in-place.
     collect_block_constraints(
         signatures,
