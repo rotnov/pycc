@@ -10,8 +10,9 @@
 //! every line. The deliberate deviations are pinned separately: an `int`
 //! past 64 bits raises `OverflowError` at a narrowed read, a compiled-class
 //! carrier whose `__init__` never ran raises `TypeError` where CPython
-//! raises `AttributeError`, and a `str` subclass handed to a native `str`
-//! parameter comes back a plain `str`.
+//! raises `AttributeError`, a `str` subclass handed to a native `str`
+//! parameter comes back a plain `str`, and a native use of a subclass
+//! instance runs the base type's operation, not an override.
 //!
 //! The hosted tests are `#[ignore]`d for the reason every `ext` test is;
 //! the refusals need no interpreter and run everywhere.
@@ -164,12 +165,49 @@ def relay(o: object) -> object:
     if isinstance(o, str):
         return _echo(o)
     return None
+
+
+def back(o: object) -> int:
+    if isinstance(o, int):
+        return o
+    return -1
+
+
+def text(o: object) -> str:
+    if isinstance(o, int):
+        return f"/{o}"
+    return "?"
+
+
+def show(o: object) -> None:
+    if isinstance(o, int):
+        print(o, o + 0)
+
+
+def in_range(o: object) -> bool:
+    if isinstance(o, int):
+        return 0 < o < 10
+    return False
+"#;
+
+/// A second module compiling a class of the same name: its instances are
+/// not [`MODULE`]'s `Token`.
+const OTHER: &str = r#"class Token:
+    def __init__(self, kind: str, value: int) -> None:
+        self.kind = kind
+        self.value = value
+
+    def get(self) -> int:
+        return self.value
 "#;
 
 /// A `str` subclass instance keeps its identity through every use that
 /// packs it back; a host-side class named `Token` is not the compiled one;
-/// host `int` and `float` subclasses narrow like their bases.
+/// host `int` and `float` subclasses narrow like their bases; a `bool`
+/// read under an `int` guard stays `True` wherever it flows back out (D-141);
+/// a same-named class compiled in [`OTHER`] does not pass the guard.
 const DRIVER: &str = r#"import narrowing as m
+import other
 
 
 class S(str):
@@ -188,6 +226,8 @@ class F(float):
     pass
 
 
+# First: the compiled `print` bypasses the host's buffered `sys.stdout`.
+m.show(True)
 t = m.Token("name", 4)
 s = S("a")
 print(m.as_int(41), m.as_int(True), m.as_int("x"), m.as_int(2.0))
@@ -202,10 +242,15 @@ print(type(w).__name__, w[0] is s, type(w[0]).__name__)
 print(m.shifted(2, 4), m.shifted("2", 4))
 print(m.keep(t), m.keep(3))
 print(m.as_int(I(5)), m.as_float(F(1.5)), m.int_then_bool(I(1)))
+r = m.back(True)
+print(r, type(r).__name__, m.back(7), m.text(True), m.text(3))
+print(m.in_range(5), m.in_range(10), m.in_range("5"))
+print(m.as_token(other.Token("x", 4)), m.kind_of(other.Token("x", 4)))
 "#;
 
 /// CPython 3.14.7's own output for [`DRIVER`] over [`MODULE`].
-const EXPECTED: &str = "42 2 -1 -1
+const EXPECTED: &str = "True 1
+42 2 -1 -1
 2.5 -1.0
 yes no not bool
 hi! a! str ?
@@ -216,6 +261,9 @@ list True S
 14 -1
 4 -1
 6 3.0 11
+True bool 7 /True /3
+True False False
+0 none
 ";
 
 fn build_module(dir: &Path) -> (PathBuf, PathBuf) {
@@ -223,16 +271,18 @@ fn build_module(dir: &Path) -> (PathBuf, PathBuf) {
     let out_dir = dir.join("out");
     std::fs::create_dir_all(&src_dir).expect("create the source directory");
     std::fs::create_dir_all(&out_dir).expect("create the output directory");
-    let source = write(&src_dir, "narrowing.py", MODULE);
-    let build = pycc()
-        .arg("build")
-        .arg(&source)
-        .arg("-o")
-        .arg(out_dir.join("narrowing"))
-        .arg("--ext")
-        .output()
-        .expect("pycc should spawn");
-    assert_ok(&build);
+    for (name, body) in [("narrowing", MODULE), ("other", OTHER)] {
+        let source = write(&src_dir, &format!("{name}.py"), body);
+        let build = pycc()
+            .arg("build")
+            .arg(&source)
+            .arg("-o")
+            .arg(out_dir.join(name))
+            .arg("--ext")
+            .output()
+            .expect("pycc should spawn");
+        assert_ok(&build);
+    }
     (src_dir, out_dir)
 }
 
@@ -252,8 +302,9 @@ fn every_narrowing_shape_matches_cpython_in_an_ext_module() {
 /// The deliberate deviations, each against CPython's own answer: an `int`
 /// past 64 bits does not fit the native `int` a narrowed read produces
 /// (#1040), a carrier whose `__init__` never ran has no native instance to
-/// hand over, and a `str` subclass handed to a native `str` parameter is
-/// copied as a plain `str`.
+/// hand over, a `str` subclass handed to a native `str` parameter is
+/// copied as a plain `str`, and a native use runs `str`'s own `+`, not a
+/// subclass's overriding `__add__`.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn the_narrowed_read_deviations_are_the_documented_ones() {
@@ -264,17 +315,18 @@ fn the_narrowed_read_deviations_are_the_documented_ones() {
                   lambda: m.as_token(m.Token.__new__(m.Token))):\n    \
                   try:\n        print(f())\n    \
                   except Exception as e:\n        print(type(e).__name__)\n\
-                  class S(str):\n    pass\n\
-                  print(type(m.relay(S('a'))).__name__)\n";
+                  class S(str):\n    \
+                  def __add__(self, other):\n        return 'over'\n\
+                  print(type(m.relay(S('a'))).__name__, m.as_str(S('a')))\n";
     let oracle = run(script, &src_dir, &dir);
     assert_ok(&oracle);
     assert_eq!(
         stdout_of(&oracle),
-        "1180591620717411303425\nAttributeError\nS\n"
+        "1180591620717411303425\nAttributeError\nS over\n"
     );
     let compiled = run(script, &out_dir, &dir);
     assert_ok(&compiled);
-    assert_eq!(stdout_of(&compiled), "OverflowError\nTypeError\nstr\n");
+    assert_eq!(stdout_of(&compiled), "OverflowError\nTypeError\nstr a!\n");
 }
 
 fn refused(name: &str, body: &str) -> String {

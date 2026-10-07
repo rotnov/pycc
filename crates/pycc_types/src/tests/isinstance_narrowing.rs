@@ -132,22 +132,28 @@ fn a_shadowed_class_name_or_isinstance_does_not_narrow() {
 
 #[test]
 fn unnarrowable_classes_and_shapes_keep_the_object() {
+    // Each probe is `o + 1`, whose refusal names `object` only while `o` is
+    // still the object; a narrowed `o` would name its class instead.
     let shapes = [
         // A tuple of classes.
         "def f(o: object) -> int:\n    if isinstance(o, (int, str)):\n        return o + 1\n    return 0\n",
         // A container class.
-        "def f(o: object) -> int:\n    if isinstance(o, list):\n        return len(o) + o\n    return 0\n",
+        "def f(o: object) -> int:\n    if isinstance(o, list):\n        return o + 1\n    return 0\n",
         // A compound test.
         "def f(o: object, b: bool) -> int:\n    if isinstance(o, int) and b:\n        return o + 1\n    return 0\n",
         // An enum.
         "from enum import Enum\n\n\nclass Color(Enum):\n    RED = 1\n\n\n\
-         def f(o: object) -> int:\n    if isinstance(o, Color):\n        return o.value\n    return 0\n",
+         def f(o: object) -> int:\n    if isinstance(o, Color):\n        return o + 1\n    return 0\n",
         // An exception class.
         "class Boom(Exception):\n    pass\n\n\n\
-         def f(o: object) -> str:\n    if isinstance(o, Boom):\n        return o.upper()\n    return \"\"\n",
+         def f(o: object) -> int:\n    if isinstance(o, Boom):\n        return o + 1\n    return 0\n",
     ];
     for shape in shapes {
-        rejected(shape);
+        refused(
+            shape,
+            "T0021",
+            "operator Add is not defined for `object` and `int`",
+        );
     }
 }
 
@@ -182,6 +188,24 @@ fn identity_and_a_nested_guard_see_the_object() {
     );
 }
 
+/// A chain cannot carry an object, so an `is` link on a narrowed read is
+/// refused as it is without the guard; an ordered link stays native.
+#[test]
+fn a_chained_identity_link_on_a_narrowed_read_is_refused() {
+    for test in ["o is not None is not None", "0 < o is not None"] {
+        refused(
+            &format!(
+                "def f(o: object) -> bool:\n    if isinstance(o, int):\n        return {test}\n    return False\n"
+            ),
+            "I0404",
+            "a chained comparison with a CPython object operand",
+        );
+    }
+    checks(
+        "def f(o: object) -> bool:\n    if isinstance(o, int):\n        return 0 < o < 10\n    return False\n",
+    );
+}
+
 #[test]
 fn an_inferred_return_and_an_object_return_both_take_the_narrowed_value() {
     checks(
@@ -209,11 +233,17 @@ fn an_unannotated_parameter_is_not_narrowed() {
 
 #[test]
 fn a_binding_named_like_the_class_or_a_maybe_bound_operand_does_not_narrow() {
-    rejected(
+    refused(
         "def f(o: object, int: object) -> int:\n    if isinstance(o, int):\n        return o + 1\n    return 0\n",
+        "T0021",
+        "operator Add is not defined for `object` and `int`",
     );
-    rejected(
+    // A maybe-bound operand is refused (`T0041`) at the guard's own read, so
+    // no narrowing can make the read inside it admissible.
+    refused(
         "def f(p: object, b: bool) -> int:\n    if b:\n        o = p\n    if isinstance(o, int):\n        return o + 1\n    return 0\n",
+        "T0041",
+        "",
     );
 }
 

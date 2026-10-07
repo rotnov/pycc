@@ -2184,7 +2184,9 @@ under an `int` guard keeps its D-141 marker word, and an `int` outside the
 inline range raises `OverflowError` citing
 [#1040](https://github.com/rotnov/pycc/issues/1040). A `str` (or `str`
 subclass) is copied into a fresh `PyStrObj` at refcount 1, which the
-function owns. The instance helper admits exactly what
+function owns. An `int`, `float` or `str` subclass instance is therefore
+operated on as its base value: a native use never calls an overridden
+dunder or method of `type(o)`. The instance helper admits exactly what
 `pycc_ext_unpack_instance` admits -- a carrier of this module whose
 instance's run-time class has `class_name` on its MRO -- and hands back the
 compiled instance borrowed (compiled instances are never freed, D-107,
