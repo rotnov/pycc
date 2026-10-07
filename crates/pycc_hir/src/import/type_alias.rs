@@ -6,7 +6,7 @@
 
 use crate::class::ClassAnnotationInfo;
 use crate::{Ty, annotation_to_ty};
-use pycc_ast::{Expr, Stmt};
+use pycc_ast::{Expr, ExprName, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
 /// Recognizes a PEP 695 `type X = <expr>` statement and evaluates its RHS as
@@ -98,23 +98,34 @@ pub(crate) fn lower_legacy_type_alias_ann_assign(
     aliases: &[(String, Ty)],
     class_defs: &[ClassAnnotationInfo],
 ) -> Result<Option<(String, Ty)>, Diagnostic> {
-    let Stmt::AnnAssign(ann) = stmt else {
-        return Ok(None);
-    };
-    let Expr::Name(annotation_name) = ann.annotation.as_ref() else {
-        return Ok(None);
-    };
-    if annotation_name.id.as_str() != "TypeAlias" {
-        return Ok(None);
-    }
-    let Some(value) = ann.value.as_deref() else {
-        return Ok(None);
-    };
-    let Expr::Name(target) = ann.target.as_ref() else {
+    let Some((target, value)) = legacy_type_alias_parts(stmt) else {
         return Ok(None);
     };
     let ty = alias_value_to_ty(value, aliases, class_defs)?;
     Ok(Some((target.id.to_string(), ty)))
+}
+
+/// The target and value of a legacy `X: TypeAlias = <value>` statement, or
+/// `None` for any other shape: the annotation must be the bare name
+/// `TypeAlias`, a value must be present, and the target must be a name. The
+/// pure shape half of [`lower_legacy_type_alias_ann_assign`], shared with
+/// `carrier::reject_carrier_misuse` (#1380), which must treat exactly the
+/// values that lowering reads as a type as annotation positions.
+pub(crate) fn legacy_type_alias_parts(stmt: &Stmt) -> Option<(&ExprName, &Expr)> {
+    let Stmt::AnnAssign(ann) = stmt else {
+        return None;
+    };
+    let Expr::Name(annotation_name) = ann.annotation.as_ref() else {
+        return None;
+    };
+    if annotation_name.id.as_str() != "TypeAlias" {
+        return None;
+    }
+    let value = ann.value.as_deref()?;
+    let Expr::Name(target) = ann.target.as_ref() else {
+        return None;
+    };
+    Some((target, value))
 }
 
 /// Resolves a type alias's value (`type X = <value>`, `X: TypeAlias =

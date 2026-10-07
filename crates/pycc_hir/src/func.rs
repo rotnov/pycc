@@ -15,6 +15,7 @@
 //! resolving unchanged.
 
 mod bare_container;
+mod buffer_spelling;
 mod container_annotation;
 pub(crate) mod params;
 #[cfg(test)]
@@ -596,52 +597,11 @@ pub(crate) fn annotation_to_ty(
                 {
                     return Ok(ty);
                 }
-                // #1129/#1134: `ndarray` and `NDArray` are *further
-                // spellings* of the same pycc type, not new ones. All three
-                // mean "a one-dimensional, C-contiguous, format `'d'` buffer
-                // exporter", which is exactly what
-                // `pycc_ext_unpack_memoryview` enforces at the boundary, so
-                // the three spellings have no run-time observable difference
-                // and a distinct `Ty` variant would carry information no
-                // consumer could read. Diagnostics therefore render the
-                // canonical `memoryview` for any spelling, which is already
-                // what the alias table does for `type Arr = memoryview`. `NDArray` (#1134) is the
-                // capitalized `numpy.typing` spelling 18 of the 19
-                // array-parameter occurrences in the #1039 census use; it
-                // joins the set on exactly the terms `ndarray` did, and
-                // registering it does not by itself make any of those
-                // occurrences compile -- each also needs a name binding
-                // that does not exist yet (`from numpy.typing import
-                // NDArray` is refused by the foreign-import path, `import
-                // numpy as np` is #883, and an attribute-form base
-                // `np.ndarray` is #889).
-                //
-                // Recognized with **no import**, deliberately:
-                // `annotation_to_ty` receives `type_param`, `class_name`,
-                // `aliases` and `class_defs` and no import table at all, and
-                // `import numpy` builds only from a `pycc.lock` closure
-                // (#1242), so requiring one would be new machinery gating a
-                // spelling on an installed numpy. `Any`, `Annotated`,
-                // `TypeAlias` and `Self` are all recognized on those terms.
-                //
-                // Both are resolved *here* rather than beside `memoryview`
-                // in the keyword list above, and that placement is the rule
-                // rather than a detail: every name in that list is a Python
-                // builtin or a `typing` name, while `ndarray` and `NDArray`
-                // are ordinary identifiers a program may bind itself.
-                // Reserving one ahead of `class_defs` and `aliases` would
-                // make a module-level `class ndarray` or
-                // `type NDArray = ...` mean something Python does not -- in
-                // Python a local definition shadows an imported name, not
-                // the other way round -- and measurably refused programs
-                // that compiled before the spelling existed. The user's own
-                // definition therefore wins, and the buffer carrier is what
-                // a name nothing else binds falls back to. That is why
-                // neither spelling appears in `name_resolves_before_class_defs`
-                // nor, through it, in the subscript arm's own
-                // `name_resolves_before_aliases` ladder.
-                if matches!(other, "ndarray" | "NDArray") {
-                    return Ok(Ty::MemoryView);
+                // #1129/#1134: the buffer-carrier spellings, resolved only
+                // after `class_defs` and the alias table above, which is the
+                // rule; see `buffer_spelling` for why.
+                if let Some(ty) = buffer_spelling::buffer_carrier_spelling(other) {
+                    return Ok(ty);
                 }
                 // D-258 rules 3 and 4 (#1397): in an `ext` module the builtin
                 // `object` and a bare `list`/`dict`/`tuple`/`set` are the

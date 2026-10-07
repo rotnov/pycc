@@ -1305,9 +1305,22 @@ function, class, loop, `with` or `match` body keep their `C0001` (a relative imp
 and never reaches this channel, except the entry module's relative
 from-imports under `pycc build --ext --foreign-relative-imports`, #1366, below), and so does a name pycc
 already resolves by its spelling (`from builtins import range`,
-`from numpy import ndarray`, `from numpy.typing import NDArray`;
-[#1380](https://github.com/rotnov/pycc/issues/1380)), because binding it to a CPython object would
-change what every later use of that spelling means. Each name is its own
+`from numpy import NDArray`), because binding it to a CPython object would
+change what every later use of that spelling means. The exception is the two
+buffer-carrier pairs, absolute and unaliased: `from numpy import ndarray` and
+`from numpy.typing import NDArray`
+([#1380](https://github.com/rotnov/pycc/issues/1380), Part 2 of #1138, D-244).
+Such an import runs in the host at its position like any other foreign
+from-import, so a missing `numpy.typing` or `ndarray` raises CPython's own
+error and the interop policy and the lock see it, but it binds a hidden
+name: the module's dict never holds it, and the spelling keeps the
+buffer-carrier meaning it has without any import. In a module that writes
+one, even only inside an `if TYPE_CHECKING:` block, the spelling may only
+annotate; every other read or binding of it is a
+`C0001` ([DIAGNOSTICS.md](./DIAGNOSTICS.md)), while a repeated or
+`if TYPE_CHECKING:`-guarded copy of the same carrier import is the same
+binding and is accepted. Only an import resolved as foreign is a carrier
+import: a project `numpy.py` keeps its own `ndarray`. Each name is its own
 foreign binding, whose identity is the module *and* the name, so
 `import copy` followed by `from copy import copy` is the same shadowing refusal
 as any other rebinding of a foreign name.
