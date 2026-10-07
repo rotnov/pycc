@@ -570,10 +570,10 @@ which binds that function's `pycc_ext_methods[]` row with
 `PyCFunction_NewEx` + `PyModule_AddObjectRef`. A redefined name is
 published again at each definition, so the module always holds the
 definition that last ran. A class is published once the last compiled item
-its MRO owns is bound -- for a class with its own methods (every class has
-one: a class declaring no `__init__` gets a synthesized one, D-225) that is
-its class statement's position, because a class's own items are lowered
-contiguously there (pinned by
+its MRO owns is bound -- for a class that owns a compiled item (a method
+it declares, or the `__init__` D-225 synthesizes for a base-less class that
+declares none) that is its class statement's position, because a class's
+own items are lowered contiguously there (pinned by
 `src/ext_build_tests/publication_order.rs`). A name read before its
 definition runs therefore fails exactly as in CPython: `getattr` and
 `hasattr` see a partially initialized module's `AttributeError`, and

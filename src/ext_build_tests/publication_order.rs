@@ -247,18 +247,19 @@ fn an_instance_method_wrapper_guards_before_unwrapping_its_receiver() {
     assert!(at < receiver, "{text}");
 }
 
-/// The `MirItem::Function` names of `source`, in item order, lowered the
-/// way the build lowers it (with the inherited-method copies appended).
-fn function_order(source: &str) -> Vec<String> {
+/// The items of `source` in order, lowered the way the build lowers it
+/// (with the inherited-method copies appended): a `MirItem::Function` by
+/// its name, any other item as `"<stmt>"`.
+fn item_order(source: &str) -> Vec<String> {
     let module = pycc_parser::parse(source).expect("test fixture must parse");
     let hir = pycc_hir::lower_checked(&module).expect("test fixture must lower");
     let hir = pycc_types::check_and_resolve(&hir).expect("test fixture must check");
     pycc_mir::build(&hir)
         .items
         .iter()
-        .filter_map(|item| match item {
-            pycc_mir::MirItem::Function { name, .. } => Some(name.clone()),
-            _ => None,
+        .map(|item| match item {
+            pycc_mir::MirItem::Function { name, .. } => name.clone(),
+            _ => "<stmt>".to_string(),
         })
         .collect()
 }
@@ -267,12 +268,14 @@ fn function_order(source: &str) -> Vec<String> {
 /// ordinal of the items its MRO owns, which is "right after the class
 /// statement" only because `pycc_hir` lowers a class's own items as one
 /// contiguous run at the statement's position. This pins that layout,
-/// including the synthesized `__init__` (D-225) of a class that declares
-/// none -- which is why every class has an own item and the shim's
-/// post-body safety net does not fire for an ordinary program.
+/// including the synthesized `__init__` (D-225) of a base-less class that
+/// declares none, and a module-level statement between two classes. A
+/// subclass that declares nothing (`class E(P): pass`) owns no item at all:
+/// `ext_publish` publishes it with its bases instead, the residual
+/// `docs/RUNTIME.md`'s #1199 paragraph records.
 #[test]
 fn a_class_statement_lowers_its_own_items_contiguously_at_its_position() {
-    let order = function_order(
+    let order = item_order(
         "def a() -> int:\n    return 1\n\n\n\
          class P:\n    def __init__(self, v: int) -> None:\n        self.v = v\n\n    \
          def get(self) -> int:\n        return self.v\n\n\n\
@@ -280,6 +283,8 @@ fn a_class_statement_lowers_its_own_items_contiguously_at_its_position() {
          class Q(P):\n    def more(self) -> int:\n        return 3\n\n\n\
          class R:\n    x: int = 0\n\n    def get(self) -> int:\n        return self.x\n\n\n\
          class S:\n    pass\n\n\n\
+         print(1)\n\n\n\
+         class E(P):\n    pass\n\n\n\
          def c() -> int:\n    return 3\n",
     );
     assert_eq!(
@@ -293,6 +298,7 @@ fn a_class_statement_lowers_its_own_items_contiguously_at_its_position() {
             "R.get",
             "R.__init__",
             "S.__init__",
+            "<stmt>",
             "c",
         ]
     );

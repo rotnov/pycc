@@ -4486,8 +4486,10 @@ int pycc_ext_publish(const char *name)
  * `pycc_ext_publish` calls did not, so a completed import still exposes
  * every type object it did before #1199. Codegen publishes a class once the
  * last slot any of its type object's methods calls is stored, and every
- * class owns at least one compiled item (a synthesized `__init__` when it
- * declares none, D-225), so today this binds nothing. It exists so that a
+ * published class has at least one such slot (a method it declares, the
+ * `__init__` D-225 synthesizes for a base-less class that declares none,
+ * or an inherited method a subclass's type object calls), so today this
+ * binds nothing. It exists so that a
  * publication codegen ever misses becomes late visibility rather than a
  * class the host can never reach. A name already in the module dict is
  * left alone: either its
