@@ -268,11 +268,13 @@ const DEVIATION_DRIVER: &str = "import pycc_inst_dev_mod as mod\n\
 /// carrier, which carries no descriptor table: CPython `True` (#1448) --
 /// `Same`'s `tuple` constructor parameter keeps it unpublished, since #1450
 /// publishes every constructible class and would give it descriptors;
-/// `__eq__` and `__repr__` overrides: CPython `True` and `Same!` (dunders
-/// are not wired to type slots); a `self` escaping during `__init__`:
+/// `__eq__` override: CPython `True`, and since #1427 pycc's too (the
+/// carrier type's `tp_richcompare` runs the compiled `__eq__`); `__repr__`
+/// override: CPython `Same!` (`__repr__` is not wired to a type slot); a
+/// `self` escaping during `__init__`:
 /// CPython `True True` (the escape is packed before `tp_init` links the
 /// host's object, so it gets its own carrier of the same type).
-const DEVIATION_PINNED: &str = "False\nTrue\nFalse\nFalse\nTrue\nFalse True\n";
+const DEVIATION_PINNED: &str = "False\nTrue\nFalse\nTrue\nTrue\nFalse True\n";
 
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
