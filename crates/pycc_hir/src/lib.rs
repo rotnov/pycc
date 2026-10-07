@@ -17,6 +17,7 @@ mod isinstance_narrow;
 mod module;
 mod not_implemented;
 mod program;
+mod return_coverage;
 mod stmt;
 mod typecheck;
 
@@ -65,6 +66,7 @@ pub use isinstance_narrow::{IsInstancePolarity, isinstance_narrow_target, isinst
 pub use module::{LoweredModule, lower_all, lower_checked, lower_module};
 pub use not_implemented::{WIDENED_RETURN_HELP, body_returns_not_implemented};
 pub use program::{LinkInput, finalize, link};
+pub use return_coverage::block_always_returns;
 pub use stmt::del::{deleted_names, mentioned_names};
 pub use typecheck::{
     ExtractClassNamesError, eval_isinstance_single, eval_issubclass_single, extract_class_names,

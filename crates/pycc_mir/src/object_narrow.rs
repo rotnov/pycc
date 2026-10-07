@@ -5,7 +5,10 @@
 //! Mirrors `pycc_types::narrow` one layer down. Both layers call the same
 //! `pycc_hir` recognizers (`optional_none_test`, `isinstance_test`) and the
 //! same class gate (`isinstance_narrow_target`); only the scope lookup is
-//! per layer, so the checker and MIR agree on every narrowed read.
+//! per layer. Where the two walkers' overlays could differ, MIR follows the
+//! constraint solver's, whose verdict decides the program (D-220): across
+//! a `try`, `stmt::try_stmt` mirrors `pycc_types::constraints::try_stmt`
+//! position by position.
 
 use super::{MirExpr, narrowed_ty};
 use pycc_hir::{HirClassDef, HirExpr, IsInstancePolarity, NoneTestPolarity, Ty};

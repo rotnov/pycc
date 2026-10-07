@@ -41,4 +41,5 @@ mod scope;
 mod set_ops;
 mod slice;
 mod stmt;
+mod try_narrow;
 mod unpack;

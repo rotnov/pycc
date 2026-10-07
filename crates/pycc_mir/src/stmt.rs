@@ -4,12 +4,13 @@
 use super::expr::pre_bind_named_expr_targets;
 use super::matching::lower_match;
 use super::{
-    HirClassDef, MirExceptHandler, MirExpr, MirStmt, bind, bind_variable, class_def_of,
-    handler_type_tags, lookup, lower_expr, lower_raise, mro_attrs, mro_class_def,
-    resolve_comp_source,
+    HirClassDef, MirExpr, MirStmt, bind, bind_variable, class_def_of, lookup, lower_expr,
+    lower_raise, mro_attrs, mro_class_def, resolve_comp_source,
 };
 use pycc_hir::{HirStmt, Ty};
 use std::collections::HashMap;
+
+mod try_stmt;
 
 /// Blocker fix (D-068 review of #780): shared loop-body lowering helper for
 /// `While`/`ForRange`/`ForList`'s three arms below -- lowers `body` via
@@ -830,200 +831,44 @@ pub(super) fn lower_stmt(
         HirStmt::Match { subject, cases } => {
             lower_match(subject, cases, scopes, classes, current_class)
         }
+        // #1476: one walk serves both statement forms; see `try_stmt`'s
+        // module doc for the narrowing overlay across them.
         HirStmt::Try {
-            body: hir_body,
+            body,
             handlers,
             orelse,
             finalbody,
-        } => {
-            // D-068 review of #780: `try`'s body/handlers/orelse/finally are
-            // not this fix's scope -- see `lower_scoped_body`'s doc comment
-            // (same reasoning as `match`'s case bodies in `matching.rs`).
-            // Each remains isolated from its siblings as before; the ending
-            // narrowed state is intentionally discarded at every one of
-            // these four call sites.
-            let (body, _end_narrowed) =
-                super::lower_scoped_body(hir_body, scopes, classes, current_class, None);
-            // Issue #769 follow-up (D-068 re-review round 3): a handler
-            // runs only after *some* prefix of `body` already executed at
-            // runtime, so it must not see a narrowing `body` could have
-            // killed anywhere within it -- the MIR counterpart of
-            // `exception::check_try_stmt`'s identical `handler_env` fix
-            // (`crates/pycc_types/src/exception.rs`). Each iteration below
-            // explicitly restores `scopes` to this pre-try snapshot before
-            // its own prescan, since `lower_scoped_body`'s internal
-            // snapshot/restore only round-trips to *its own* entry state
-            // (the just-pruned state, not the shared pre-try one) --
-            // without the explicit restore, a second handler would start
-            // from the first handler's own pruning instead of the true
-            // pre-try state.
-            let pre_handlers_narrowed = super::narrowing_snapshot(scopes);
-            let handlers = handlers
-                .iter()
-                .map(|h| {
-                    super::restore_narrowing(scopes, pre_handlers_narrowed.clone());
-                    super::apply_kill_prescan(scopes, hir_body);
-                    // PEP 758 (#740): a handler may name more than one
-                    // exception type. Union each named type's own tag set,
-                    // then dedup -- overlapping families (e.g. `OSError`
-                    // and `ConnectionError` both include tags 10, 19-22)
-                    // would otherwise double-count.
-                    let exc_type_tag = h.exc_type.as_ref().map(|names| {
-                        let mut tags: Vec<u8> = names
-                            .iter()
-                            .flat_map(|name| handler_type_tags(name, classes))
-                            .collect();
-                        tags.sort_unstable();
-                        tags.dedup();
-                        tags
-                    });
-                    let binding_type = h
-                        .exc_type
-                        .as_ref()
-                        .map(|names| pycc_hir::except_handler_binding_type_name(names));
-                    if let (Some(binding_type), Some(name)) = (&binding_type, &h.name) {
-                        // The type checker binds `except T as name` only in
-                        // the handler's cloned environment. MIR maintains
-                        // its own type scopes, so record the same binding
-                        // before lowering expressions in the handler body.
-                        // A bare handler cannot have an `as` name in Python.
-                        bind(
-                            scopes,
-                            name.clone(),
-                            Ty::Instance(Box::new(binding_type.clone())),
-                        );
-                        // D-068 re-review of #780 (fourth round): `bind`
-                        // only overwrites the type scope, never the
-                        // narrowing sentinel (mirrors the checker-side gap
-                        // fixed in `exception::check_try_stmt` --
-                        // `crates/pycc_types/src/exception.rs`). Without
-                        // this, a name narrowed before entering `try` and
-                        // still carrying a `$narrowed:{name}` sentinel here
-                        // would make `lower_expr`'s `Name` arm keep emitting
-                        // `MirExpr::OptionalUnwrap` for reads of `name`
-                        // inside the handler body, even though `name` now
-                        // holds the caught exception instance, not the
-                        // narrowed `Optional`'s inner value.
-                        super::kill_narrowing(scopes, name);
-                    }
-                    let (handler_body, _end_narrowed) =
-                        super::lower_scoped_body(&h.body, scopes, classes, current_class, None);
-                    MirExceptHandler {
-                        exc_type_tag,
-                        binding_name: h.name.clone(),
-                        binding_ty: h
-                            .name
-                            .as_ref()
-                            .zip(binding_type.as_ref())
-                            .map(|(_, ty)| Ty::Instance(Box::new(ty.clone()))),
-                        body: handler_body,
-                    }
-                })
-                .collect();
-            // Restore `scopes` to the pre-handlers (pre-try) narrowing
-            // state once more: each handler's own `lower_scoped_body` call
-            // above restores only to *that handler's* pruned entry state
-            // (the `apply_kill_prescan` mutation applied right before it),
-            // not all the way back to `pre_handlers_narrowed` -- without
-            // this, `orelse`/`finalbody` below would see whichever
-            // handler ran last's pruning, not the pre-try state they saw
-            // before this fix.
-            super::restore_narrowing(scopes, pre_handlers_narrowed);
-            let (orelse, _end_narrowed) =
-                super::lower_scoped_body(orelse, scopes, classes, current_class, None);
-            let (finalbody, _end_narrowed) =
-                super::lower_scoped_body(finalbody, scopes, classes, current_class, None);
-            MirStmt::Try {
+        } => try_stmt::lower_try(
+            try_stmt::TryParts {
                 body,
                 handlers,
                 orelse,
                 finalbody,
-            }
-        }
-        // Part 3 of #382 (#542, PEP 654): `except*` lowers like `Try`
-        // above -- same body/handler/orelse/finalbody structure -- except
-        // an `as` binding always resolves to `ExceptionGroup`, never the
-        // named handler type (see `pycc_types::exception::
-        // check_try_star_stmt`'s identical rule at type-checking time).
-        //
-        // D-068 re-review of #780 (eighth round): this arm now routes every
-        // body/handler/orelse/finalbody position through
-        // `lower_scoped_body` and mirrors the `Try` arm's full
-        // pre_handlers_narrowed/apply_kill_prescan/restore_narrowing
-        // sequence around the handler loop -- a raw per-statement
-        // `.map(lower_stmt)` loop (this arm's prior shape) never calls
-        // `apply_post_if_narrowing`, so it silently dropped guard-clause
-        // narrowing propagation across `try`/`except*`/`else`/`finally`
-        // bodies, and never ran `apply_kill_prescan` to protect a handler
-        // from a narrowing the `try` body's own prefix already killed --
-        // the exact defect class `check_stmt_sequence_shared`'s doc
-        // comment (`crates/pycc_types/src/exception.rs`) describes for the
-        // type-checker side of this same construct.
+                star: false,
+            },
+            scopes,
+            classes,
+            current_class,
+        ),
+        // Part 3 of #382 (#542, PEP 654): `except*` lowers like `Try`,
+        // except an `as` binding always resolves to `ExceptionGroup`.
         HirStmt::TryStar {
-            body: hir_body,
+            body,
             handlers,
             orelse,
             finalbody,
-        } => {
-            let (body, _end_narrowed) =
-                super::lower_scoped_body(hir_body, scopes, classes, current_class, None);
-            let pre_handlers_narrowed = super::narrowing_snapshot(scopes);
-            let handlers = handlers
-                .iter()
-                .map(|h| {
-                    super::restore_narrowing(scopes, pre_handlers_narrowed.clone());
-                    super::apply_kill_prescan(scopes, hir_body);
-                    let exc_type_tag = h.exc_type.as_ref().map(|names| {
-                        let mut tags: Vec<u8> = names
-                            .iter()
-                            .flat_map(|name| handler_type_tags(name, classes))
-                            .collect();
-                        tags.sort_unstable();
-                        tags.dedup();
-                        tags
-                    });
-                    if let Some(name) = &h.name {
-                        bind(
-                            scopes,
-                            name.clone(),
-                            Ty::Instance(Box::new("ExceptionGroup".to_string())),
-                        );
-                        // D-068 re-review of #780 (rebase onto #542's
-                        // except* landing): mirrors the plain `Try` handler
-                        // arm's identical fix above -- `bind` only
-                        // overwrites the type scope, never the narrowing
-                        // sentinel, so a name narrowed before entering
-                        // `try` would keep emitting `MirExpr::OptionalUnwrap`
-                        // for reads inside this handler body even though
-                        // `name` now holds the caught `ExceptionGroup`, not
-                        // the narrowed `Optional`'s inner value.
-                        super::kill_narrowing(scopes, name);
-                    }
-                    let (handler_body, _end_narrowed) =
-                        super::lower_scoped_body(&h.body, scopes, classes, current_class, None);
-                    MirExceptHandler {
-                        exc_type_tag,
-                        binding_name: h.name.clone(),
-                        binding_ty: h
-                            .name
-                            .as_ref()
-                            .map(|_| Ty::Instance(Box::new("ExceptionGroup".to_string()))),
-                        body: handler_body,
-                    }
-                })
-                .collect();
-            super::restore_narrowing(scopes, pre_handlers_narrowed);
-            let (orelse, _end_narrowed) =
-                super::lower_scoped_body(orelse, scopes, classes, current_class, None);
-            let (finalbody, _end_narrowed) =
-                super::lower_scoped_body(finalbody, scopes, classes, current_class, None);
-            MirStmt::TryStar {
+        } => try_stmt::lower_try(
+            try_stmt::TryParts {
                 body,
                 handlers,
                 orelse,
                 finalbody,
-            }
-        }
+                star: true,
+            },
+            scopes,
+            classes,
+            current_class,
+        ),
         HirStmt::Raise { exc, cause } => lower_raise(exc, cause, scopes, classes, current_class),
         // #1244: `del name` is static-only. The type checker has already
         // demoted the name's binding state, and under D-124's leak-only

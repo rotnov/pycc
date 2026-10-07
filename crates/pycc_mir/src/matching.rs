@@ -74,7 +74,7 @@ fn lower_match_chain(
         // `Mapping`/`Class`/`Or`/`As`) rebinds `name` exactly like `Assign`/
         // `AnnAssign`/the `Try`-handler `as` binding do -- each of those
         // pairs its own `bind_variable`/`bind` call with `kill_narrowing`
-        // (see `stmt.rs`'s `Assign`/`AnnAssign`/`Try` arms and `expr.rs`'s
+        // (see `stmt.rs`'s `Assign`/`AnnAssign` arms, `stmt::try_stmt`, and `expr.rs`'s
         // `pre_bind_named_expr_targets`), but this call site never did.
         // Without this, a name narrowed by an enclosing `if name is not
         // None:` kept its stale `$narrowed:{name}` sentinel after a `match`

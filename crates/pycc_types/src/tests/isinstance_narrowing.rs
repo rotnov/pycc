@@ -187,7 +187,10 @@ fn after_a_try_the_name_is_narrowed_on_every_fall_through_path() {
         "def f(o: object, p: object) -> int:\n    if isinstance(o, int):\n        try:\n            \
          pass\n        finally:\n            o = p\n        return o + 1\n    return -1\n",
     );
-    // A negated guard in a `finally` narrows nothing after the `try`.
+    // A negated guard in a `finally` narrows nothing after the `try`: a guard
+    // narrows past itself only when its body returns (a `raise` does not
+    // count, `pycc_hir::definitely_terminates`), and a `return` in a
+    // `finally` is refused at lowering (`L0001`).
     still_object(
         "def f(o: object) -> int:\n    try:\n        pass\n    finally:\n        \
          if not isinstance(o, int):\n            raise ValueError()\n    return o + 1\n",

@@ -2178,8 +2178,9 @@ fn kill_narrowing(scopes: &mut [HashMap<String, Ty>], name: &str) {
 /// now no longer allows to be narrowed. Called from the same two site
 /// classes as the checker's: `stmt::lower_loop_body` (every
 /// `While`/`ForRange`/`ForList` lowering path, all funneled through that
-/// one shared helper) and `stmt::lower_stmt`'s `Try` arm (each handler
-/// body, prescanned against the *try body's* kill set before lowering).
+/// one shared helper) and `stmt::try_stmt::lower_try` (each handler body,
+/// prescanned against the *try body's* kill set before lowering, and the
+/// `finally` body against every path's).
 fn apply_kill_prescan(scopes: &mut [HashMap<String, Ty>], body: &[HirStmt]) {
     for name in pycc_hir::killed_names(body) {
         kill_narrowing(scopes, &name);
@@ -2331,7 +2332,8 @@ fn end_branch_narrowing(
 /// precedent, should not) depend on `pycc_types`.
 ///
 /// Every call site has at least one snapshot by construction (an `if`'s
-/// body/orelse end-state, or a loop's pre-body/post-body end-state), so
+/// body/orelse end-state, a loop's pre-body/post-body end-state, or a
+/// `try`'s non-empty list of fall-through end states), so
 /// `first` is taken separately from `rest` rather than a possibly-empty
 /// slice -- that keeps the join total without an unreachable empty-input
 /// branch.
@@ -2384,11 +2386,11 @@ fn join_narrowed(
 /// times") combines the returned end-states with [`join_narrowed`] and
 /// applies the result back onto `scopes` via a second, deliberate
 /// `restore_narrowing` call of its own -- see `stmt.rs`'s `If`/`While`/
-/// `ForRange`/`ForList` arms. A caller that does not need that (a `match`
-/// case, a `try` handler/`orelse`/`finally` body -- each already isolated
-/// from its siblings by this same wrapper, and not this session's fix
-/// scope) simply ignores the second return value, preserving the prior
-/// "restore to entry state" behavior exactly.
+/// `ForRange`/`ForList` arms, and `stmt::try_stmt`, which since #1476
+/// continues `else` from the body's end state and joins every
+/// fall-through path's end state after the `try`. A caller that does not
+/// need that (a `match` case) simply ignores the second return value,
+/// preserving the prior "restore to entry state" behavior exactly.
 fn lower_scoped_body(
     stmts: &[HirStmt],
     scopes: &mut Vec<HashMap<String, Ty>>,

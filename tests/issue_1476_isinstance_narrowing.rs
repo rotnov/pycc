@@ -188,6 +188,47 @@ def in_range(o: object) -> bool:
     if isinstance(o, int):
         return 0 < o < 10
     return False
+
+
+def guard_in_try(o: object) -> int:
+    try:
+        if not isinstance(o, int):
+            return 0
+    except Exception:
+        return 1
+    return o + 1
+
+
+def rebind_then_finally(o: object, p: object) -> str:
+    seen = "-"
+    if isinstance(o, int):
+        try:
+            o = p
+        finally:
+            seen = f"{o}"
+    return seen
+
+
+def rebind_then_else(o: object, p: object) -> str:
+    if isinstance(o, int):
+        try:
+            o = p
+        except Exception:
+            return "e"
+        else:
+            return f"{o}"
+    return "?"
+
+
+def handler_rebinds(o: object) -> int:
+    if not isinstance(o, int):
+        return 0
+    try:
+        pass
+    except Exception:
+        o = None
+        return -1
+    return o + 1
 "#;
 
 /// A second module compiling a class of the same name: its instances are
@@ -246,6 +287,8 @@ r = m.back(True)
 print(r, type(r).__name__, m.back(7), m.text(True), m.text(3))
 print(m.in_range(5), m.in_range(10), m.in_range("5"))
 print(m.as_token(other.Token("x", 4)), m.kind_of(other.Token("x", 4)))
+print(m.guard_in_try(4), m.guard_in_try("x"), m.rebind_then_finally(1, "zz"), m.rebind_then_finally("a", 2))
+print(m.rebind_then_else(1, "yy"), m.rebind_then_else("a", 1), m.handler_rebinds(4), m.handler_rebinds("q"))
 "#;
 
 /// CPython 3.14.7's own output for [`DRIVER`] over [`MODULE`].
@@ -264,6 +307,8 @@ list True S
 True bool 7 /True /3
 True False False
 0 none
+5 0 zz -
+yy ? 5 0
 ";
 
 fn build_module(dir: &Path) -> (PathBuf, PathBuf) {
