@@ -12,6 +12,7 @@
 fn lower_all_foreign(source: &str) -> pycc_hir::HirModule {
     let module = pycc_parser::parse(source).expect("test source must parse");
     let mut resolved = pycc_hir::ResolvedImports::default();
+    resolved.set_ext_module(true);
     for request in pycc_hir::project_import_requests(&module) {
         resolved.insert(request.span, pycc_hir::ResolvedImport::Foreign);
     }
@@ -128,6 +129,25 @@ fn an_identity_chain_over_an_object_is_refused_with_i0404() {
         &format!("{IMPORT}def f(a: int) -> bool:\n    return a is k is a\n"),
         "I0404",
         phrase,
+    );
+}
+
+/// An `isinstance` guard narrows an `object` name to a native type, but
+/// `type(o)` still asks CPython for the object's own class -- a subclass of
+/// `int` stays that subclass -- so a bare narrowed read is the object here,
+/// as an identity operand or a nested guard's is (#1476). Both the checker
+/// and the solver (an unannotated return) read it so; a derived native
+/// value keeps the `C0001`.
+#[test]
+fn type_of_a_narrowed_object_is_the_objects_own() {
+    admitted("def f(o: object) -> None:\n    if isinstance(o, int):\n        print(type(o))\n");
+    admitted(
+        "def _g(o: object):\n    if isinstance(o, int):\n        return type(o)\n    return o\n\n\nprint(_g(3))\n",
+    );
+    refused(
+        "def f(o: object) -> None:\n    if isinstance(o, int):\n        print(type(o + 1))\n",
+        "C0001",
+        "call to builtin `type` is valid Python but not implemented yet",
     );
 }
 

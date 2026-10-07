@@ -331,6 +331,29 @@ fn a_first_binding_from_a_narrowed_name_keeps_the_object() {
     );
 }
 
+/// Part 11 of #1371: `type(o)` under a guard asks CPython for the object's
+/// own class, so the narrowed read's unbox is dropped.
+#[test]
+fn type_of_a_narrowed_name_reads_the_object_itself() {
+    let body = function_body(vec![HirStmt::If {
+        test: isinstance("o", "int"),
+        body: vec![print(HirExpr::Call {
+            callee: "type".to_string(),
+            args: vec![name("o")],
+        })],
+        orelse: vec![],
+    }]);
+    let MirStmt::If { body, .. } = &body[0] else {
+        panic!("expected the lowered `if`");
+    };
+    assert_eq!(
+        body[0],
+        print_mir(MirExpr::ObjType {
+            base: Box::new(object_name("o")),
+        })
+    );
+}
+
 #[test]
 fn identity_and_a_nested_guard_test_the_object_itself() {
     let body = function_body(vec![HirStmt::If {

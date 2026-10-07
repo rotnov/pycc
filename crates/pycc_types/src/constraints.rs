@@ -1636,12 +1636,14 @@ pub(crate) fn collect_expr_constraints(
                 // object, as `hash`'s arm reads it as hashable: the final
                 // check pass re-types the call with the resolved argument
                 // and refuses a native one with the known-builtin `C0001`.
+                // A bare narrowed `object` read is the object itself (#1476).
                 if !env.shadowed_producers.contains(callee.as_str())
                     && let [Some(arg_term)] = arg_terms.as_slice()
                     && crate::foreign::type_call::is_object_type_call(
                         &env.std_module_aliases,
                         callee,
                         &[match arg_term {
+                            _ if object_narrow::is_bare_narrowed_read(env, &args[0]) => Ty::Object,
                             Ok(arg_ty) => arg_ty.clone(),
                             Err(_) => Ty::Object,
                         }],

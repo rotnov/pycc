@@ -19,6 +19,9 @@
 //! The solver arm also reads an argument whose term is still unresolved
 //! (an unannotated parameter) as an object; the final check pass re-types
 //! the call with the resolved argument, so a native one keeps its `C0001`.
+//! Both callers also pass a bare read of an `object` name an `isinstance`
+//! guard narrowed as the object itself (#1476), so `type(o)` reports the
+//! object's own class, an `int` subclass's included.
 
 use pycc_hir::Ty;
 

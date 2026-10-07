@@ -381,16 +381,21 @@ pub(super) fn lower_expr(
             // same shadow guard as `hash` above; a user `class type` was
             // already claimed by the instantiation lookup. `pycc_types`
             // admits only this one-object-argument shape
-            // (`foreign::type_call`).
+            // (`foreign::type_call`). A narrowed `object` read is the object
+            // itself (#1476): CPython reports its own class, a subclass of
+            // the guard's type included, so the native unbox is dropped.
             if callee == "type"
                 && let [base] = args.as_slice()
-                && matches!(base.ty(), Ty::Object)
+                && matches!(
+                    super::object_narrow::object_operand(base.clone()).ty(),
+                    Ty::Object
+                )
                 && !scopes
                     .iter()
                     .any(|scope| scope.contains_key(&format!("$fn:{callee}")))
             {
                 return MirExpr::ObjType {
-                    base: Box::new(base.clone()),
+                    base: Box::new(super::object_narrow::object_operand(base.clone())),
                 };
             }
             let ty = if callee == "print" {

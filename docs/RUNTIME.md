@@ -1836,9 +1836,12 @@ same terms as an attribute load (`crates/pycc_codegen/src/foreign_type.rs`).
 `PyObject_Type` cannot fail for a live object; the helper answers `NULL` only
 for a `NULL` operand, the defence in depth `pycc_ext_obj_getattr` and
 `pycc_ext_obj_len` keep, without setting a second exception, and that `NULL`
-routes to the operation's failure edge like any other producer's. The hosted
-test compares `type(o)` in a function body and a module body, identity
-between two classes, a nested `type(type(o))` and a class attribute read with
+routes to the operation's failure edge like any other producer's. Under an
+`isinstance` guard that narrowed an `object` name (#1476), `type(o)` passes the
+object itself rather than the narrowed unbox, so an `int` subclass instance
+reports its own class. The hosted test compares `type(o)` in a function body
+and a module body, identity between two classes, a nested `type(type(o))`, a
+class attribute read and `type(o)` on a narrowed `int` subclass instance with
 CPython 3.14.7 (`tests/issue_1371_object_type.rs`).
 
 Against a class compiled in the same module (Part 7 of #1371),

@@ -58,7 +58,7 @@ fn check_with(dir: &Path, body: &str) -> Output {
 }
 
 /// The host-only helper: an instance of a plain class, a subclass
-/// instance, an `int` and a class object itself.
+/// instance, an `int`, an `int` subclass instance and a class object itself.
 const HELPER: &str = "class K:\n    pass\n\
     \n\
     \n\
@@ -66,16 +66,22 @@ const HELPER: &str = "class K:\n    pass\n\
     \n\
     \n\
     k = K()\n\
+    class MyInt(int):\n    pass\n\
+    \n\
+    \n\
     k2 = K()\n\
     s = Sub()\n\
-    j = 3\n";
+    j = 3\n\
+    mi = MyInt(4)\n";
 
 const PRELUDE: &str = "import pycc_type_helper\n\nH = pycc_type_helper\n";
 
 /// The shapes Part 11 admits, in a function body and the module body:
 /// printing the class, binding it, identity between two classes, a
 /// subclass's distinct class, `type(type(o))`, an attribute of the class,
-/// and `type(o)` returned from an unannotated private helper.
+/// `type(o)` returned from an unannotated private helper, and `type(o)` on
+/// a name an `isinstance(o, int)` guard narrowed, which keeps an `int`
+/// subclass's own class (#1476).
 const SUCCESS: &str = "import pycc_type_helper\n\
     \n\
     H = pycc_type_helper\n\
@@ -96,7 +102,14 @@ const SUCCESS: &str = "import pycc_type_helper\n\
     print(_cls(1) is t, _cls(0))\n\
     \n\
     \n\
+    def _narrowed(o):\n    \
+    if isinstance(o, int):\n        \
+    print(type(o).__name__)\n\
+    \n\
+    \n\
     body()\n\
+    _narrowed(H.mi)\n\
+    _narrowed(H.j)\n\
     print(type(H.j))\n\
     u = type(H.k)\n\
     print(u.__name__)\n\
@@ -104,7 +117,7 @@ const SUCCESS: &str = "import pycc_type_helper\n\
 
 /// What `SUCCESS` prints under CPython.
 const SUCCESS_OUT: &str = "<class 'pycc_type_helper.K'>\nTrue\nTrue\nSub K\n<class 'type'>\n\
-    True <class 'int'>\n<class 'int'>\nK\n<class 'type'>\n";
+    True <class 'int'>\nMyInt\nint\n<class 'int'>\nK\n<class 'type'>\n";
 
 /// `SUCCESS` passes `pycc check`: every object in it comes from a foreign
 /// import.
