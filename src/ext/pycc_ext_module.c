@@ -2779,8 +2779,9 @@ int pycc_ext_obj_to_str(PyObject *o, void **out)
  * the guard without being a `PyLong`, has no native representation to
  * hand over, and is refused here with a `TypeError` where CPython would run
  * the guarded body on it -- a deliberate, loud deviation (#1476, pinned by
- * `tests/issue_1476_isinstance_narrowing.rs`). The thunk-seam unpackers themselves stay unchanged,
- * because their messages name an argument position this read has none of.
+ * `tests/issue_1476_isinstance_narrowing.rs`). The thunk-seam unpackers
+ * themselves stay unchanged, because their messages name an argument
+ * position this read has none of.
  *
  * `int` has no bigint path: a value outside pycc's inline-integer range
  * `[-2**62, 2**62-1]` raises `OverflowError` citing #1040, as at every other
@@ -3891,7 +3892,11 @@ static int pycc_ext_unpack_instance(PyObject *obj, const char *fn_name, Py_ssize
  * messages that name no argument position. The guard (`PyObject_IsInstance`
  * against the published carrier types) also holds for a carrier no
  * `tp_init` filled (`C.__new__(C)`), refused with a `TypeError` where
- * CPython would raise `AttributeError` at the first field read. A host-side
+ * CPython would raise `AttributeError` at the first field read; and for a
+ * non-carrier whose `__class__` property answers a published type (a mock,
+ * a proxy), refused with a `TypeError` where CPython would run the guarded
+ * body on it -- the same deliberate deviation as the scalar helpers'
+ * (#1476). A host-side
  * Python subclass cannot reach here: a carrier type is not an acceptable
  * base type, so the dealloc-slot test only rejects it defensively.
  *

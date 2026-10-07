@@ -330,6 +330,27 @@ fn isinstance_of_an_object_against_a_special_compiled_class_is_refused() {
     }
 }
 
+/// A compiled class spelled like a builtin class name shadows the builtin
+/// (#1476): the guard tests the compiled class, so its kind's refusal
+/// applies, and an admissible one is a `bool` test as for any other name.
+#[test]
+fn isinstance_against_a_compiled_class_spelled_like_a_builtin_tests_that_class() {
+    assert_admitted("class int:\n    pass\n\n\nb = isinstance(numpy.pi, int)\n");
+    for (source, phrase) in [
+        (
+            "class int(ValueError):\n    pass\n\n\nb = isinstance(numpy.pi, int)\n",
+            "against the pycc exception class `int`",
+        ),
+        (
+            "from enum import Enum\n\n\nclass str(Enum):\n    A = 1\n\n\n\
+             b = isinstance(numpy.pi, str)\n",
+            "against the pycc enum `str`",
+        ),
+    ] {
+        assert_refused(source, "I0404", phrase);
+    }
+}
+
 #[test]
 fn isinstance_with_an_object_first_argument_refuses_other_class_arguments() {
     assert_refused(
