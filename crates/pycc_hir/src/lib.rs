@@ -305,7 +305,10 @@ pub enum CmpOpKind {
     /// single comparison between two non-literal operands lowers too, and
     /// `pycc_types` admits it only between two CPython objects; every other
     /// pair keeps the `C0001` "comparison operator not supported yet"
-    /// rejection (see `crate::compare_chain::lower_cmp_op`).
+    /// rejection (see `crate::compare_chain::lower_cmp_op`). Since Part 11
+    /// of #1371 a chain link between two non-literal operands lowers the
+    /// same way, and `pycc_types` refuses the chain: the object chain's
+    /// `I0404` when an operand is an object, that `C0001` otherwise.
     Is,
     /// `is not`. Same scoping as `Is` above.
     IsNot,

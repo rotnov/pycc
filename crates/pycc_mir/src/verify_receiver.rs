@@ -395,6 +395,7 @@ impl Verifier<'_> {
             | MirExpr::AttrGet { base: inner, .. }
             | MirExpr::ObjAttrGet { base: inner, .. }
             | MirExpr::ObjLen { base: inner }
+            | MirExpr::ObjType { base: inner }
             | MirExpr::BufferLen { base: inner }
             | MirExpr::BufferAlloc { len: inner }
             | MirExpr::FrozenSetFrom {

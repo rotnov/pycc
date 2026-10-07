@@ -312,7 +312,7 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              object- or class-instance-argument method calls and direct calls with \
              positional or keyword arguments \
              (including a call of a subscript result), `len`, truth \
-             testing and `not`, a \
+             testing and `not`, `type`, a \
              scalar-, object- or class-instance-key subscript load, a slice load or deletion \
              with scalar or object bounds, a rich comparison with an object, scalar or \
              class-instance operand, an identity test against an object or `None`, \
@@ -615,6 +615,7 @@ pub(crate) mod keyword_call;
 pub(crate) mod list_display;
 pub(crate) mod slice;
 pub(crate) mod subscript_call;
+pub(crate) mod type_call;
 
 #[cfg(test)]
 mod binding_tests;
@@ -636,3 +637,5 @@ mod raise_tests;
 mod subscript_call_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod type_call_tests;

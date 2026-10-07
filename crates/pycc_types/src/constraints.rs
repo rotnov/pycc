@@ -1629,6 +1629,28 @@ pub(crate) fn collect_expr_constraints(
                 {
                     return Ok(Some(Ok(crate::hash::check_call_terms(&arg_terms)?)));
                 }
+                // Part 11 of #1371: the solver half of `crate::expr`'s
+                // `type(o)` arm, guarded like the `hash` arm above. An
+                // argument whose term is still unresolved (an unannotated
+                // parameter a caller passes an object to) is read as an
+                // object, as `hash`'s arm reads it as hashable: the final
+                // check pass re-types the call with the resolved argument
+                // and refuses a native one with the known-builtin `C0001`.
+                // A bare narrowed `object` read is the object itself (#1476).
+                if !env.shadowed_producers.contains(callee.as_str())
+                    && let [Some(arg_term)] = arg_terms.as_slice()
+                    && crate::foreign::type_call::is_object_type_call(
+                        &env.std_module_aliases,
+                        callee,
+                        &[match arg_term {
+                            _ if object_narrow::is_bare_narrowed_read(env, &args[0]) => Ty::Object,
+                            Ok(arg_ty) => arg_ty.clone(),
+                            Err(_) => Ty::Object,
+                        }],
+                    )
+                {
+                    return Ok(Some(Ok(Ty::Object)));
+                }
                 if is_known_callable_builtin(callee) {
                     return Err(unsupported_callable_builtin(callee));
                 }

@@ -139,6 +139,10 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // check and `foreign_slice::emit_slice` the `NULL` check.
         | MirExpr::ObjContains { .. }
         | MirExpr::ObjSlice { .. }
+        // Part 11 of #1371: `pycc_ext_obj_type` answers `NULL` for a `NULL`
+        // operand (its defence-in-depth guard), and
+        // `foreign_type::emit_type` owns that check.
+        | MirExpr::ObjType { .. }
         // Part 2d of #1371: boxing an element or allocating the CPython
         // `list` may fail, and `foreign_call::emit_list` owns the `NULL`
         // check.

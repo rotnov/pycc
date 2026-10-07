@@ -60,6 +60,8 @@ mod object_unpack;
 mod object_bool_op;
 // Part 10 of #1371: `not` on a CPython object.
 mod object_not;
+// Part 11 of #1371: `type(o)` on a CPython object.
+mod object_type;
 
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s

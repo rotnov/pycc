@@ -931,3 +931,6 @@ fn an_unpacks_walrus_binding_is_collected_from_its_base() {
     .collect_named_expr_bindings(&mut found);
     assert_eq!(found, vec![("o".to_string(), Ty::Object)]);
 }
+
+// Part 11 of #1371: `type(o)` on the bound object.
+mod object_type;

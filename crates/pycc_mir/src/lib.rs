@@ -610,6 +610,17 @@ pub enum MirExpr {
         item: Box<MirExpr>,
         container: Box<MirExpr>,
     },
+    /// `type(base)` where `base` is a CPython object (Part 11 of #1371):
+    /// CPython's `PyObject_Type`, a new reference to the operand's class,
+    /// answered by the shim's `pycc_ext_obj_type`. A node of its own rather
+    /// than a `Call { callee: "type" }`, which has no `$fn:type` signature
+    /// to lower against; [`MirExpr::ty`] answers [`Ty::Object`]. The helper
+    /// answers `NULL` only for a `NULL` operand (its defence-in-depth
+    /// guard), and `pycc_codegen::exception::expression_can_set_exception`
+    /// answers `true` for this node so that edge is honoured.
+    ObjType {
+        base: Box<MirExpr>,
+    },
     /// `base[start:stop:step]` where `base` is a CPython object (Part 2b of
     /// #1371): CPython's `PyObject_GetItem` with a `slice` built by
     /// `PySlice_New`, an absent bound passed as `None`. A node of its own
@@ -1130,7 +1141,10 @@ impl MirExpr {
             }
             MirExpr::ObjIsInstance { .. } | MirExpr::ObjContains { .. } => Ty::Bool,
             // Part 2b of #1371: CPython's own slice result, opaque.
-            MirExpr::ObjSlice { .. } | MirExpr::ObjList { .. } => Ty::Object,
+            // Part 11 of #1371: `type(o)` is CPython's own class object.
+            MirExpr::ObjSlice { .. } | MirExpr::ObjList { .. } | MirExpr::ObjType { .. } => {
+                Ty::Object
+            }
             // Hardcoded for `ObjLen`'s reason, not `ObjSubscript`'s: the
             // element type is known, it is just not recoverable from the
             // base. A `memoryview` parameter is one-dimensional and `"d"`-
@@ -1324,6 +1338,8 @@ impl MirExpr {
             MirExpr::AttrGet { base, .. }
             | MirExpr::ObjAttrGet { base, .. }
             | MirExpr::ObjLen { base }
+            // Part 11 of #1371: `type(o)`'s operand is its only child.
+            | MirExpr::ObjType { base }
             // The base is this node's only child too -- `len(b)` takes no
             // index -- so a walrus can hide only there.
             | MirExpr::BufferLen { base }

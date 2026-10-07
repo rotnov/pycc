@@ -377,6 +377,25 @@ pub(super) fn lower_expr(
                 let instance = instance.clone();
                 return lower_instance_hash(instance, &class, scopes, classes);
             }
+            // Part 11 of #1371: `type(o)` on a CPython object, under the
+            // same shadow guard as `hash` above; a user `class type` was
+            // already claimed by the instantiation lookup. `pycc_types`
+            // admits only this one-object-argument shape
+            // (`foreign::type_call`). A narrowed `object` read is the object
+            // itself (#1476): CPython reports its own class, a subclass of
+            // the guard's type included, so the native unbox is dropped.
+            if callee == "type"
+                && let [base] = args.as_slice()
+                && let base = super::object_narrow::object_operand(base.clone())
+                && base.ty() == Ty::Object
+                && !scopes
+                    .iter()
+                    .any(|scope| scope.contains_key(&format!("$fn:{callee}")))
+            {
+                return MirExpr::ObjType {
+                    base: Box::new(base),
+                };
+            }
             let ty = if callee == "print" {
                 Ty::None
             } else if callee == "math.sqrt" {

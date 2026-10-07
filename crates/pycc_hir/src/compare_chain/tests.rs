@@ -100,16 +100,38 @@ fn the_is_none_gate_is_applied_per_link() {
             ]
         )
     );
-    // `a is b` has no `None` operand, even though the chain mentions
-    // `None` elsewhere.
-    let error = lowering_error("def f(a: int, b: int) -> bool:\n    return a is b < None\n");
+    // Part 11 of #1371: `a is b` has no `None` operand, but neither side
+    // is a literal, so the link lowers and `pycc_types` decides (a CPython
+    // object operand gets the chain `I0404`, a native pair `C0001`).
+    assert_eq!(
+        returned("def f(a: int, b: int) -> bool:\n    return a is b < None\n"),
+        chain(
+            name("a"),
+            vec![
+                link(CmpOpKind::Is, name("b")),
+                link(CmpOpKind::Lt, HirExpr::NoneLiteral),
+            ]
+        )
+    );
+    assert_eq!(
+        returned("def f(a: int, b: int) -> bool:\n    return a < b is not a\n"),
+        chain(
+            name("a"),
+            vec![
+                link(CmpOpKind::Lt, name("b")),
+                link(CmpOpKind::IsNot, name("a"))
+            ]
+        )
+    );
+    // A literal operand of an identity link keeps the located rejection.
+    let error = lowering_error("def f(a: int, b: int) -> bool:\n    return a < b is 1\n");
     assert_eq!(error.code, "C0001");
     assert!(
         error
             .message
             .contains("comparison operator not supported yet: Is")
     );
-    let error = lowering_error("def f(a: int, b: int) -> bool:\n    return a < b is not a\n");
+    let error = lowering_error("def f(a: int, b: int) -> bool:\n    return 's' is not a < b\n");
     assert_eq!(error.code, "C0001");
     assert!(
         error

@@ -61,6 +61,7 @@ mod foreign_pack;
 mod foreign_raise;
 mod foreign_slice;
 mod foreign_store;
+mod foreign_type;
 mod foreign_unpack;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
@@ -117,9 +118,9 @@ use ext::{
     EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_OBJECT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL,
     EXT_OBJ_RAISE_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL, EXT_OBJ_SETATTR_SYMBOL,
     EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
-    EXT_OBJ_UNBOX_BOOL_SYMBOL, EXT_OBJ_UNBOX_FLOAT_SYMBOL, EXT_OBJ_UNBOX_INSTANCE_SYMBOL,
-    EXT_OBJ_UNBOX_INT_SYMBOL, EXT_OBJ_UNBOX_STR_SYMBOL, EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL,
-    ObjCollectionKind, entry_fn_name, is_module_entry_symbol,
+    EXT_OBJ_TYPE_SYMBOL, EXT_OBJ_UNBOX_BOOL_SYMBOL, EXT_OBJ_UNBOX_FLOAT_SYMBOL,
+    EXT_OBJ_UNBOX_INSTANCE_SYMBOL, EXT_OBJ_UNBOX_INT_SYMBOL, EXT_OBJ_UNBOX_STR_SYMBOL,
+    EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, ObjCollectionKind, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
 mod tests;
@@ -3845,6 +3846,11 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::ObjLen { base } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             foreign_len::emit_len(context, builder, module, rt, base_scalar)
+        }
+        // Part 11 of #1371: `type(o)`. `foreign_type` carries the contract.
+        MirExpr::ObjType { base } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            foreign_type::emit_type(context, builder, module, rt, base_scalar)
         }
         // Part 3 of #1026 (PR 3b of #1082): `o[k]`. The evaluation order
         // below is CPython's own -- base, then key -- and
