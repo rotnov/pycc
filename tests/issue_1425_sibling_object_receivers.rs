@@ -202,12 +202,10 @@ fn native_containers_beside_a_sibling_import_keep_their_diagnostics() {
     assert_eq!(sibling.status.code(), Some(1), "{}", rendered(&sibling));
     let message = |output: &Output| {
         let text = rendered(output);
-        let line = text
-            .lines()
+        text.lines()
             .find(|line| line.starts_with("error[C0001]"))
             .unwrap_or_else(|| panic!("no C0001 in {text}"))
-            .to_string();
-        line
+            .to_string()
     };
     assert!(
         message(&sibling).contains(".get()"),
