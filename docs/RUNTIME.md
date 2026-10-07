@@ -568,8 +568,17 @@ calls the shim's `pycc_ext_publish(name)` right after it stores each
 top-level function's `fnptr_` slot (`crates/pycc_codegen/src/ext_publish.rs`),
 which binds that function's `pycc_ext_methods[]` row with
 `PyCFunction_NewEx` + `PyModule_AddObjectRef`. A redefined name is
-published again at each definition, so the module always holds the
-definition that last ran. A class is published once the last compiled item
+published only at its last definition: every definition shares one
+`fnptr_` slot and one wrapper whose per-definition metadata (a
+`memoryview` parameter's `PyBUF_WRITABLE` request, carried defaults) is
+the last definition's, so publishing an earlier one would let the host run
+its body through a wrapper that does not describe it -- a read-only buffer
+handed to a body that writes it -- and a function object captured then
+would follow the slot to the later body. Until its last definition runs, a
+redefined name reads as absent, where CPython would show the earlier
+definition: a residual over-hiding, pinned by
+`a_name_redefined_after_the_cycle_is_hidden_until_its_last_definition` in
+`tests/issue_1199_ext_reentrant_init.rs`. A class is published once the last compiled item
 its MRO owns is bound -- for a class that owns a compiled item (a method
 it declares, or the `__init__` D-225 synthesizes for a base-less class that
 declares none) that is its class statement's position, because a class's

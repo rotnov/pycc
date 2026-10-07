@@ -238,6 +238,51 @@ import cb
     assert_eq!(out, "E 4 4\n4\n");
 }
 
+/// Not a CPython comparison: a name redefined after the cycle is hidden
+/// until its last definition runs, where CPython would show the first. All
+/// definitions share the last one's wrapper, which here accepts a
+/// read-only buffer the first definition's body would write into, so
+/// publishing the first definition early would hand it that buffer.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_name_redefined_after_the_cycle_is_hidden_until_its_last_definition() {
+    let fixture = Fixture::new(
+        "1199_redefined",
+        r#"def f(b: memoryview) -> float:
+    b[0] = 7.0
+    return 1.0
+
+
+import cb
+
+
+def f(b: memoryview) -> float:
+    return b[0]
+"#,
+        r#"import my
+
+print("has", hasattr(my, "f"))
+try:
+    my.f(memoryview(bytes(8)).cast("d"))
+except AttributeError as e:
+    print("AttributeError", str(e).replace(my.__file__, "<file>"))
+"#,
+    );
+    let compiled = fixture.run(
+        &fixture.ext,
+        "import array\nimport my\n\
+         frozen = bytes(8)\n\
+         print(my.f(memoryview(frozen).cast('d')), my.f(array.array('d', [6.0])))\n\
+         assert frozen == bytes(8)\n",
+    );
+    assert_ok(&compiled);
+    assert_eq!(
+        stdout_of(&compiled),
+        "has False\nAttributeError partially initialized module 'my' from '<file>' \
+         has no attribute 'f' (most likely due to a circular import)\n0.0 6.0\n"
+    );
+}
+
 /// The guard, not a CPython comparison: `make` builds a `D` before the
 /// class statement has run (#1490 tracks refusing that), and the instance
 /// escapes to the host. Calling `D.m` on it raises a catchable `NameError`

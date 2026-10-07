@@ -18,10 +18,19 @@
 //! generated tables and ignores one it does not know, so this side may
 //! name a superset of what the driver exports.
 //!
-//! * A module-level function `f` is published at each of its own
-//!   ordinals: a redefinition publishes again, and the shim's
-//!   `PyModule_AddObjectRef` replaces the earlier object, as CPython
-//!   rebinds the name. Only names [`is_ext_exportable_name`] admits, never a
+//! * A module-level function `f` is published at the ordinal of its
+//!   *last* definition only. Every definition of `f` shares one `fnptr_f`
+//!   slot and one generated wrapper, and the driver resolves that
+//!   wrapper's per-definition metadata (`param_writable`, carried
+//!   defaults) last-wins (`src/ext_build/exports.rs`). Publishing an
+//!   earlier definition would let a host call run that definition's body
+//!   through the last one's wrapper -- a `memoryview` the earlier body
+//!   writes accepted as a read-only buffer -- and a function object the
+//!   host captured then would follow the slot to the later body. A
+//!   redefined name is therefore absent from the module until its last
+//!   definition runs: a residual over-hiding where CPython would show
+//!   the earlier definition (`docs/RUNTIME.md`), never a call through
+//!   mismatched metadata. Only names [`is_ext_exportable_name`] admits, never a
 //!   dotted name, an inherited-method copy, or a PEP 562 hook
 //!   (`__getattr__`/`__dir__`), which the shim adds after the body.
 //! * A class `C` is published at the first ordinal at which every slot its
@@ -69,12 +78,20 @@ impl PublishPlan {
             .enumerate()
             .filter(|(ordinal, _)| !copy_slots.is_copy(*ordinal))
             .collect();
+        // Only the last definition of a name is published: see the module
+        // docs for why an earlier one must stay hidden.
+        let mut last: HashMap<&str, usize> = HashMap::new();
         for &(ordinal, name) in &functions {
             if !name.contains('.')
                 && is_ext_exportable_name(name)
                 && name != "__getattr__"
                 && name != "__dir__"
             {
+                last.insert(name, ordinal);
+            }
+        }
+        for &(ordinal, name) in &functions {
+            if last.get(name) == Some(&ordinal) {
                 plan.at.entry(ordinal).or_default().push(name.to_string());
             }
         }

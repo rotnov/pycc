@@ -64,19 +64,21 @@ fn names(plan: &PublishPlan, ordinal: usize) -> Vec<&str> {
     plan.names_at(ordinal).iter().map(String::as_str).collect()
 }
 
-/// A function is published at its own ordinal, and a redefinition is
-/// published again at its own: CPython rebinds the name.
+/// A function is published at its own ordinal, and a redefined one only at
+/// its last: every definition shares the last one's wrapper metadata, so an
+/// earlier one must never be callable from the host.
 #[test]
-fn a_function_is_published_at_each_of_its_definitions() {
+fn a_redefined_function_is_published_only_at_its_last_definition() {
     let p = plan(
-        vec![function("f"), function("g"), function("f")],
+        vec![function("f"), function("g"), function("f"), function("f")],
         Vec::new(),
         true,
     );
-    assert_eq!(names(&p, 0), ["f"]);
+    assert!(names(&p, 0).is_empty());
     assert_eq!(names(&p, 1), ["g"]);
-    assert_eq!(names(&p, 2), ["f"]);
-    assert!(names(&p, 3).is_empty());
+    assert!(names(&p, 2).is_empty());
+    assert_eq!(names(&p, 3), ["f"]);
+    assert!(names(&p, 4).is_empty());
 }
 
 /// Generated specializations, private-by-convention names the export
