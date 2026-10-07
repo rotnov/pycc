@@ -68,10 +68,12 @@
 //! The rules above apply unchanged, setters included. A class no instance
 //! is ever an instance *of* -- an abstract or `Protocol` class, a
 //! monomorphized `0gen_` specialization -- gets no table, and neither does
-//! one with a PEP 695 generic in its MRO: its specializations all cross as
-//! one carrier named after the template with per-specialization layouts
-//! (the reason `richcompare` refuses slots there), so it is silently
-//! partial in the sense above.
+//! one with a PEP 695 generic in its MRO that #1442 did not already cover:
+//! its specializations all cross as one carrier named after the template
+//! with per-specialization layouts (the reason `richcompare` refuses slots
+//! there), so it is silently partial in the sense above. A constructible
+//! published generic template keeps the table #1442 gave it, so #1448
+//! narrows nothing #1442 published.
 
 use std::collections::BTreeSet;
 
@@ -81,8 +83,8 @@ mod setter;
 
 use super::export_name::ExtReceiver;
 use super::{
-    ExtCarrierClass, ExtExport, carrier_class_names, inherited, instance_shape_admissible,
-    mro_class_defs, namespace_owner, wrapper_for,
+    ExtCarrierClass, ExtExport, carrier_class_names, class_constructible, class_publishable,
+    inherited, instance_shape_admissible, mro_class_defs, namespace_owner, wrapper_for,
 };
 
 /// One attribute descriptor a carrier type exposes.
@@ -178,10 +180,14 @@ pub(crate) fn collect_carrier_getsets(
         .filter_map(|carrier| {
             let class = carrier.class.as_str();
             let def = lookup(class).expect("a carrier class is a module class");
+            // A constructible published generic template kept the table
+            // #1442 built for it from its constructor, so only the classes
+            // #1448 newly covers are held to the generic exclusion.
             let generic = def
                 .mro
                 .iter()
-                .any(|ancestor| lookup(ancestor).is_some_and(|held| held.type_param.is_some()));
+                .any(|ancestor| lookup(ancestor).is_some_and(|held| held.type_param.is_some()))
+                && !(class_publishable(def, class) && class_constructible(module, class));
             if class.starts_with("0gen_") || !instance_shape_admissible(def, class) || generic {
                 return None;
             }

@@ -572,8 +572,8 @@ and discards it, passing the same null receiver every native
 `Class.method(...)` call site already passes. A `@property` getter or setter,
 and any method of a private class or of a user exception class, are **not**
 exported and are not `C0003`: they are excluded as representation, not as a
-capability gap. (Since #1442 a constructible class's getter is reachable as an
-attribute descriptor instead -- "Reading a field through the published type"
+capability gap. (Since #1442 a constructible class's getter, and since #1448
+any carrier class's, is reachable as an attribute descriptor instead -- "Reading a field through the published type"
 below -- and since #1458 its setter through that descriptor's store --
 "Storing a field through the published type" -- never as a callable method.) A public `@staticmethod` or `@classmethod` of a public class
 whose signature the boundary cannot carry *is* a `C0003`, where it was
@@ -762,7 +762,10 @@ a monomorphized `0gen_` specialization -- gets no table, and neither does one
 with a PEP 695 generic class in its MRO: its specializations all cross as one
 carrier named after the template with per-specialization slot layouts, so no
 one table describes them, and a field read through such a carrier still
-raises `AttributeError` (silently partial, as above).
+raises `AttributeError` (silently partial, as above). The one exception is
+the table #1442 already gave a constructible published generic template
+(`class G[T]` whose `__init__` the boundary carries), which it keeps, so
+#1448 removes no descriptor #1442 published.
 
 *Storing a field through the published type* (Part 1 of
 [#1443](https://github.com/rotnov/pycc/issues/1443), D-244's #1443
@@ -1929,7 +1932,8 @@ above. Four rules fix what that carrier is.
   (`tests/issue_1448_carrier_getsets.rs`). A carrier on the on-demand type
   -- a class with nothing to describe, or any class in an embedded
   executable -- and one of a class with a PEP 695 generic in its MRO
-  expose exactly their type's exported methods and the shared `__copy__`
+  (other than a constructible published template, which keeps #1442's
+  table) expose exactly their type's exported methods and the shared `__copy__`
   (#1455, "Copying an instance through `copy.copy`" above), so no attribute
   is readable and `hasattr(x, 'n')` is `False` where CPython says
   `True`. Published types are

@@ -73,6 +73,8 @@ fn assert_ok(run: &Output) {
 /// `int`, a `str` and a same-module-instance (`Leaf`) slot and `float` and
 /// `str` properties. `f`, `leaf_of` and `half_of` read a field off an `Any`
 /// operand, which compiled code does through `PyObject_GetAttr` (D-258).
+/// `G` is a constructible published PEP 695 template: it keeps the table
+/// #1442 built for it, which #1448's generic exclusion must not remove.
 /// `Bare` is the residual: its only field is a `List[int]`, which no
 /// descriptor carries (D-258's silent partiality), so it has nothing to
 /// describe, gets no hidden type and still crosses on the shim's
@@ -150,6 +152,14 @@ class _P:
         return self.s + '!'
 
 
+class G[T]:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def get(self) -> int:
+        return self.n
+
+
 class Bare:
     items: List[int]
 
@@ -223,6 +233,8 @@ for name, o in [("base", m.make_base(4)), ("hidden", m.make_hidden(5, 6)), ("pri
         o.s
     except AttributeError as e:
         print(name, "AttributeError", e)
+g = m.G(3)
+print("generic", g.n, hasattr(g, "n"), g.get())
 "#;
 
 const DRIVER_OUT: &str = "base Base 4 4 base 2.0 2.0 base!\n\
@@ -254,7 +266,8 @@ const DRIVER_OUT: &str = "base Base 4 4 base 2.0 2.0 base!\n\
     private True True\n\
     private AttributeError property 'half' of '_P' object has no setter\n\
     private False True\n\
-    private AttributeError '_P' object has no attribute 's'\n";
+    private AttributeError '_P' object has no attribute 's'\n\
+    generic 3 True 3\n";
 
 /// The documented differences from CPython, run against the extension only.
 const EXT_ONLY_DRIVER: &str = r#"import sys

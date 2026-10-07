@@ -199,7 +199,10 @@ fn a_class_with_nothing_to_describe_keeps_the_on_demand_type() {
 /// A class no instance's run-time class can be (abstract, `Protocol`) and a
 /// monomorphized `0gen_` specialization get no table, and neither does a
 /// class with a PEP 695 generic in its MRO, whose specializations all cross
-/// under the template's name with different layouts.
+/// under the template's name with different layouts -- except a
+/// constructible published template (`Gen`), which keeps the table #1442
+/// gave it; the private `_PGen` is constructible but unpublished, so it is
+/// held to the exclusion.
 #[test]
 fn abstract_protocol_specialized_and_pep_695_generic_classes_get_no_table() {
     let source = "class A:\n\
@@ -215,9 +218,15 @@ fn abstract_protocol_specialized_and_pep_695_generic_classes_get_no_table() {
         class Kept:\n\
         \x20   def __init__(self, n: int) -> None:\n\
         \x20       self.n = n\n\
+        class Gen[T]:\n\
+        \x20   def __init__(self, n: int) -> None:\n\
+        \x20       self.n = n\n\
+        class _PGen[T]:\n\
+        \x20   def __init__(self, n: int) -> None:\n\
+        \x20       self.n = n\n\
         def mk() -> int:\n\
         \x20   b = Box[int](3, 4)\n\
-        \x20   return b.n\n";
+        \x20   return b.n + Gen[str](1).n + _PGen[str](2).n\n";
     let mut module = lower("1448_skipped", source);
     for (class, def) in &mut module.class_defs {
         match class.as_str() {
@@ -239,6 +248,6 @@ fn abstract_protocol_specialized_and_pep_695_generic_classes_get_no_table() {
             .iter()
             .map(|table| table.class.as_str())
             .collect::<Vec<_>>(),
-        vec!["Kept"]
+        vec!["Kept", "Gen"]
     );
 }
