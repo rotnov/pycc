@@ -12,7 +12,10 @@
 //! policy and native-build gates see them. `lower_stmt` then turns the
 //! statement into [`HirStmt::ForeignImport`] through
 //! [`nested_foreign_import`], which finds its bindings by the statement's
-//! span.
+//! span. Before the item loop, `module::own_foreign::binds_foreign_import`
+//! replays the same call in source order, with the same import table, to
+//! decide whole-module object-receiver admission (#1482), so a change to
+//! the guard or `try` rules here applies to both.
 
 use super::ResolvedImport;
 use super::{FuturePosition, lower_import_stmt, statement_span};
@@ -67,6 +70,11 @@ impl BlockImports {
 /// away. An import it does not reach keeps `lower_stmt`'s block-body
 /// diagnostic, and so does a nested `from ... import` the driver did not
 /// answer foreign (#1383).
+///
+/// Called by `module::lower_top_level_item` for each module-level block,
+/// and by `module::own_foreign::binds_foreign_import` (#1482), which
+/// replays it ahead of the item loop with the import table as it stands
+/// at that statement.
 pub(crate) fn lower_block_imports(
     stmt: &Stmt,
     resolved: &ResolvedImports<'_>,

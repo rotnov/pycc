@@ -133,10 +133,14 @@ pub(crate) fn class_name_dispatch(
 /// lowers such a call to a receiver-dispatched call whose object receiver
 /// takes the foreign method call, and since #1425 so does a module that
 /// imports an object from a sibling project module, for its whole body.
-/// The arm is still reached by the ordering gap `docs/TYPE_SYSTEM.md`
-/// states once (#1482): a call lowered above the module's *own* first
-/// foreign import, such as a `def` calling `gc.garbage.append(1)` written
-/// above `import gc`.
+/// Since #1482 an own foreign import admits for the whole body too, so no
+/// source program reaches this arm: natively a `Ty::Object` comes only from
+/// an own foreign import, a sibling module's object or an `ext` module, all
+/// of which admit, and the one remaining candidate, `NotImplemented.x`, is
+/// `T0021` ("name `NotImplemented` is not defined") outside an `ext` module.
+/// The arm stays as a defensive refusal, so a lowering regression reports
+/// `I0404` rather than a misleading `T0033`; its test builds the container
+/// node directly (`foreign/container_names_tests.rs`).
 fn infer_container_receiver(
     env: &Environment,
     local_names: &[&str],
