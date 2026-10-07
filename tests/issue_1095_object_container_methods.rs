@@ -1,8 +1,10 @@
 //! Issue #1095: `append`, `pop`, `get` and `add` called on a CPython object
 //! are the foreign method call (`pycc_ext_obj_call`), whatever their arity,
-//! in any module that can hold an object -- an `ext` module (D-258) or one
-//! that has bound a foreign import (D-244 rule 3). A native `list`, `dict`
-//! or `set` receiver keeps its native container path.
+//! in any module that can hold an object -- an `ext` module (D-258), one
+//! that has bound a foreign import (D-244 rule 3), or (#1425) one whose
+//! direct project dependency can hold one
+//! (`tests/issue_1425_sibling_object_receivers.rs`). A native `list`,
+//! `dict` or `set` receiver keeps its native container path.
 //!
 //! The hosted tests build `MODULE` with `pycc build --ext`, drive it from the
 //! host CPython with a `list`, `dict` and `set` made there, and compare the

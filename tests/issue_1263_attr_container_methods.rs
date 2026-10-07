@@ -242,23 +242,21 @@ fn a_foreign_attribute_receiver_is_the_foreign_method_call() {
     }
 }
 
-/// A module that binds no foreign import of its own keeps the container
-/// reading, so an object it imports from a sibling project module reaches
-/// the container node: a container method on it, or on an attribute of it,
-/// is still the foreign-object refusal, not a container call (the
-/// cross-module case #1095 leaves out).
+/// Since #1425 a module inherits object-receiver admission from a project
+/// dependency that can hold a CPython object, so an object it imports from a
+/// sibling module takes the foreign method-call reading: a container method
+/// on it, or on an attribute of it, passes `pycc check` (both were `I0404`
+/// before #1425).
 #[test]
-fn an_imported_object_s_attribute_receiver_is_refused() {
-    for (category, source, needle) in [
+fn an_imported_object_s_container_methods_pass_check() {
+    for (category, source) in [
         (
             "e2e_1263_cross_module_attr",
             "from dep import g\n\ng.garbage.append(1)\n",
-            "error[I0404]: calling `.append()` on a CPython object's attribute is not supported yet",
         ),
         (
             "e2e_1263_cross_module_name",
             "from dep import g\n\ng.append(1)\n",
-            "error[I0404]: using `g`, which is bound to a CPython object",
         ),
     ] {
         let dir = ScratchDir::new(category).expect("scratch");
@@ -269,9 +267,7 @@ fn an_imported_object_s_attribute_receiver_is_refused() {
             .arg(dir.join("a.py"))
             .output()
             .expect("pycc should spawn");
-        assert!(!output.status.success(), "{source}");
-        let text = rendered(&output);
-        assert!(text.contains(needle), "{source}: {text}");
+        assert!(output.status.success(), "{source}: {}", rendered(&output));
     }
 }
 

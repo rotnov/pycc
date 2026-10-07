@@ -234,6 +234,15 @@ pub struct ResolvedImports<'a> {
     /// every loaded module, since a sibling this module never imports cannot
     /// hand it an instance of that class.
     container_method_names: BTreeSet<&'static str>,
+    /// Issue #1425: a direct dependency of the module (or a package
+    /// `__init__` on its path) can hold a CPython object. The driver ORs in
+    /// each direct dependency's [`crate::LoweredModule::object_receivers`],
+    /// the dependency's final state, which already includes what it
+    /// inherited, so the bit follows the transitive import closure. As for
+    /// `container_method_names`, it is not every loaded module: a sibling
+    /// this module never imports cannot hand it an object. `false` by
+    /// default, so `lower_all` and single-file output are unchanged.
+    object_receivers: bool,
     /// D-258 rule 1 (#1397): the module is compiled into an `ext` artifact
     /// (`pycc build --ext`), so `Any`, `object` and an object container
     /// annotation lower to the opaque `Ty::Object` instead of being refused.
@@ -266,6 +275,17 @@ impl<'a> ResolvedImports<'a> {
 
     pub(crate) fn container_method_names(&self) -> &BTreeSet<&'static str> {
         &self.container_method_names
+    }
+
+    /// Records whether one of this module's direct dependencies can hold a
+    /// CPython object (issue #1425). ORed in: once any dependency can, the
+    /// module admits object receivers for its whole body.
+    pub fn inherit_object_receivers(&mut self, admitted: bool) {
+        self.object_receivers |= admitted;
+    }
+
+    pub(crate) fn object_receivers(&self) -> bool {
+        self.object_receivers
     }
 
     /// Records the answer for the request at `span`.
