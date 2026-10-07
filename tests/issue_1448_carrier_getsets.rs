@@ -19,7 +19,9 @@
 //! attribute-read temporaries #1092 tracks, which #1442's and #1453's
 //! compiled reads keep too -- and a host store of a value the slot's type
 //! does not admit is refused with the parameter row's `TypeError` (Part 1
-//! of #1443).
+//! of #1443). It also pins the residual #1448 leaves: a class with nothing
+//! to describe still crosses on the on-demand type, whose field read raises
+//! `AttributeError`.
 //!
 //! The hosted test is `#[ignore]`d and contributes no line coverage; the
 //! Tier-1 `native-build-test` leg runs it with
@@ -71,7 +73,12 @@ fn assert_ok(run: &Output) {
 /// `int`, a `str` and a same-module-instance (`Leaf`) slot and `float` and
 /// `str` properties. `f`, `leaf_of` and `half_of` read a field off an `Any`
 /// operand, which compiled code does through `PyObject_GetAttr` (D-258).
-const MODULE: &str = r#"from typing import Any, Dict, Tuple
+/// `Bare` is the residual: its only field is a `List[int]`, which no
+/// descriptor carries (D-258's silent partiality), so it has nothing to
+/// describe, gets no hidden type and still crosses on the shim's
+/// descriptor-less on-demand type -- [`EXT_ONLY_DRIVER`] pins that its field
+/// read raises `AttributeError` where CPython returns the list.
+const MODULE: &str = r#"from typing import Any, Dict, List, Tuple
 
 
 class Leaf:
@@ -143,6 +150,13 @@ class _P:
         return self.s + '!'
 
 
+class Bare:
+    items: List[int]
+
+    def __init__(self, x: int) -> None:
+        self.items = [x]
+
+
 def make_base(x: int) -> Base:
     return Base({'k': 1}, x)
 
@@ -165,6 +179,14 @@ def leaf_of(o: Any) -> Any:
 
 def half_of(o: Any) -> Any:
     return o.half
+
+
+def make_bare(x: int) -> Bare:
+    return Bare(x)
+
+
+def items_of(o: Any) -> Any:
+    return o.items
 "#;
 
 /// The host script both sides run. Every line is compared with CPython.
@@ -252,6 +274,12 @@ for name, o in [("base", m.make_base(4)), ("hidden", m.make_hidden(5, 6)), ("pri
     except TypeError as e:
         print(name, "TypeError", e)
     print(name, o.x)
+bare = m.make_bare(3)
+print("bare", type(bare).__name__, hasattr(bare, "items"))
+try:
+    m.items_of(bare)
+except AttributeError as e:
+    print("bare AttributeError", e)
 "#;
 
 const EXT_ONLY_OUT: &str = "base 1000\n\
@@ -265,7 +293,9 @@ const EXT_ONLY_OUT: &str = "base 1000\n\
     private 1000\n\
     private 1000\n\
     private TypeError _P.x() argument 1: 'str' object cannot be interpreted as an integer\n\
-    private 7\n";
+    private 7\n\
+    bare Bare False\n\
+    bare AttributeError 'pycc_carrier_getset_mod.Bare' object has no attribute 'items'\n";
 
 fn run(script: &str, path_entry: &Path, cwd: &Path) -> Output {
     host_python()

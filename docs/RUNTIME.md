@@ -710,9 +710,10 @@ by D-154, gives `pycc_rt` no ownership model, so the leak a `native` program
 bounds at process exit becomes linear in the host's call count.
 
 *Reading a field through the published type*
-([#1442](https://github.com/rotnov/pycc/issues/1442)). A constructible class's
-type object also carries a `Py_tp_getset` table: one descriptor per
-instance-attribute slot and one per `@property` whose declared type is `int`,
+([#1442](https://github.com/rotnov/pycc/issues/1442)). A carrier type also
+carries a `Py_tp_getset` table -- a constructible class's type object since
+#1442, every carrier type whose class has a descriptor since #1448 (below):
+one descriptor per instance-attribute slot and one per `@property` whose declared type is `int`,
 `float`, `bool`, `str`, in an `--ext` module the object (D-258), or -- since
 [#1453](https://github.com/rotnov/pycc/issues/1453) -- a regular class
 compiled in the same module, the classes the admissibility table's
@@ -753,7 +754,9 @@ carrying it, registered in the shim's carrier-type cache at module exec as
 #1427's comparison slots are ("Comparing and hashing through the carrier
 type" below; a class with both gets one hidden type with both). The rules
 above apply to every such table, setters included. Only a class with nothing
-to describe still crosses on the shim's descriptor-less on-demand type. A
+to describe still crosses on the shim's descriptor-less on-demand type, so a
+field read through it raises `AttributeError` (pinned by
+`tests/issue_1448_carrier_getsets.rs`'s `Bare`). A
 class no instance's run-time class can be -- an abstract or `Protocol` class,
 a monomorphized `0gen_` specialization -- gets no table, and neither does one
 with a PEP 695 generic class in its MRO: its specializations all cross as one
