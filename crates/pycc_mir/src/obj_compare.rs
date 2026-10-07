@@ -114,8 +114,17 @@ pub(super) fn lower_object_isinstance(
 ) -> MirExpr {
     // A local or parameter spelled like a builtin or a compiled class
     // shadows it, as in CPython: it is then the evaluated class argument.
+    // A module function spelled like one shadows it as well; the checker
+    // refuses that guard (`check_object_isinstance`), so this only keeps
+    // the two layers naming the same class argument.
     let unshadowed = match class_arg {
-        HirExpr::Name(name) if !scopes.iter().any(|scope| scope.contains_key(name)) => Some(name),
+        HirExpr::Name(name)
+            if !scopes.iter().any(|scope| {
+                scope.contains_key(name) || scope.contains_key(&format!("$fn:{name}"))
+            }) =>
+        {
+            Some(name)
+        }
         _ => None,
     };
     // A module-level class spelled like a builtin (`class int: ...`)

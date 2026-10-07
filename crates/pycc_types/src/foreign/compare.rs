@@ -45,7 +45,8 @@
 //!   module-level `class int: ...` is the class tested, and refused when
 //!   its kind is (`pycc_mir`'s `obj_compare::lower_object_isinstance` and
 //!   `pycc_hir::isinstance_narrow_target` take the same order). A
-//!   tuple of classes has no lowering yet and is refused.
+//!   module function spelled like a class shadows it and is refused, as
+//!   is a tuple of classes, which has no lowering yet.
 
 use super::object_operation_unsupported;
 use crate::Environment;
@@ -204,6 +205,14 @@ pub(crate) fn check_object_isinstance(
     if let HirExpr::Name(name) = class_arg
         && !local_names.contains(&name.as_str())
     {
+        // A module function spelled like a class shadows it, as in
+        // CPython, where the guard then raises `TypeError` (argument 2 is
+        // not a class); pycc refuses it here.
+        if env.lookup_function(name).is_some() {
+            return Err(object_operation_unsupported(&format!(
+                "testing a CPython object with `isinstance` against the function `{name}`"
+            )));
+        }
         // A compiled class spelled like a builtin shadows the builtin, as
         // the guard's lowering does (see the module doc).
         if let Some(class_def) = env.lookup_class(name) {

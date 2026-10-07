@@ -47,17 +47,22 @@ fn guard(
     if signatures.contains_key("isinstance")
         || bound("isinstance")
         || bound(class)
+        || signatures.contains_key(class)
         || env.maybe_bindings.contains(name)
         || !matches!(env.bindings.get(name), Some(Ok(Ty::Object)))
     {
         return None;
     }
-    let inner = isinstance_narrow_target(class, |class| {
-        env.class_defs
-            .iter()
-            .find(|(name, _)| name == class)
-            .map(|(_, def)| def)
-    })?;
+    let inner = isinstance_narrow_target(
+        class,
+        |class| {
+            env.class_defs
+                .iter()
+                .find(|(name, _)| name == class)
+                .map(|(_, def)| def)
+        },
+        env.class_defs.iter().map(|(_, def)| def),
+    )?;
     Some((name.to_string(), inner, polarity))
 }
 

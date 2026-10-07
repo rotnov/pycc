@@ -202,6 +202,36 @@ fn after_a_try_the_name_is_narrowed_on_every_fall_through_path() {
     );
 }
 
+/// A guard on a class another compiled class derives from keeps the
+/// object (static dispatch would run the base's methods on a subclass
+/// instance); the leaf narrows.
+#[test]
+fn a_class_with_a_compiled_subclass_keeps_the_object() {
+    let classes = "class B:\n    def __init__(self) -> None:\n        self.x = 1\n\n\n\
+                   class D(B):\n    pass\n\n\n";
+    still_object(&format!(
+        "{classes}def f(o: object) -> int:\n    if isinstance(o, B):\n        \
+         return o + 1\n    return 0\n"
+    ));
+    checks(&format!(
+        "{classes}def f(o: object) -> int:\n    if isinstance(o, D):\n        \
+         return o.x + 1\n    return 0\n"
+    ));
+}
+
+/// A module function spelled like the class shadows it: the guard is
+/// refused rather than narrowed (CPython raises `TypeError` there).
+#[test]
+fn a_function_named_like_the_class_refuses_the_guard() {
+    refused(
+        "def int(x: str) -> str:\n    return x\n\n\n\
+         def f(o: object) -> int:\n    if isinstance(o, int):\n        return 1\n    \
+         return 0\n",
+        "I0404",
+        "against the function `int`",
+    );
+}
+
 #[test]
 fn a_shadowed_class_name_or_isinstance_does_not_narrow() {
     still_object(

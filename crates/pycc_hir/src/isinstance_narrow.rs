@@ -52,12 +52,20 @@ pub fn isinstance_test(test: &HirExpr) -> Option<(&str, &str, IsInstancePolarity
 /// `None` when this part does not narrow that class.
 ///
 /// `lookup_class` resolves a compiled class by name in the caller's class
-/// table. The caller has already established that `class` is not shadowed
-/// by a local, parameter or global binding.
+/// table, and `all_classes` enumerates that table. The caller has already
+/// established that `class` is not shadowed by a local, parameter, global
+/// or function binding.
 ///
 /// - A compiled class narrows to `Ty::Instance` when
-///   [`HirClassDef::admits_isinstance_narrowing`] holds, and otherwise keeps
-///   the operand `object`.
+///   [`HirClassDef::admits_isinstance_narrowing`] holds and no other
+///   compiled class has it on its MRO, and otherwise keeps the operand
+///   `object`. pycc dispatches statically on the assumption that a value
+///   typed as a class holds exactly that class (D-006, D-254); a guard on
+///   a base class also admits a subclass instance, which a narrowed read
+///   would run the base's methods, class attributes and compile-time
+///   `isinstance` folds on. Such an operand stays an object, whose method
+///   calls and attribute reads go through CPython's own lookup on the
+///   carrier.
 /// - Failing that, `int`, `float`, `bool` and `str` narrow to the same
 ///   scalar type.
 /// - Every other class -- `list`, `dict`, `tuple`, a foreign class, an
@@ -71,10 +79,13 @@ pub fn isinstance_test(test: &HirExpr) -> Option<(&str, &str, IsInstancePolarity
 pub fn isinstance_narrow_target<'a>(
     class: &str,
     lookup_class: impl FnOnce(&str) -> Option<&'a HirClassDef>,
+    all_classes: impl IntoIterator<Item = &'a HirClassDef>,
 ) -> Option<Ty> {
     if let Some(def) = lookup_class(class) {
-        return def
-            .admits_isinstance_narrowing()
+        let subclassed = all_classes
+            .into_iter()
+            .any(|other| other.name != def.name && other.mro.contains(&def.name));
+        return (def.admits_isinstance_narrowing() && !subclassed)
             .then(|| Ty::Instance(Box::new(def.name.clone())));
     }
     match class {

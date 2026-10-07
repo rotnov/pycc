@@ -16,6 +16,11 @@
 //! parameter comes back a plain `str`, and a native use of a subclass
 //! instance runs the base type's operation, not an override.
 //!
+//! Two guards do not narrow: one on a class that has a compiled subclass
+//! keeps the object, so an override runs through CPython's own lookup
+//! ([`a_class_with_a_compiled_subclass_keeps_the_object`]), and one whose
+//! class name a module function shadows is refused.
+//!
 //! The hosted tests are `#[ignore]`d for the reason every `ext` test is;
 //! the refusals need no interpreter and run everywhere.
 
@@ -504,6 +509,133 @@ fn a_tuple_of_classes_does_not_narrow() {
     );
     assert!(
         rendered.contains("error[T0021]: operator Add is not defined for `object` and `int`"),
+        "{rendered}"
+    );
+}
+
+/// A guard on `Base`, which `Derived` subclasses and overrides, keeps `o`
+/// an object: `o.who()` and `o.total()` go through CPython's own method
+/// lookup, so `Derived`'s overrides run. `Derived` and `Leaf` have no
+/// subclass and narrow as before.
+const SUBCLASSED: &str = r#"class Base:
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+    def who(self) -> str:
+        return "base"
+
+    def total(self) -> int:
+        return self.x
+
+
+class Derived(Base):
+    def __init__(self, x: int, y: int) -> None:
+        super().__init__(x)
+        self.y = y
+
+    def who(self) -> str:
+        return "derived"
+
+    def total(self) -> int:
+        return self.x + self.y
+
+
+class Leaf:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    def who(self) -> str:
+        return "leaf"
+
+
+def name(o: object) -> object:
+    if isinstance(o, Base):
+        return o.who()
+    return "other"
+
+
+def total(o: object) -> object:
+    if isinstance(o, Base):
+        return o.total()
+    return -1
+
+
+def field(o: object) -> object:
+    if isinstance(o, Derived):
+        return o.x + o.y
+    if isinstance(o, Base):
+        return o.x
+    return -1
+
+
+def leaf(o: object) -> str:
+    if isinstance(o, Leaf):
+        return o.who() + "!"
+    return "other"
+"#;
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_class_with_a_compiled_subclass_keeps_the_object() {
+    let dir = ScratchDir::new("ext_1476_subclassed").expect("scratch");
+    let src_dir = dir.join("src");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&src_dir).expect("create the source directory");
+    std::fs::create_dir_all(&out_dir).expect("create the output directory");
+    let build = pycc()
+        .arg("build")
+        .arg(write(&src_dir, "subclassed.py", SUBCLASSED))
+        .arg("-o")
+        .arg(out_dir.join("subclassed"))
+        .arg("--ext")
+        .output()
+        .expect("pycc should spawn");
+    assert_ok(&build);
+    let script = "import subclassed as m\n\
+                  for o in (m.Derived(1, 2), m.Base(1), 3):\n    \
+                  print(m.name(o), m.total(o), m.field(o))\n\
+                  print(m.leaf(m.Leaf(4)), m.leaf(m.Base(1)))\n";
+    for path in [&src_dir, &out_dir] {
+        let output = run(script, path, &dir);
+        assert_ok(&output);
+        assert_eq!(
+            stdout_of(&output),
+            "derived 3 3\nbase 1 1\nother -1 -1\nleaf! other\n",
+            "{path:?}"
+        );
+    }
+}
+
+/// The same guard does not license a native use: the read stays an object.
+#[test]
+fn a_native_use_under_a_subclassed_class_guard_is_refused() {
+    let rendered = refused(
+        "ext_1476_subclassed_native",
+        "class Base:\n    def who(self) -> str:\n        return \"base\"\n\n\n\
+         class Derived(Base):\n    def who(self) -> str:\n        return \"derived\"\n\n\n\
+         def name(o: object) -> str:\n    if isinstance(o, Base):\n        return o.who()\n    \
+         return \"other\"\n",
+    );
+    assert!(
+        rendered.contains("error[T0022]: return type mismatch: expected `str`, found `object`"),
+        "{rendered}"
+    );
+}
+
+/// A module function spelled like `int` shadows the builtin; CPython's
+/// guard raises `TypeError` (argument 2 is not a class), pycc refuses it.
+#[test]
+fn a_function_spelled_like_a_guarded_class_is_refused() {
+    let rendered = refused(
+        "ext_1476_function_shadow",
+        "def int(x: str) -> str:\n    return x\n\n\n\
+         def f(o: object) -> str:\n    if isinstance(o, int):\n        return \"yes\"\n    \
+         return \"no\"\n",
+    );
+    assert!(
+        rendered.contains(
+            "error[I0404]: testing a CPython object with `isinstance` against the function `int`"
+        ),
         "{rendered}"
     );
 }

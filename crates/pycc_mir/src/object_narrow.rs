@@ -51,11 +51,15 @@ pub(super) fn narrowing_target(
     }
     let (name, class, polarity) = pycc_hir::isinstance_test(test)?;
     let shadowed = |key: &str| scopes.iter().any(|scope| scope.contains_key(key));
-    if shadowed("$fn:isinstance") || shadowed(class) || scoped_ty(scopes, name) != Some(Ty::Object)
+    if shadowed("$fn:isinstance")
+        || shadowed(class)
+        || shadowed(&format!("$fn:{class}"))
+        || scoped_ty(scopes, name) != Some(Ty::Object)
     {
         return None;
     }
-    let inner = pycc_hir::isinstance_narrow_target(class, |class| classes.get(class))?;
+    let inner =
+        pycc_hir::isinstance_narrow_target(class, |class| classes.get(class), classes.values())?;
     let side = match polarity {
         IsInstancePolarity::Positive => NarrowSide::Body,
         IsInstancePolarity::Negated => NarrowSide::Orelse,

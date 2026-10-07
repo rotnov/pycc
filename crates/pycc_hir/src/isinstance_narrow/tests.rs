@@ -72,12 +72,16 @@ fn lower_ok(source: &str) -> HirModule {
 }
 
 fn target(hir: &HirModule, class: &str) -> Option<Ty> {
-    isinstance_narrow_target(class, |wanted| {
-        hir.class_defs
-            .iter()
-            .find(|(name, _)| name == wanted)
-            .map(|(_, def)| def)
-    })
+    isinstance_narrow_target(
+        class,
+        |wanted| {
+            hir.class_defs
+                .iter()
+                .find(|(name, _)| name == wanted)
+                .map(|(_, def)| def)
+        },
+        hir.class_defs.iter().map(|(_, def)| def),
+    )
 }
 
 #[test]
@@ -124,6 +128,29 @@ fn a_compiled_class_spelled_like_a_builtin_shadows_it() {
     );
     assert_eq!(target(&hir, "str"), None);
     assert_eq!(target(&hir, "float"), Some(Ty::Float));
+}
+
+/// A guard on a class that has a compiled subclass also admits the
+/// subclass's instances, which static dispatch would run as the base
+/// (D-254), so only a leaf class narrows; a `Generic[T]` subclass counts.
+#[test]
+fn a_class_with_a_compiled_subclass_does_not_narrow() {
+    let hir = lower_ok(
+        "from typing import Generic, TypeVar\nT = TypeVar(\"T\")\n\
+         class Base:\n    pass\n\
+         class Mid(Base):\n    pass\n\
+         class Leaf(Mid):\n    pass\n\
+         class Root:\n    pass\n\
+         class G(Root, Generic[T]):\n    pass\n",
+    );
+    for class in ["Base", "Mid", "Root"] {
+        assert_eq!(target(&hir, class), None, "{class}");
+    }
+    assert_eq!(
+        target(&hir, "Leaf"),
+        Some(Ty::Instance(Box::new("Leaf".into())))
+    );
+    assert_eq!(target(&hir, "G"), Some(Ty::Instance(Box::new("G".into()))));
 }
 
 #[test]

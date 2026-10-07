@@ -94,6 +94,31 @@ fn a_compiled_class_guard_narrows_to_its_instance() {
     );
 }
 
+/// A class another compiled class derives from keeps the operand an
+/// object; the leaf narrows.
+#[test]
+fn a_class_with_a_compiled_subclass_does_not_narrow() {
+    let scopes = scope(&[("o", Ty::Object)]);
+    let mut derived = plain_class("D");
+    derived.mro.push("B".to_string());
+    let classes = HashMap::from([
+        ("B".to_string(), plain_class("B")),
+        ("D".to_string(), derived),
+    ]);
+    assert_eq!(
+        narrowing_target(&isinstance("o", "B"), &scopes, &classes),
+        None
+    );
+    assert_eq!(
+        narrowing_target(&isinstance("o", "D"), &scopes, &classes),
+        Some((
+            "o".to_string(),
+            Ty::Instance(Box::new("D".to_string())),
+            NarrowSide::Body
+        ))
+    );
+}
+
 #[test]
 fn a_shadowed_builtin_a_shadowed_class_or_a_native_operand_does_not_narrow() {
     let classes = HashMap::new();
@@ -104,6 +129,9 @@ fn a_shadowed_builtin_a_shadowed_class_or_a_native_operand_does_not_narrow() {
     // A binding named like the class.
     let shadowed_class = scope(&[("o", Ty::Object), ("int", Ty::Int)]);
     assert_eq!(narrowing_target(&test, &shadowed_class, &classes), None);
+    // A module function named like the class.
+    let shadowed_class_fn = scope(&[("o", Ty::Object), ("$fn:int", Ty::Str)]);
+    assert_eq!(narrowing_target(&test, &shadowed_class_fn, &classes), None);
     // A native operand is folded, never narrowed.
     let native = scope(&[("o", Ty::Int)]);
     assert_eq!(narrowing_target(&test, &native, &classes), None);

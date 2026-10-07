@@ -351,6 +351,17 @@ fn isinstance_against_a_compiled_class_spelled_like_a_builtin_tests_that_class()
     }
 }
 
+/// A module function spelled like a builtin or compiled class name
+/// shadows it (#1476): CPython's guard raises `TypeError`, pycc refuses it.
+#[test]
+fn isinstance_against_a_function_spelled_like_a_class_is_refused() {
+    assert_refused(
+        "def int(x: str) -> str:\n    return x\n\n\nb = isinstance(numpy.pi, int)\n",
+        "I0404",
+        "against the function `int`",
+    );
+}
+
 #[test]
 fn isinstance_with_an_object_first_argument_refuses_other_class_arguments() {
     assert_refused(

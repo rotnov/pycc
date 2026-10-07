@@ -137,7 +137,8 @@ pub(crate) fn narrowing_target(
 /// #1476 (Part 3 of #1387): `isinstance(name, C)` / `not isinstance(name,
 /// C)` where `name` is declared `object`, `isinstance` is the builtin, and
 /// `C` is an unshadowed builtin scalar or admissible compiled class
-/// (`pycc_hir::isinstance_narrow_target`).
+/// (`pycc_hir::isinstance_narrow_target`). A module function spelled like
+/// `C` shadows it too (`check_object_isinstance` refuses the guard).
 fn isinstance_narrowing_target(
     env: &Environment,
     test: &pycc_hir::HirExpr,
@@ -146,10 +147,12 @@ fn isinstance_narrowing_target(
     if env.lookup_function("isinstance").is_some()
         || env.lookup_any(name) != Some(Ty::Object)
         || env.lookup_any(class).is_some()
+        || env.lookup_function(class).is_some()
     {
         return None;
     }
-    let inner = isinstance_narrow_target(class, |class| env.lookup_class(class))?;
+    let inner =
+        isinstance_narrow_target(class, |class| env.lookup_class(class), env.classes.values())?;
     Some(NarrowingTarget {
         name: name.to_string(),
         inner,
