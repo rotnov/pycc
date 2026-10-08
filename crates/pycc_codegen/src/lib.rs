@@ -331,14 +331,15 @@ enum Scalar<'ctx> {
     /// each later operation turned its own arm into a real one (the store
     /// in `emit_assign` is #1325's, for a module-level binding).
     ///
-    /// Ownership is leak-only, exactly as `foreign_import`'s module objects
-    /// already are: `pycc_ext_obj_getattr` returns a new reference and
-    /// nothing ever calls `Py_DECREF` on it. That is never a premature free
-    /// or a double free, but unlike a module object -- of which a program
-    /// holds a fixed handful -- an attribute load inside a loop leaks once
-    /// per iteration, so the leak is trip-count-linear. Releasing object
-    /// temporaries is deferred to its own follow-up; see `docs/RUNTIME.md`'s
-    /// "Foreign imports in the module body" ownership subsection.
+    /// Ownership: a producer such as `pycc_ext_obj_getattr` returns a new
+    /// reference. An unbound temporary is released by its consumer
+    /// (`object_release.rs`, #1092), and a module global owns the value
+    /// bound to it and releases it on rebind (`object_slot.rs`, Part 1 of
+    /// #1499). A value bound to a frame slot or an instance slot, passed to
+    /// a user function, or returned is still never released (the later
+    /// parts of #1499), so such a leak inside a loop is trip-count-linear;
+    /// see `docs/RUNTIME.md`'s "Foreign imports in the module body"
+    /// ownership subsection.
     Object(PointerValue<'ctx>),
     /// A pointer to the `PyccExtBufferView` -- `pycc_rt`'s `{ ptr, len }`
     /// pair -- that a `pycc build --ext` wrapper passed for a `memoryview`
@@ -8051,9 +8052,9 @@ fn emit_stmt<'ctx>(
                         // helper whose body is `return numpy.pi` infers a
                         // `Ty::Object` return type, which is the second
                         // producer shape Part 2's refusal migration admits.
-                        // No refcount traffic accompanies it -- Part 2's
-                        // object ownership is leak-only, see `Scalar`'s own
-                        // `Object` doc comment.
+                        // No refcount traffic accompanies it: a returned
+                        // object is still leak-only (Part 2 of #1499), see
+                        // `Scalar`'s own `Object` doc comment.
                         Scalar::Object(v) => v.into(),
                         // Part 2b of #1142 (#1164): pass-through by
                         // pointer, identical in kind to `List`'s and

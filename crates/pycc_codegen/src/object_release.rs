@@ -90,8 +90,9 @@
 //! through this stack. **Not yet released** (the later parts of #1499): a
 //! produced value bound to a function local or a compiled-instance
 //! attribute, passed to a user function, returned, or boxed; the per-trip
-//! item of a function-local `for` target and of a comprehension over an
-//! object, which the loop variable's frame slot holds without a reference
+//! item of a comprehension over an object (an object `for` is admitted only
+//! in a module body, whose target owns its item), which the loop variable's
+//! frame slot holds without a reference
 //! of its own -- a body can hand it to a user function that stores it, so
 //! releasing it at the trip's end needs the frame-slot model (Part 2,
 //! #1502); and the result of an `and`/`or` or a conditional expression

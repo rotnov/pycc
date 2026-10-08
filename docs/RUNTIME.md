@@ -1543,8 +1543,10 @@ module: the success path, the `from xml.dom import minidom` submodule
 fallback, the attribute miss on `os.path` (whose message names `posixpath` or
 `ntpath`, the module's `__name__`), a missing leaf, a non-package parent and a
 missing root; the missing-`__import__` branch and
-a non-`AttributeError` lookup failure are not exercised by a test. Like `pycc_ext_obj_import`, the
-returned reference is never released. Three narrow divergences from CPython
+a non-`AttributeError` lookup failure are not exercised by a test. Like `pycc_ext_obj_import`'s, the
+returned reference is owned by the module global that binds it ("A module
+global owns its reference" below): a re-import or rebind releases it, and the
+last value is never released. Three narrow divergences from CPython
 remain:
 
 - The import step runs once per *name* rather than once per statement. Each
@@ -1989,8 +1991,9 @@ any produced argument evaluated before it, on the way to the exception target
 temporary: since Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499) a
 module global owns it and releases it on rebind (below). A result bound to a
 function local or an instance slot, passed to a user function, returned, or
-boxed is still leaked, as is each item of a function-local `for` target or a
-comprehension; Part 3 below releases the iterator and the remaining unbound
+boxed is still leaked, as is each per-trip item of a comprehension (an object
+`for` is admitted only in a module body, so its target is always a module
+global); Part 3 below releases the iterator and the remaining unbound
 operands, and the later parts of #1499 own the rest.
 `tests/issue_1092_object_temp_release.rs` pins a zero `sys.getrefcount` delta
 for every consumer and every held-operand failure, foreign or native, at
@@ -2127,8 +2130,8 @@ straight through.
 Part 1 of [#1371](https://github.com/rotnov/pycc/issues/1371) adds
 `pycc_ext_obj_richcompare(l, r, op, owned)`, which wraps
 `PyObject_RichCompare` and returns its new reference unreleased, so `o == 1`
-or `o < p` leaks one reference per evaluation when bound or passed on, on the
-same terms as an attribute load (an unbound one is released, Part 1 of #1092
+or `o < p` leaks one reference per evaluation when passed on or bound outside a
+module global, on the same terms as an attribute load (an unbound one is released, Part 1 of #1092
 above). An `object` operand is borrowed; a scalar operand is packed by
 the same four packers (a pycc instance, since #1470, by
 `pycc_ext_obj_pack_instance`) and the `owned` bit mask tells the helper which slots it
@@ -2157,7 +2160,7 @@ the leaked set either. An out-of-range selector or a `NULL` operand raises
 [#1371](https://github.com/rotnov/pycc/issues/1371) adds
 `pycc_ext_obj_type(o)`, which wraps `PyObject_Type`: it borrows the operand
 and returns a new reference to its class, leaked once per evaluation when
-bound or passed on, on the same terms as an attribute load (an unbound one is
+passed on or bound outside a module global, on the same terms as an attribute load (an unbound one is
 released, Part 1 of #1092 above) (`crates/pycc_codegen/src/foreign_type.rs`).
 `PyObject_Type` cannot fail for a live object; the helper answers `NULL` only
 for a `NULL` operand, the defence in depth `pycc_ext_obj_getattr` and
@@ -2457,15 +2460,16 @@ operation's failure edge, so an iterable that is not one, a raising
 unhashable item each surface CPython's own exception. Under the
 [#1092](https://github.com/rotnov/pycc/issues/1092) rule Part 1 releases a
 produced *source* right after `iter()`, and Part 3 releases the iterator and
-an unbound result (above); each loop item and a bound result are new
+an unbound result (above); a result bound to a module global is owned by it
+(Part 1 of #1499), while each loop item and a result bound anywhere else are new
 references still leaked (#1499), and the loop variable reads the item
 borrowed. `tests/issue_1255_object_comprehension.rs` pins it against a mortal
-item at two trip counts `n`, with each result bound: a list comprehension of
+item at two trip counts `n`, with each result bound inside a function: a list comprehension of
 `n` items raises the item's count by `2n` (the leaked loop item plus the
 leaked list's own reference), a set comprehension of `n` identical items by
 `n + 1`, and the iterated list's count by `0`, since its only new referrer is
-the list iterator, which is released. When #1499 releases the items and the
-bound result, the deltas become CPython's.
+the list iterator, which is released. When a later part of #1499 releases the
+items and the function-local result, the deltas become CPython's.
 
 **A list display bound to an object slot is one more producer.** Part 2d of
 [#1371](https://github.com/rotnov/pycc/issues/1371) builds `x: object = [a,
@@ -2480,7 +2484,7 @@ no list and releases the rest; when `PyList_New` fails it releases them all;
 otherwise each reference moves into the list through `PyList_SetItem` (the
 limited API has no `PyList_SET_ITEM`). The list is a new reference, leaked on
 the same terms as every other producer, so each successful display that is
-bound or passed on leaks the list and the one reference it holds per element
+passed on or bound outside a module global leaks the list and the one reference it holds per element
 (an unbound display is released, Part 1 of #1092 above). An element that raises
 before packing (`[o, 1 // z]`) leaves nothing to release. The hosted test
 `tests/issue_1371_object_list_display.rs` pins `sys.getrefcount` of a mortal

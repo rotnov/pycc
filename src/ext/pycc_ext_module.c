@@ -1436,8 +1436,10 @@ done:
  * (`EXT_OBJ_IMPORT_FROM_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  * `module` and every `fromlist` entry are NUL-terminated UTF-8 constants
  * the artifact owns; `index` is always inside `[0, nfrom)` because the
- * compiler emits both. The returned reference is never released, on the
- * same leak-only rule as `pycc_ext_obj_import`.
+ * compiler emits both. The returned reference is owned by the module
+ * global that binds it, on the same rule as `pycc_ext_obj_import`: a
+ * re-import or rebind releases it (Part 1 of #1499), and the last value is
+ * never released.
  */
 PyObject *pycc_ext_obj_import_from(const char *module_name, const char *const *fromlist,
                                    long long nfrom, long long index, long long level)
@@ -1530,8 +1532,10 @@ done:
  * Not `static`: LLVM-generated code declares and calls it by this name
  * (`EXT_OBJ_IMPORT_DOTTED_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  * `name` is a NUL-terminated UTF-8 constant the artifact owns, always
- * holding at least one dot. The returned reference is never released, on
- * the same leak-only rule as `pycc_ext_obj_import`.
+ * holding at least one dot. The returned reference is owned by the module
+ * global that binds it, on the same rule as `pycc_ext_obj_import`: a
+ * re-import or rebind releases it (Part 1 of #1499), and the last value is
+ * never released.
  */
 PyObject *pycc_ext_obj_import_dotted(const char *name, long long bind_root)
 {
@@ -1785,8 +1789,9 @@ void pycc_ext_name_error(const unsigned char *name, long long len)
  * duration of this call: a module global or slot, or a produced temporary
  * the caller releases only after this call (Part 1 of #1092). The returned
  * reference is released by compiled code through `pycc_ext_obj_release`
- * when it is consumed unbound, and is otherwise leaked until a later part
- * of #1092; `docs/RUNTIME.md` records both.
+ * when it is consumed unbound, is owned by a module global that binds it
+ * (Part 1 of #1499), and is otherwise leaked until a later part of #1499;
+ * `docs/RUNTIME.md` records all three.
  *
  * Deliberately *not* translated into `pycc_rt`'s pending-exception state
  * here. The two failure protocols are kept apart; the caller's own contract
@@ -1948,7 +1953,8 @@ PyObject *pycc_ext_obj_pack_object(PyObject *value)
  * the generated code never has to. The returned reference is the only
  * thing that escapes into compiled code as an `object` value; compiled code
  * releases it through `pycc_ext_obj_release` when it is an unbound
- * temporary (Part 1 of #1092) and otherwise leaks it, on the rule
+ * temporary (Part 1 of #1092), a module global that binds it owns it
+ * (Part 1 of #1499), and otherwise compiled code leaks it, on the rule
  * `docs/RUNTIME.md` records for this boundary.
  *
  * A packer that failed stored NULL in its slot with a CPython exception
@@ -2146,7 +2152,8 @@ int pycc_ext_obj_truthy(PyObject *o)
  *
  * Returns a new reference to `o`'s class (`PyObject_Type`), owned like every
  * other producer's: released when consumed unbound (Part 1 of #1092),
- * leaked otherwise.
+ * owned by a module global that binds it (Part 1 of #1499), leaked
+ * otherwise.
  * `o` is borrowed. `PyObject_Type` cannot fail for a live object; a NULL
  * `o` is the defence in depth `pycc_ext_obj_getattr` and `pycc_ext_obj_len`
  * document: a NULL operand comes only from a producer whose own NULL check
@@ -2706,8 +2713,9 @@ long long pycc_ext_obj_iter_next(PyObject *it, PyObject **out)
  *
  * The result is a *new* reference -- the comprehension's value -- released
  * by its consumer when unbound and on the comprehension's failure edges
- * (Part 3 of #1092) and still leaked when bound (#1499), or `NULL` with
- * the exception set.
+ * (Part 3 of #1092), owned by a module global that binds it (Part 1 of
+ * #1499) and still leaked when bound anywhere else, or `NULL` with the
+ * exception set.
  */
 PyObject *pycc_ext_obj_new_collection(long long kind)
 {

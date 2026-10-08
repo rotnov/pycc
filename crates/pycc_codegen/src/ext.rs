@@ -469,8 +469,8 @@ pub const EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL: &str = "pycc_ext_obj_isinstance_co
 /// `TypeError` there, which is exactly the behaviour pycc wants to
 /// surface).
 ///
-/// The iterator is read once, in the loop preheader, and is never
-/// released: one leaked reference per `for` statement (#1092). The iterable
+/// The iterator is read once, in the loop preheader, and released when the
+/// loop ends or fails (Part 3 of #1092). The iterable
 /// it was taken from is released right after this call when it is a produced
 /// temporary (Part 1 of #1092, `object_release.rs`).
 ///
@@ -491,9 +491,10 @@ pub const EXT_OBJ_GET_ITER_SYMBOL: &str = "pycc_ext_obj_get_iter";
 /// what keeps exhaustion off the module-exec failure edge: a `for` loop
 /// that simply ends is not a failure.
 ///
-/// Each item written through `*out` is a new reference that is never
-/// released, which is what makes the boundary's leak **trip-count-linear**
-/// for a `for` loop (#1092, `docs/RUNTIME.md`).
+/// Each item written through `*out` is a new reference. A module-global
+/// `for` target owns it and releases it on the next trip (Part 1 of #1499);
+/// a comprehension's loop variable does not own it, so the comprehension
+/// leaks one item per trip (#1499, `docs/RUNTIME.md`).
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_ITER_NEXT_SYMBOL: &str = "pycc_ext_obj_iter_next";
@@ -502,8 +503,9 @@ pub const EXT_OBJ_ITER_NEXT_SYMBOL: &str = "pycc_ext_obj_iter_next";
 /// [`ObjCollectionKind`] code it returns a *new* reference to an empty
 /// CPython `list` (`0`) or `set` (`1`), or `NULL` with the CPython
 /// exception already set. A list or set comprehension over a CPython object
-/// builds its result in it; the reference is the comprehension's value and
-/// is deliberately never released (#1092).
+/// builds its result in it; the reference is the comprehension's value,
+/// released by its consumer when unbound (Part 3 of #1092), owned by a
+/// module global that binds it (Part 1 of #1499), and leaked otherwise.
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_NEW_COLLECTION_SYMBOL: &str = "pycc_ext_obj_new_collection";
