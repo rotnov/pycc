@@ -804,25 +804,35 @@ fn submodule_names(dir: &Path) -> Vec<String> {
     names
 }
 
-/// `entry` made absolute without resolving symlinks, the spelling the
-/// package name is read from (#1382): a package directory reached through a
-/// symlink `alias -> real` is imported as `alias`, so climbing the
-/// canonical path would name `real`. [`std::path::absolute`] already drops
-/// `.` components and keeps `..`, which is folded lexically here so the
-/// climb never meets a `..` directory name; `canonical` stands in only when
-/// the working directory cannot be read.
+/// `entry` made absolute without resolving the symlinks it spells, the
+/// spelling the package name is read from (#1382): a package directory
+/// reached through a symlink `alias -> real` is imported as `alias`, so
+/// climbing the canonical path would name `real`.
+///
+/// A `..` cannot be folded lexically, since after a symlink the OS resolves
+/// it against the link's target. So the prefix up to and including the last
+/// `..` is canonicalized, which gives it the OS's meaning, and the
+/// components after it are appended as spelled; they hold no `..`, and
+/// [`std::path::absolute`] already dropped every `.`. A path with no `..`
+/// is kept whole. `canonical` stands in when the working directory or that
+/// prefix cannot be resolved.
 fn spelled_path(entry: &Path, canonical: &Path) -> PathBuf {
     let absolute = std::path::absolute(entry).unwrap_or_else(|_| canonical.to_path_buf());
-    let mut folded = PathBuf::new();
-    for component in absolute.components() {
-        match component {
-            Component::ParentDir => {
-                folded.pop();
-            }
-            other => folded.push(other),
+    let components: Vec<Component> = absolute.components().collect();
+    let last_parent = components
+        .iter()
+        .rposition(|component| matches!(component, Component::ParentDir));
+    let Some(last_parent) = last_parent else {
+        return absolute;
+    };
+    let prefix: PathBuf = components[..=last_parent].iter().collect();
+    match prefix.canonicalize() {
+        Ok(mut resolved) => {
+            resolved.extend(&components[last_parent + 1..]);
+            resolved
         }
+        Err(_) => canonical.to_path_buf(),
     }
-    folded
 }
 
 /// The name of the top-level package the module file `entry` belongs to

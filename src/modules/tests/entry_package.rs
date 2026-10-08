@@ -342,17 +342,57 @@ fn a_symlinked_package_is_named_by_its_spelling() {
     );
 }
 
-/// A `..` in the entry's spelling is folded before the climb, so it never
-/// reads as a directory name.
+/// A `..` in the entry's spelling is resolved before the climb (the prefix
+/// through the last `..` is canonicalized; a `.` is already dropped by
+/// `std::path::absolute`), so it never reads as a directory name.
 #[test]
-fn the_entry_spelling_is_folded_before_the_climb() {
+fn the_entry_spelling_is_resolved_before_the_climb() {
     let scratch = ScratchDir::new("modules_tests").expect("scratch");
     package_tree(&scratch, "from top.other import y\n");
     let entry = scratch.join("top/pkg/../pkg/./m.py");
     let canonical = entry.canonicalize().expect("canonical");
     let spelled = spelled_path(&entry, &canonical);
-    assert_eq!(spelled, scratch.join("top/pkg/m.py"));
+    assert_eq!(spelled, canonical);
     assert_eq!(top_level_package(&spelled), Some("top".to_string()));
     let program = must_load_foreign(&entry);
     assert_eq!(file_names(&program), vec!["m.py".to_string()]);
+}
+
+/// A `..` after a symlink is resolved against the link's target, as the OS
+/// does: with `link -> real/top/pkg`, `link/../pkg/m.py` is
+/// `real/top/pkg/m.py`, so the own package is `top` and `from top.other
+/// import y` is foreign. A lexical fold would read `pkg/m.py` beside
+/// `link`, which is no package, and keep the import's `C0001`.
+#[cfg(unix)]
+#[test]
+fn a_parent_component_after_a_symlink_follows_the_link() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "real/top/__init__.py", "");
+    write(&scratch, "real/top/other.py", "y: int = 7\n");
+    write(&scratch, "real/top/pkg/__init__.py", "");
+    write(&scratch, "real/top/pkg/m.py", "from top.other import y\n");
+    std::os::unix::fs::symlink(scratch.join("real/top/pkg"), scratch.join("link"))
+        .expect("symlink");
+    let entry = scratch.join("link/../pkg/m.py");
+    let canonical = entry.canonicalize().expect("canonical");
+    assert_eq!(
+        top_level_package(&spelled_path(&entry, &canonical)),
+        Some("top".to_string())
+    );
+    let program = must_load_foreign(&entry);
+    assert_eq!(file_names(&program), vec!["m.py".to_string()]);
+    assert_eq!(
+        entry_foreign_from_imports(&program),
+        vec![("top.other".to_string(), "y".to_string(), 0)]
+    );
+}
+
+/// When the prefix through the last `..` does not resolve, the canonical
+/// entry path stands in for the spelling.
+#[test]
+fn an_unresolvable_parent_prefix_falls_back_to_the_canonical_path() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    let canonical = scratch.join("top/pkg/m.py");
+    let entry = scratch.join("missing/../m.py");
+    assert_eq!(spelled_path(&entry, &canonical), canonical);
 }
