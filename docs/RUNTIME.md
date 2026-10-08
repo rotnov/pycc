@@ -599,17 +599,17 @@ before the hooks, by a safety net that no ordinary program reaches; and a
 nested `Py_mod_exec` of the same artifact (the body's cycle drops the module
 from `sys.modules` and imports it again) shares every compiled static -- each
 class's type object, the carrier cache, every `fnptr_` slot and global -- so
-the inner exec replaces the outer one's class, which compiled code then
-constructs and tests against, where CPython gives each module its own class.
-When the cycle comes before the outer body's class statement, both modules
-bind that one type; when it comes after, the outer module keeps the earlier
-exec's class, whose instances compiled code no longer builds, so
-`isinstance(outer.make(), outer.C)` is `False` (as it was before #1199,
-which bound every class before the body). The exception classes are created
-once per process, so they were already shared. Pinned by
-`a_nested_exec_of_the_same_artifact_binds_the_latest_exec_type_in_both_modules`
+compiled code constructs and tests against the inner exec's class
+afterwards. Each module still binds its own exec's class, whichever side of
+the class statement the cycle runs on: `pycc_ext_publish` binds a class
+from a snapshot its exec took before the body, never from the replaced
+static. So `outer.make()` is not an instance of `outer.C` where CPython
+builds outer's own class, unchanged from before #1199, which bound every
+class before the body. The exception classes are created once per process,
+so they were already shared. Pinned by
+`a_nested_exec_before_the_class_statement_leaves_each_module_its_own_class`
 and
-`a_nested_exec_after_the_class_statement_leaves_the_outer_module_the_earlier_type`. Every
+`a_nested_exec_after_the_class_statement_leaves_each_module_its_own_class`. Every
 generated wrapper and `tp_init` now opens with a null guard on its
 `fnptr_` slot, so a call that still reaches an unbound slot raises a
 catchable `NameError: name '<item>' is not defined` instead of calling

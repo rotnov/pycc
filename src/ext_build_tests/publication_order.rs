@@ -84,13 +84,23 @@ fn the_shim_defines_the_publication_entry_point_codegen_calls() {
         "{publish}"
     );
     assert!(!publish.contains("pycc_ext_module_hooks"), "{publish}");
+    // A class is bound from this exec's snapshot, never from the
+    // process-wide type static a nested exec may have replaced.
+    let snapshot = publish
+        .find("classes = (PyObject *)PyThread_tss_get(pycc_ext_exec_classes_key);")
+        .expect("the exec's class snapshot is read");
+    assert!(key < snapshot, "{publish}");
+    assert!(
+        !publish.contains("PyModule_AddObjectRef(module, name, *class_slot)"),
+        "{publish}"
+    );
     // A function is bound the way `PyModule_AddFunctions` binds a row, and
     // both new references are released on every path.
     for needle in [
         "modname = PyModule_GetNameObject(module);",
         "func = PyCFunction_NewEx(row, module, modname);\n    Py_DECREF(modname);",
         "status = PyModule_AddObjectRef(module, row->ml_name, func);\n    Py_DECREF(func);",
-        "return PyModule_AddObjectRef(module, name, *class_slot);",
+        "return PyModule_AddObjectRef(module, name, type);",
     ] {
         assert!(
             publish.contains(needle),
@@ -111,7 +121,7 @@ fn the_shim_binds_unpublished_classes_after_the_body_and_before_the_hooks() {
     let shim = shim_c();
     let net = function_text(
         &shim,
-        "static int pycc_ext_publish_unbound_classes(PyObject *module)\n{",
+        "static int pycc_ext_publish_unbound_classes(PyObject *module, PyObject *classes)\n{",
     );
     assert!(
         net.contains(&format!(
@@ -123,16 +133,74 @@ fn the_shim_binds_unpublished_classes_after_the_body_and_before_the_hooks() {
         net.contains("PyDict_GetItemString(dict, *name) != NULL"),
         "{net}"
     );
+    assert!(
+        net.contains("PyObject *type = PyDict_GetItemString(classes, *name);"),
+        "{net}"
+    );
     let body = shim
         .find("exec_status = pycc_ext_module_exec();")
         .expect("the body runs");
     let net_call = shim
-        .find("    if (pycc_ext_publish_unbound_classes(module) != 0) {")
+        .find("    status = pycc_ext_publish_unbound_classes(module, classes);")
         .expect("the safety net runs");
     let hooks = shim
         .find("if (PyModule_AddFunctions(module, pycc_ext_module_hooks) != 0) {")
         .expect("the hooks are added");
     assert!(body < net_call && net_call < hooks);
+}
+
+/// A nested `Py_mod_exec` of the same artifact replaces every type static,
+/// so each exec snapshots its own classes before the body runs, installs
+/// the snapshot for exactly the body's duration with the outer one restored
+/// on both exits, and releases it on every path once the safety net is done.
+#[test]
+fn each_exec_publishes_classes_from_its_own_snapshot() {
+    let shim = shim_c();
+    let snap = function_text(&shim, "static PyObject *pycc_ext_snapshot_classes(void)\n{");
+    let lookup = format!("for (name = {PUBLISH_CLASS_NAMES}; *name != NULL; name++)");
+    for needle in [
+        "PyObject *classes = PyDict_New();",
+        lookup.as_str(),
+        "PyObject *type = *pycc_ext_publish_class_slot(*name);",
+        "if (type != NULL && PyDict_SetItemString(classes, *name, type) != 0) {\n            \
+         Py_DECREF(classes);\n            return NULL;\n        }",
+    ] {
+        assert!(snap.contains(needle), "missing {needle:?} in:\n{snap}");
+    }
+    let exec = function_text(
+        &shim,
+        "static int pycc_ext_exec_module(PyObject *module)\n{",
+    );
+    let registered = exec
+        .find("if (pycc_ext_register_method_types(module) != 0) {")
+        .expect("the types are made");
+    let taken = exec
+        .find("classes = pycc_ext_snapshot_classes();\n    if (classes == NULL) {\n        return -1;\n    }")
+        .expect("the snapshot is taken");
+    let installed = exec
+        .find(
+            "|| PyThread_tss_set(pycc_ext_exec_classes_key, classes) != 0) {\n        \
+             (void)PyThread_tss_set(pycc_ext_exec_target_key, saved_target);\n        \
+             Py_DECREF(classes);",
+        )
+        .expect("the snapshot is installed, and released if it cannot be");
+    let body = exec
+        .find("exec_status = pycc_ext_module_exec();")
+        .expect("the body runs");
+    let restored = exec
+        .find("(void)PyThread_tss_set(pycc_ext_exec_classes_key, saved_classes);")
+        .expect("the outer snapshot is restored");
+    assert!(
+        registered < taken && taken < installed && installed < body && body < restored,
+        "{exec}"
+    );
+    assert!(
+        exec.contains("saved_classes = PyThread_tss_get(pycc_ext_exec_classes_key);"),
+        "{exec}"
+    );
+    // Released if it cannot be installed, on the failing body's path, and
+    // after the safety net.
+    assert_eq!(exec.matches("Py_DECREF(classes);").count(), 3, "{exec}");
 }
 
 #[test]

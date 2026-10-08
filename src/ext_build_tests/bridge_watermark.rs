@@ -86,10 +86,12 @@ fn module_exec_releases_to_its_own_mark_instead_of_clearing_the_table() {
     assert!(shim[exec..].starts_with(
         "    exec_status = pycc_ext_module_exec();\n    \
          (void)PyThread_tss_set(pycc_ext_exec_target_key, saved_target);\n    \
-         if (exec_status != 0) {"
+         (void)PyThread_tss_set(pycc_ext_exec_classes_key, saved_classes);\n    \
+         if (exec_status != 0) {\n        \
+         Py_DECREF(classes);"
     ));
     assert_eq!(
-        shim.matches("        pycc_ext_bridge_release_to(mark);\n        return -1;\n    }\n    pycc_ext_bridge_release_to(mark);\n    if (pycc_ext_publish_unbound_classes(module) != 0) {").count(),
+        shim.matches("        pycc_ext_bridge_release_to(mark);\n        return -1;\n    }\n    pycc_ext_bridge_release_to(mark);\n    status = pycc_ext_publish_unbound_classes(module, classes);\n    Py_DECREF(classes);\n    if (status != 0) {").count(),
         1
     );
     // #1199's class safety net and #1467's PEP 562 hooks run after that

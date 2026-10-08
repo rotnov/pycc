@@ -272,6 +272,21 @@ static Py_tss_t *pycc_ext_bridge_key = NULL;
  */
 static Py_tss_t *pycc_ext_exec_target_key = NULL;
 
+/*
+ * #1199: this exec's own class snapshot, a dict from each published class
+ * name to the type object `pycc_ext_register_method_types` made for this
+ * `Py_mod_exec`, held for exactly the duration of the body and saved and
+ * restored around it like `pycc_ext_exec_target_key`. The type statics are
+ * one per process, so a nested exec of this artifact mid-body (the body's
+ * cycle drops the module from `sys.modules` and imports it again) replaces
+ * them; `pycc_ext_publish` reads the snapshot instead, so each module binds
+ * its own exec's class, as every module did before #1199 bound them all
+ * ahead of the body. The snapshot's references also keep an outer exec's
+ * type alive after the inner exec drops the static's reference to it.
+ * Created once per process, on the same never-replaced rule.
+ */
+static Py_tss_t *pycc_ext_exec_classes_key = NULL;
+
 /* This thread's table, or NULL when it has never bridged. */
 static pycc_ext_bridge_table *pycc_ext_bridge_current(void)
 {
@@ -4430,14 +4445,12 @@ static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const 
  * every definition shares that one's wrapper
  * (`crates/pycc_codegen/src/ext_publish.rs`); a second publish of one name
  * would still just replace the binding.
- * A class is bound from its `pycc_ext_type_object_<Class>` static, which
- * `pycc_ext_register_method_types` filled before the body, read afresh here.
- * The static is one per process, like the carrier cache and every `fnptr_`
- * slot: a nested `Py_mod_exec` of this artifact mid-body replaces it, and
- * an outer module that has not bound the class yet then binds the inner
- * exec's type -- the one compiled code constructs and tests against --
- * while one that already bound it keeps the earlier type; CPython gives
- * each module its own class (`docs/RUNTIME.md`'s #1199 residuals).
+ * A class is bound from this exec's snapshot (`pycc_ext_exec_classes_key`)
+ * of the `pycc_ext_type_object_<Class>` static that
+ * `pycc_ext_register_method_types` filled before the body, not from the
+ * static itself: the static is one per process, and a nested `Py_mod_exec`
+ * of this artifact mid-body replaces it, so reading it here would bind the
+ * inner exec's class on the outer module.
  *
  * Returns 0, or -1 with an exception set. Not `static`: LLVM-generated code
  * declares and calls it by this name (`EXT_PUBLISH_SYMBOL` in
@@ -4449,6 +4462,8 @@ int pycc_ext_publish(const char *name)
     PyMethodDef *def;
     PyObject **class_slot = NULL;
     PyObject *module;
+    PyObject *classes;
+    PyObject *type;
     PyObject *modname;
     PyObject *func;
     int status;
@@ -4473,11 +4488,13 @@ int pycc_ext_publish(const char *name)
         return -1;
     }
     if (row == NULL) {
-        if (*class_slot == NULL) {
+        classes = (PyObject *)PyThread_tss_get(pycc_ext_exec_classes_key);
+        type = classes == NULL ? NULL : PyDict_GetItemString(classes, name);
+        if (type == NULL) {
             PyErr_Format(PyExc_SystemError, "pycc: class '%s' has no type object", name);
             return -1;
         }
-        return PyModule_AddObjectRef(module, name, *class_slot);
+        return PyModule_AddObjectRef(module, name, type);
     }
     modname = PyModule_GetNameObject(module);
     if (modname == NULL) {
@@ -4505,23 +4522,49 @@ int pycc_ext_publish(const char *name)
  * becomes late visibility rather than a class the host can never reach.
  * A name already in the module dict is left alone: either its publication
  * ran, or the body rebound the name itself. Runs before the PEP 562 hooks
- * are added, so the dict lookup sees the module's own bindings only.
+ * are added, so the dict lookup sees the module's own bindings only. Binds
+ * from `classes`, this exec's snapshot, for the reason `pycc_ext_publish`
+ * does.
  */
-static int pycc_ext_publish_unbound_classes(PyObject *module)
+static int pycc_ext_publish_unbound_classes(PyObject *module, PyObject *classes)
 {
     PyObject *dict = PyModule_GetDict(module);
     const char *const *name;
 
     for (name = pycc_ext_publish_class_names; *name != NULL; name++) {
-        PyObject **class_slot = pycc_ext_publish_class_slot(*name);
-        if (*class_slot == NULL || PyDict_GetItemString(dict, *name) != NULL) {
+        PyObject *type = PyDict_GetItemString(classes, *name);
+        if (type == NULL || PyDict_GetItemString(dict, *name) != NULL) {
             continue;
         }
-        if (PyModule_AddObjectRef(module, *name, *class_slot) != 0) {
+        if (PyModule_AddObjectRef(module, *name, type) != 0) {
             return -1;
         }
     }
     return 0;
+}
+
+/*
+ * #1199: the snapshot `pycc_ext_exec_classes_key` holds for one exec -- a
+ * new dict holding a reference to every published class's type object as
+ * `pycc_ext_register_method_types` just made it. NULL with an exception
+ * set on failure.
+ */
+static PyObject *pycc_ext_snapshot_classes(void)
+{
+    PyObject *classes = PyDict_New();
+    const char *const *name;
+
+    if (classes == NULL) {
+        return NULL;
+    }
+    for (name = pycc_ext_publish_class_names; *name != NULL; name++) {
+        PyObject *type = *pycc_ext_publish_class_slot(*name);
+        if (type != NULL && PyDict_SetItemString(classes, *name, type) != 0) {
+            Py_DECREF(classes);
+            return NULL;
+        }
+    }
+    return classes;
 }
 
 /*
@@ -4541,6 +4584,9 @@ static int pycc_ext_exec_module(PyObject *module)
 {
     Py_ssize_t mark;
     void *saved_target;
+    void *saved_classes;
+    PyObject *classes;
+    int status;
     long long exec_status;
 
     /*
@@ -4623,6 +4669,20 @@ static int pycc_ext_exec_module(PyObject *module)
         }
         pycc_ext_exec_target_key = key;
     }
+    /* #1199: the exec-classes key, on the same create-once rule. */
+    if (pycc_ext_exec_classes_key == NULL) {
+        Py_tss_t *key = PyThread_tss_alloc();
+        if (key == NULL) {
+            PyErr_NoMemory();
+            return -1;
+        }
+        if (PyThread_tss_create(key) != 0) {
+            PyThread_tss_free(key);
+            PyErr_SetString(PyExc_RuntimeError, "pycc: cannot create the exec-classes key");
+            return -1;
+        }
+        pycc_ext_exec_classes_key = key;
+    }
     /*
      * The watermark, not a whole-table clear: when this exec runs beneath a
      * live wrapper on the same thread (a handler whose foreign helper
@@ -4637,14 +4697,30 @@ static int pycc_ext_exec_module(PyObject *module)
      * this thread (see `pycc_ext_exec_target_key`) hands the outer one's
      * target back.
      */
+    /*
+     * #1199: this exec's classes, taken now, before the body can run a
+     * nested exec that replaces the type statics; restored on both exits
+     * like the target, and released only after the safety net below has
+     * read them.
+     */
+    classes = pycc_ext_snapshot_classes();
+    if (classes == NULL) {
+        return -1;
+    }
     saved_target = PyThread_tss_get(pycc_ext_exec_target_key);
-    if (PyThread_tss_set(pycc_ext_exec_target_key, module) != 0) {
+    saved_classes = PyThread_tss_get(pycc_ext_exec_classes_key);
+    if (PyThread_tss_set(pycc_ext_exec_target_key, module) != 0
+        || PyThread_tss_set(pycc_ext_exec_classes_key, classes) != 0) {
+        (void)PyThread_tss_set(pycc_ext_exec_target_key, saved_target);
+        Py_DECREF(classes);
         PyErr_SetString(PyExc_RuntimeError, "pycc: cannot record the executing module");
         return -1;
     }
     exec_status = pycc_ext_module_exec();
     (void)PyThread_tss_set(pycc_ext_exec_target_key, saved_target);
+    (void)PyThread_tss_set(pycc_ext_exec_classes_key, saved_classes);
     if (exec_status != 0) {
+        Py_DECREF(classes);
         /*
          * The generic `ImportError` is a last resort, not the default. A
          * failing body reports through one of two channels: `pycc_rt`'s
@@ -4672,7 +4748,9 @@ static int pycc_ext_exec_module(PyObject *module)
         return -1;
     }
     pycc_ext_bridge_release_to(mark);
-    if (pycc_ext_publish_unbound_classes(module) != 0) {
+    status = pycc_ext_publish_unbound_classes(module, classes);
+    Py_DECREF(classes);
+    if (status != 0) {
         return -1;
     }
     /*

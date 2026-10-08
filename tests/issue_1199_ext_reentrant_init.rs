@@ -24,12 +24,11 @@
 //! [`a_name_redefined_after_the_cycle_is_hidden_until_its_last_definition`]:
 //! a redefined function stays absent until its last definition runs,
 //! where CPython would show the earlier one.
-//! [`a_nested_exec_of_the_same_artifact_binds_the_latest_exec_type_in_both_modules`]:
-//! a nested exec of the same artifact shares every compiled static, so
-//! both modules bind one class where CPython gives each its own;
-//! [`a_nested_exec_after_the_class_statement_leaves_the_outer_module_the_earlier_type`]:
-//! after the outer class statement, the outer module keeps a class
-//! compiled code no longer builds.
+//! [`a_nested_exec_before_the_class_statement_leaves_each_module_its_own_class`]
+//! and
+//! [`a_nested_exec_after_the_class_statement_leaves_each_module_its_own_class`]:
+//! a nested exec of the same artifact leaves the outer module a class
+//! compiled code no longer builds, as before #1199.
 //!
 //! Every test here is `#[ignore]`d for the reason every `ext` and embedded
 //! test is: it builds against and runs an installed CPython with
@@ -293,18 +292,50 @@ except AttributeError as e:
     );
 }
 
+/// Drops `my` from `sys.modules` while `my`'s body is at `import cb`, and
+/// imports it again: a second `Py_mod_exec` of the same artifact.
+const NESTED_EXEC_HELPER: &str = r#"import sys
+
+outer = sys.modules["my"]
+del sys.modules["my"]
+import my as inner
+"#;
+
 /// A nested `Py_mod_exec` of the same artifact, not a CPython comparison
-/// for one line: the helper drops `my` from `sys.modules` while the outer
-/// body is at `import cb`, before its class statement, and imports it
-/// again, so the inner exec registers `C` afresh. Every compiled static --
-/// the class's type object, the carrier cache, each `fnptr_` slot -- is
-/// one per process, and the inner exec replaces the outer one's, so the
-/// outer module binds the same type the inner one did and compiled code
-/// constructs and tests against. CPython gives each module its own class.
+/// for one value. Every compiled static -- each class's type object, the
+/// carrier cache, every `fnptr_` slot -- is one per process, so after the
+/// inner exec compiled code constructs and recognises that exec's `C`.
+/// Each module binds its own exec's class, as before #1199, so
+/// `outer.make()` is not an instance of `outer.C`; CPython builds outer's
+/// own `C` there.
+fn assert_each_module_binds_its_own_exec_class(label: &str, module: &str) {
+    let fixture = Fixture::new(label, module, NESTED_EXEC_HELPER);
+    let driver = "import my\nimport cb\n\
+                  outer, inner = cb.outer, cb.inner\n\
+                  print(outer is inner, my is inner, outer.C is inner.C)\n\
+                  print(isinstance(outer.make(), outer.C), isinstance(outer.make(), inner.C), \
+                  isinstance(inner.make(), inner.C), outer.C().get(), outer.make().get())\n";
+    let compiled = fixture.run(&fixture.ext, driver);
+    let oracle = fixture.run(&fixture.src, driver);
+    assert_ok(&compiled);
+    assert_ok(&oracle);
+    assert_eq!(
+        stdout_of(&compiled),
+        "False True False\nFalse True True 5 5\n"
+    );
+    assert_eq!(
+        stdout_of(&oracle),
+        "False True False\nTrue False True 5 5\n"
+    );
+}
+
+/// The cycle runs before the outer class statement, so the outer module
+/// binds `C` after the inner exec replaced the type static: it binds the
+/// type its own exec snapshotted, not the replacement.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn a_nested_exec_of_the_same_artifact_binds_the_latest_exec_type_in_both_modules() {
-    let fixture = Fixture::new(
+fn a_nested_exec_before_the_class_statement_leaves_each_module_its_own_class() {
+    assert_each_module_binds_its_own_exec_class(
         "1199_nested_exec",
         r#"def make() -> object:
     return C()
@@ -320,34 +351,15 @@ class C:
     def get(self) -> int:
         return self.v
 "#,
-        r#"import sys
-
-outer = sys.modules["my"]
-del sys.modules["my"]
-import my as inner
-"#,
     );
-    let driver = "import my\nimport cb\n\
-                  outer, inner = cb.outer, cb.inner\n\
-                  print(outer is inner, my is inner, outer.C is inner.C)\n\
-                  print(isinstance(outer.make(), outer.C), isinstance(inner.make(), inner.C), \
-                  outer.C().get(), inner.C().get(), outer.make().get())\n";
-    let compiled = fixture.run(&fixture.ext, driver);
-    let oracle = fixture.run(&fixture.src, driver);
-    assert_ok(&compiled);
-    assert_ok(&oracle);
-    assert_eq!(stdout_of(&compiled), "False True True\nTrue True 5 5 5\n");
-    assert_eq!(stdout_of(&oracle), "False True False\nTrue True 5 5 5\n");
 }
 
-/// The other ordering of the nested exec above: the outer body has already
-/// bound `C` when its cycle re-imports the artifact. The inner exec
-/// replaces the type static only, so the outer module keeps the earlier
-/// exec's class, which compiled code no longer constructs or recognises.
+/// The cycle runs after the outer class statement, so the outer module
+/// already bound its class.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn a_nested_exec_after_the_class_statement_leaves_the_outer_module_the_earlier_type() {
-    let fixture = Fixture::new(
+fn a_nested_exec_after_the_class_statement_leaves_each_module_its_own_class() {
+    assert_each_module_binds_its_own_exec_class(
         "1199_nested_exec_late",
         r#"class C:
     def __init__(self) -> None:
@@ -363,30 +375,6 @@ def make() -> object:
 
 import cb
 "#,
-        r#"import sys
-
-outer = sys.modules["my"]
-del sys.modules["my"]
-import my as inner
-"#,
-    );
-    let driver = "import my\nimport cb\n\
-                  outer, inner = cb.outer, cb.inner\n\
-                  print(outer is inner, my is inner, outer.C is inner.C)\n\
-                  print(isinstance(outer.make(), outer.C), isinstance(outer.make(), inner.C), \
-                  isinstance(inner.make(), inner.C), outer.C().get(), outer.make().get())\n";
-    let compiled = fixture.run(&fixture.ext, driver);
-    let oracle = fixture.run(&fixture.src, driver);
-    assert_ok(&compiled);
-    assert_ok(&oracle);
-    // `outer.make()` builds the inner exec's `C`, not the one `outer` binds.
-    assert_eq!(
-        stdout_of(&compiled),
-        "False True False\nFalse True True 5 5\n"
-    );
-    assert_eq!(
-        stdout_of(&oracle),
-        "False True False\nTrue False True 5 5\n"
     );
 }
 
