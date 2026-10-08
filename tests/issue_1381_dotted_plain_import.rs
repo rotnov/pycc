@@ -1,17 +1,16 @@
-//! Part 1 of #1138: an unaliased, top-level `from <dotted module> import a`
-//! of a CPython module -- one whose root is neither a project module nor a
-//! project package -- binds each name to the CPython object, fetched with
-//! CPython's own `IMPORT_NAME`/`IMPORT_FROM` semantics, exactly as #1278's
-//! undotted form does (`tests/issue_1278_from_foreign_import.rs`).
+//! Part 3 of #1138 (#1381): a plain dotted `import a.b` of a CPython
+//! module -- one whose root is neither a project module nor a project
+//! package -- binds the root `a`, and `import a.b as c` binds the leaf
+//! `a.b` to `c`, each fetched with CPython's own `IMPORT_NAME` (and, for
+//! the aliased form, `IMPORT_FROM` walk) semantics, at top level and in a
+//! module-level `if`/`try` body alike.
 //!
-//! The plain dotted `import a.b` is admitted by Part 3 (#1381,
-//! `tests/issue_1381_dotted_plain_import.rs`), and a name pycc resolves
-//! by its spelling keeps the spelling
-//! refusal, except the two buffer-carrier pairs #1380 (Part 2) admits
-//! (`tests/issue_1380_buffer_carrier_from_import.rs`). The hosted tests are `#[ignore]`d, compare the
-//! built extension against the host interpreter's own run of the same
-//! source, and contribute no line coverage; the changed driver lines are
-//! covered by the unit tests in `src/modules/tests.rs`.
+//! The non-ignored tests drive `pycc check` and `pycc build`'s gates; the
+//! hosted tests are `#[ignore]`d, compare the built extension against the
+//! host interpreter's own run of the same source, and contribute no line
+//! coverage. The changed Rust lines are covered by the unit tests in
+//! `crates/pycc_hir/src/import/tests/dotted.rs`, `src/modules/tests.rs` and
+//! `crates/pycc_codegen/src/foreign_import/tests.rs`.
 
 use pycc_scratch::ScratchDir;
 use std::path::{Path, PathBuf};
@@ -63,12 +62,14 @@ fn assert_one_error(tag: &str, body: &str, extra: &[&str], code: &str, needle: &
 }
 
 #[test]
-fn check_accepts_a_dotted_foreign_from_import() {
-    let dir = ScratchDir::new("dotted_from_check").expect("scratch");
+fn check_accepts_a_plain_dotted_foreign_import() {
+    let dir = ScratchDir::new("dotted_plain_check").expect("scratch");
     let output = check_with(
         &dir,
-        "from json.decoder import JSONDecoder\nfrom xml.dom import minidom\n\
-         print(str(JSONDecoder))\n",
+        "import xml.dom.minidom\nimport email.utils as eu\nimport os\nimport os.path\n\
+         if True:\n    import re._parser as sre_parse\n    print(str(sre_parse))\n\
+         try:\n    import json.decoder\nexcept ImportError:\n    json = None\n\
+         print(str(xml))\nprint(str(eu))\n",
         &[],
     );
     assert_eq!(
@@ -80,29 +81,28 @@ fn check_accepts_a_dotted_foreign_from_import() {
     );
 }
 
-/// The shapes outside Part 1 keep a `C0001`: the spelling refusal for a
-/// spelling that is not one of #1380's exact carrier pairs (Part 2), and
-/// the aliased and wildcard from forms, whose refusal is now the from form's own message
-/// rather than the module's, exactly as for an undotted module.
+/// The shapes Part 3 does not admit keep a `C0001`: a leaf bound under its
+/// own root's name, a root pycc resolves by its spelling, and two
+/// different modules bound to one name.
 #[test]
-fn the_shapes_outside_part_1_keep_their_c0001() {
+fn the_shapes_outside_part_3_keep_their_c0001() {
     for (tag, body, needle) in [
         (
-            // `numpy.typing` exports no `ndarray`; only the exact pairs
-            // `numpy.ndarray` and `numpy.typing.NDArray` are carriers.
-            "dotted_from_spelling",
-            "from numpy.typing import ndarray\n",
-            "binding the CPython object `numpy.typing.ndarray` to `ndarray`",
+            "dotted_plain_as_root",
+            "import xml.dom as xml\n",
+            "binding the CPython module `xml.dom` to `xml`, the name of its own top-level \
+             package, is not supported yet",
         ),
         (
-            "dotted_from_alias",
-            "from json.decoder import JSONDecoder as J\n",
-            "`from ... import x as y` aliasing is not supported yet",
+            "dotted_plain_spelling_root",
+            "import typing.sub\n",
+            "binding the CPython module `typing.sub` to `typing`, a name pycc resolves by its \
+             spelling",
         ),
         (
-            "dotted_from_wildcard",
-            "from json.decoder import *\n",
-            "`from ... import *` (wildcard import) is not supported yet",
+            "dotted_plain_shadow",
+            "import xml.dom as x\nimport xml.sax as x\n",
+            "shadowing a foreign import",
         ),
     ] {
         assert_one_error(tag, body, &[], "C0001", needle);
@@ -112,10 +112,10 @@ fn the_shapes_outside_part_1_keep_their_c0001() {
 /// A dotted name under a project module or package is compiled into the
 /// artifact, so it is not foreign: it keeps the module `C0001`.
 #[test]
-fn a_dotted_from_import_under_a_project_root_keeps_the_c0001() {
-    let dir = ScratchDir::new("dotted_from_project_root").expect("scratch");
+fn a_plain_dotted_import_under_a_project_root_keeps_the_c0001() {
+    let dir = ScratchDir::new("dotted_plain_project_root").expect("scratch");
     write(&dir, "helper.py", "x = 1\n");
-    let output = check_with(&dir, "from helper.sub import y\n", &[]);
+    let output = check_with(&dir, "import helper.sub\n", &[]);
     assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
     let rendered = stdout_of(&output);
     assert!(
@@ -126,28 +126,28 @@ fn a_dotted_from_import_under_a_project_root_keeps_the_c0001() {
 
 /// One statement is one `I0402`, quoting the statement as written.
 #[test]
-fn a_denied_dotted_from_import_is_one_diagnostic_quoting_the_statement() {
+fn a_denied_plain_dotted_import_is_one_diagnostic_quoting_the_statement() {
     assert_one_error(
-        "dotted_from_deny",
-        "from json.decoder import JSONDecoder\n",
+        "dotted_plain_deny",
+        "import xml.dom\n",
         &["--interop-policy", "deny"],
         "I0402",
-        "`from json.decoder import JSONDecoder` is a CPython-backed import",
+        "`import xml.dom` is a CPython-backed import",
     );
 }
 
-/// The allowlist classifies a submodule by its root: `json` admits
-/// `json.decoder`, and `xml.dom` is refused naming the root `xml`.
+/// The allowlist classifies a plain dotted import by its root: `json`
+/// admits `json.decoder`, and `xml.dom` is refused naming the root `xml`.
 #[test]
-fn an_allowlist_classifies_a_dotted_from_import_by_its_root() {
-    let dir = ScratchDir::new("dotted_from_allowlist").expect("scratch");
+fn an_allowlist_classifies_a_plain_dotted_import_by_its_root() {
+    let dir = ScratchDir::new("dotted_plain_allowlist").expect("scratch");
     std::fs::write(
         dir.join("pycc.toml"),
         "[project]\nname = \"p\"\nentry = \"m.py\"\npython = \"3.14\"\n\n\
          [interop]\npolicy = \"allowlist\"\nallow = [\"json\"]\n",
     )
     .expect("write pycc.toml");
-    let admitted = check_with(&dir, "from json.decoder import JSONDecoder\n", &[]);
+    let admitted = check_with(&dir, "import json.decoder as d\n", &[]);
     assert_eq!(
         admitted.status.code(),
         Some(0),
@@ -155,7 +155,7 @@ fn an_allowlist_classifies_a_dotted_from_import_by_its_root() {
         stdout_of(&admitted),
         stderr_of(&admitted)
     );
-    let refused = check_with(&dir, "from xml.dom import minidom\n", &[]);
+    let refused = check_with(&dir, "import xml.dom\n", &[]);
     assert_eq!(refused.status.code(), Some(1), "{}", stderr_of(&refused));
     let rendered = stdout_of(&refused);
     assert_eq!(rendered.matches("error[I0402]").count(), 1, "{rendered}");
@@ -163,16 +163,29 @@ fn an_allowlist_classifies_a_dotted_from_import_by_its_root() {
         rendered.contains("its root `xml` is not in `[interop] allow`"),
         "{rendered}"
     );
+    assert!(
+        rendered.contains("`import xml.dom` is a CPython-backed import"),
+        "{rendered}"
+    );
+    // The aliased form is quoted as written, alias included.
+    let aliased = check_with(&dir, "import xml.dom as d\n", &[]);
+    assert_eq!(aliased.status.code(), Some(1), "{}", stderr_of(&aliased));
+    let rendered = stdout_of(&aliased);
+    assert_eq!(rendered.matches("error[I0402]").count(), 1, "{rendered}");
+    assert!(
+        rendered.contains("`import xml.dom as d` is a CPython-backed import"),
+        "{rendered}"
+    );
 }
 
 /// A native build cannot embed `tkinter`: one `I0403` for the statement,
 /// classified by the dotted module's root.
 #[test]
-fn a_native_build_refuses_a_dotted_from_import_of_an_excluded_root_once() {
-    let dir = ScratchDir::new("dotted_from_native").expect("scratch");
+fn a_native_build_refuses_a_plain_dotted_import_of_an_excluded_root_once() {
+    let dir = ScratchDir::new("dotted_plain_native").expect("scratch");
     let output = pycc()
         .arg("build")
-        .arg(write(&dir, "m.py", "from tkinter.ttk import Button\n"))
+        .arg(write(&dir, "m.py", "import tkinter.ttk\n"))
         .arg("-o")
         .arg(dir.join("m"))
         .output()
@@ -181,7 +194,22 @@ fn a_native_build_refuses_a_dotted_from_import_of_an_excluded_root_once() {
     let rendered = stderr_of(&output);
     assert_eq!(rendered.matches("error[I0403]").count(), 1, "{rendered}");
     assert!(
-        rendered.contains("`from tkinter.ttk import Button` imports a standard-library module"),
+        rendered.contains("`import tkinter.ttk` imports a standard-library module"),
+        "{rendered}"
+    );
+    // The aliased form is quoted as written, alias included.
+    let aliased = pycc()
+        .arg("build")
+        .arg(write(&dir, "a.py", "import tkinter.ttk as t\n"))
+        .arg("-o")
+        .arg(dir.join("a"))
+        .output()
+        .expect("pycc should spawn");
+    assert_eq!(aliased.status.code(), Some(1), "{}", stderr_of(&aliased));
+    let rendered = stderr_of(&aliased);
+    assert_eq!(rendered.matches("error[I0403]").count(), 1, "{rendered}");
+    assert!(
+        rendered.contains("`import tkinter.ttk as t` imports a standard-library module"),
         "{rendered}"
     );
 }
@@ -189,11 +217,11 @@ fn a_native_build_refuses_a_dotted_from_import_of_an_excluded_root_once() {
 /// A non-standard root still needs a lock in an embedded build; the lock
 /// check names the root, not the dotted module.
 #[test]
-fn an_embedded_build_of_a_non_stdlib_dotted_from_import_needs_the_lock() {
-    let dir = ScratchDir::new("dotted_from_lock").expect("scratch");
+fn an_embedded_build_of_a_non_stdlib_plain_dotted_import_needs_the_lock() {
+    let dir = ScratchDir::new("dotted_plain_lock").expect("scratch");
     let output = pycc()
         .arg("build")
-        .arg(write(&dir, "m.py", "from numpy.linalg import norm\n"))
+        .arg(write(&dir, "m.py", "import numpy.linalg\n"))
         .arg("-o")
         .arg(dir.join("m"))
         .output()
@@ -267,92 +295,83 @@ fn assert_matches_cpython(tag: &str, module: &str, body: &str) -> String {
     stdout_of(&compiled)
 }
 
+/// `import a.b.c` binds the root package, with every submodule loaded.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn a_dotted_from_import_binds_the_cpython_object_in_the_host() {
+fn an_unaliased_dotted_import_binds_the_root_in_the_host() {
     let out = assert_matches_cpython(
-        "dotted_from_hosted",
-        "pycc_dotted_from_json_mod",
-        "from json.decoder import JSONDecoder, JSONDecodeError\n\
-         print(str(JSONDecoder))\nprint(str(JSONDecodeError.__name__))\n",
+        "dotted_plain_root",
+        "pycc_dotted_plain_root_mod",
+        "import xml.dom.minidom\nprint(str(xml.__name__))\n\
+         print(str(xml.dom.minidom.__name__))\n",
     );
-    assert_eq!(
-        out,
-        "<class 'json.decoder.JSONDecoder'>\nJSONDecodeError\nno error\n"
-    );
+    assert_eq!(out, "xml\nxml.dom.minidom\nno error\n");
 }
 
-/// A submodule that is not yet an attribute of its package is bound
-/// through the fromlist import and the `sys.modules` fallback, as
-/// `IMPORT_FROM` binds it.
+/// `import a.b as c` binds the leaf, at top level and in a module-level
+/// `if` body (`import re._parser as sre_parse`, the frontier shape
+/// `docs/TESTING.md` records).
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn a_dotted_from_import_binds_a_submodule_in_the_host() {
+fn an_aliased_dotted_import_binds_the_leaf_in_the_host() {
     let out = assert_matches_cpython(
-        "dotted_from_submodule",
-        "pycc_dotted_from_minidom_mod",
-        "from xml.dom import minidom\nprint(str(minidom.__name__))\n",
+        "dotted_plain_leaf",
+        "pycc_dotted_plain_leaf_mod",
+        "import email.utils as eu\nprint(str(eu.__name__))\n\
+         if True:\n    import re._parser as sre_parse\n    print(str(sre_parse.__name__))\n",
     );
-    assert_eq!(out, "xml.dom.minidom\nno error\n");
+    assert_eq!(out, "email.utils\nre._parser\nno error\n");
 }
 
-/// Each failure raises CPython's own error: a missing name on a module
-/// whose `__name__` differs from the spelling (`os.path` is `posixpath` or
-/// `ntpath`), a missing leaf, a non-package parent, and a missing root.
+/// Two imports binding one root each run their own import: after
+/// `import xml.dom` then `import xml.sax`, `xml.sax` is loaded.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn a_dotted_from_import_raises_cpythons_errors_in_the_host() {
-    let missing_name = assert_matches_cpython(
-        "dotted_from_missing_name",
-        "pycc_dotted_from_missing_name_mod",
-        "from os.path import nope\n",
+fn sibling_dotted_imports_each_load_their_submodule_in_the_host() {
+    let out = assert_matches_cpython(
+        "dotted_plain_siblings",
+        "pycc_dotted_plain_siblings_mod",
+        "import xml.dom\nimport xml.sax\nprint(str(xml.sax.__name__))\n",
     );
-    assert!(
-        missing_name.starts_with("ImportError cannot import name 'nope' from '"),
-        "{missing_name}"
-    );
-    assert!(!missing_name.contains("'os.path'"), "{missing_name}");
-    let missing_leaf = assert_matches_cpython(
-        "dotted_from_missing_leaf",
-        "pycc_dotted_from_missing_leaf_mod",
-        "from json.nope import x\n",
-    );
-    assert_eq!(
-        missing_leaf,
-        "ModuleNotFoundError No module named 'json.nope' json.nope None None\n"
-    );
-    let not_a_package = assert_matches_cpython(
-        "dotted_from_not_a_package",
-        "pycc_dotted_from_not_a_package_mod",
-        "from os.path.x import y\n",
-    );
-    assert_eq!(
-        not_a_package,
-        "ModuleNotFoundError No module named 'os.path.x'; 'os.path' is not a package os.path.x \
-         None None\n"
-    );
-    let missing_root = assert_matches_cpython(
-        "dotted_from_missing_root",
-        "pycc_dotted_from_missing_root_mod",
-        "from no_such_root_1138.sub import y\n",
-    );
-    assert_eq!(
-        missing_root,
-        "ModuleNotFoundError No module named 'no_such_root_1138' no_such_root_1138 None None\n"
-    );
+    assert_eq!(out, "xml.sax\nno error\n");
 }
 
-/// A plain (embedded) build runs the dotted from form too, matching
+/// A missing leaf in a `try`/`except ImportError` body takes the handler,
+/// and at top level raises CPython's own error, for the root and the leaf
+/// binding alike.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_missing_dotted_leaf_raises_cpythons_error_in_the_host() {
+    let bridged = assert_matches_cpython(
+        "dotted_plain_bridge",
+        "pycc_dotted_plain_bridge_mod",
+        "try:\n    import json.nope\nexcept ImportError:\n    print('fallback')\n",
+    );
+    assert_eq!(bridged, "fallback\nno error\n");
+    for (tag, body) in [
+        ("dotted_plain_missing_root_form", "import json.nope\n"),
+        ("dotted_plain_missing_leaf_form", "import json.nope as n\n"),
+    ] {
+        let raised = assert_matches_cpython(tag, &format!("pycc_{tag}_mod"), body);
+        assert_eq!(
+            raised,
+            "ModuleNotFoundError No module named 'json.nope' json.nope None None\n"
+        );
+    }
+}
+
+/// A plain (embedded) build runs the dotted plain forms too, matching
 /// CPython's own output.
 #[cfg(not(windows))]
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn an_embedded_build_runs_a_dotted_from_import_like_cpython() {
-    let dir = ScratchDir::new("dotted_from_embedded").expect("scratch");
+fn an_embedded_build_runs_a_plain_dotted_import_like_cpython() {
+    let dir = ScratchDir::new("dotted_plain_embedded").expect("scratch");
     let source = write(
         &dir,
         "m.py",
-        "from json.decoder import JSONDecoder\nprint(str(JSONDecoder))\n",
+        "import xml.dom.minidom\nimport email.utils as eu\n\
+         print(str(xml.dom.minidom.__name__))\nprint(str(eu.__name__))\n",
     );
     let build = pycc()
         .arg("build")
@@ -372,5 +391,5 @@ fn an_embedded_build_runs_a_dotted_from_import_like_cpython() {
         .expect("python3 should spawn");
     assert_ok(&oracle);
     assert_eq!(stdout_of(&embedded), stdout_of(&oracle));
-    assert_eq!(stdout_of(&embedded), "<class 'json.decoder.JSONDecoder'>\n");
+    assert_eq!(stdout_of(&embedded), "xml.dom.minidom\nemail.utils\n");
 }

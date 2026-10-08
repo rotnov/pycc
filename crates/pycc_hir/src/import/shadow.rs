@@ -63,7 +63,11 @@ pub(crate) fn import_local_name(binding: &ImportBinding) -> &str {
 /// object is the module *and*, for a from-import, the attribute (#1278):
 /// `import copy` followed by `from copy import copy` binds two different
 /// objects to `copy`, so it is refused too, while `from copy import copy`
-/// written twice is the identical pair.
+/// written twice is the identical pair. The module compared is the one
+/// bound ([`crate::foreign_bound_module`]), not the one imported (#1381):
+/// `import os` then `import os.path`, or `import a.b, a.c`, bind the one
+/// module `os` (`a`) to one name, so they are identical pairs, and each
+/// statement still runs its own import.
 ///
 /// The one other exemption is the optional-dependency fallback (#1485):
 /// `try: from A import N` / `except ImportError: N = None` (or `from B
@@ -119,8 +123,9 @@ pub(crate) fn reject_shadowed_foreign_imports(
                         .any(|group| group.are_alternatives(local_name, *span, *other_span)))
                 && !matches!(
                     candidate,
-                    ImportBinding::Foreign { module_path: other_path, from: other_from, .. }
-                        if other_path == module_path
+                    ImportBinding::Foreign { local_name: other_name, module_path: other_path, from: other_from, .. }
+                        if crate::foreign_bound_module(other_name, other_path, other_from.as_ref())
+                            == crate::foreign_bound_module(local_name, module_path, from.as_ref())
                             && other_from.as_ref().map(|f| (&f.name, f.level))
                                 == from.as_ref().map(|f| (&f.name, f.level))
                 )

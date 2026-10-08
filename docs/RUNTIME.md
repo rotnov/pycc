@@ -556,7 +556,72 @@ would return the dict value; and a host read of the module's own attributes
 from inside the body, after the `def` but before the body returns, does
 not see the hook yet. `tests/issue_1467_module_getattr.rs` pins every
 published shape against CPython, including a `tuple`-carrying hook, and pins
-the first residual; the second is recorded but not pinned by a test.
+the first residual; the second is recorded but not pinned by a test, and
+since #1199 below it is a property of the hooks alone.
+
+[#1199](https://github.com/rotnov/pycc/issues/1199) makes every other
+export visible as its definition executes, as CPython binds a module-level
+name. PEP 489 puts the module in `sys.modules` before `Py_mod_exec`, so a
+foreign module the body imports can import this one back mid-body; the
+moduledef therefore carries no `m_methods` table, and the compiled body
+calls the shim's `pycc_ext_publish(name)` right after it stores each
+top-level function's `fnptr_` slot (`crates/pycc_codegen/src/ext_publish.rs`),
+which binds that function's `pycc_ext_methods[]` row with
+`PyCFunction_NewEx` + `PyModule_AddObjectRef`. A redefined name is
+published only at its last definition: every definition shares one
+`fnptr_` slot and one wrapper whose per-definition metadata (a
+`memoryview` parameter's `PyBUF_WRITABLE` request, carried defaults) is
+the last definition's, so publishing an earlier one would let the host run
+its body through a wrapper that does not describe it -- a read-only buffer
+handed to a body that writes it -- and a function object captured then
+would follow the slot to the later body. A class is published once the last compiled item
+its MRO owns is bound -- for a class that owns a compiled item (a method
+it declares, or the `__init__` D-225 synthesizes for a base-less class that
+declares none) that is its class statement's position, because a class's
+own items are lowered contiguously there (pinned by
+`src/ext_build_tests/publication_order.rs`). A name read before its first
+definition runs therefore fails exactly as in CPython: `getattr` and
+`hasattr` see a partially initialized module's `AttributeError`, and
+`from my import late` a circular-import `ImportError`; a completed import,
+and a re-import after `del sys.modules[...]` (which re-runs the body on a
+fresh module object), expose every export. Five residuals remain: a
+redefined function reads as absent between its first and last definitions,
+where CPython would show the earlier one (over-hiding, for the wrapper
+reason above; pinned by
+`a_name_redefined_after_the_cycle_is_hidden_until_its_last_definition` in
+`tests/issue_1199_ext_reentrant_init.rs`); a class
+that owns no compiled item of its own (`class E(Base): pass`) is published
+as soon as its bases' methods are bound, possibly before its own class
+statement (over-visibility, never a crash); the synthesized exception
+classes are still created and added in `Py_mod_exec` before the body runs
+(they carry no `fnptr_` slot, so an early read is safe); a class the body never published is bound after it,
+before the hooks, by a safety net that no ordinary program reaches; and a
+nested `Py_mod_exec` of the same artifact (the body's cycle drops the module
+from `sys.modules` and imports it again) shares every compiled static -- each
+class's type object, the carrier cache, every `fnptr_` slot and global -- so
+compiled code constructs and tests against the inner exec's class
+afterwards. Each module still binds its own exec's class, whichever side of
+the class statement the cycle runs on: `pycc_ext_publish` binds a class
+from a snapshot its exec took before the body, never from the replaced
+static. So `outer.make()` is not an instance of `outer.C` where CPython
+builds outer's own class, unchanged from before #1199, which bound every
+class before the body. The exception classes are created once per process,
+so they were already shared. Pinned by
+`a_nested_exec_before_the_class_statement_leaves_each_module_its_own_class`
+and
+`a_nested_exec_after_the_class_statement_leaves_each_module_its_own_class`. Every
+generated wrapper and `tp_init` now opens with a null guard on its
+`fnptr_` slot, so a call that still reaches an unbound slot raises a
+catchable `NameError: name '<item>' is not defined` instead of calling
+through a null pointer. That can happen only through an instance that
+escaped before its class statement ran -- a published `def make() ->
+object: return D(1)` called mid-body before `class D` -- and there pycc
+diverges from CPython twice: CPython raises `NameError` for `D` inside
+`make`, while pycc constructs the instance and raises at the later method
+call. [#1490](https://github.com/rotnov/pycc/issues/1490) tracks the
+construction itself, whose own `NameError` aborts the host when the
+missing slot is the constructor's. `tests/issue_1199_ext_reentrant_init.rs`
+pins these shapes against CPython and the guard's divergence on its own.
 
 [#1143](https://github.com/rotnov/pycc/issues/1143) extends that export set
 past module-level functions: a public `@staticmethod` and a public
@@ -1259,7 +1324,8 @@ hold. A subinterpreter is refused outright
 unaffected because CPython does not re-run `Py_mod_exec` for an extension
 module; the one divergent path is deleting the `sys.modules` entry and
 importing again, which re-runs the module body and lets the second instance
-overwrite state the first instance's wrappers still read. The synthesized
+overwrite state the first instance's wrappers still read; the second
+module object gets its exports bound afresh as that body runs (#1199). The synthesized
 exception classes sit inside that same contract: they are created once in
 `Py_mod_exec`, published as module attributes with `PyModule_AddObjectRef`, and
 held by a file-scope cache that the shim's refusal of subinterpreters and
@@ -1295,8 +1361,11 @@ lets the module be dotted (`from json.decoder import JSONDecoder`) when its root
 is neither a project module nor a project package; the submodule is fetched
 with CPython's own `IMPORT_FROM` semantics, including the `sys.modules`
 fallback that binds `from xml.dom import minidom`, while a dotted name under a
-project root, and the plain `import X.Y`
-([#1381](https://github.com/rotnov/pycc/issues/1381)), keep their `C0001`.
+project root keeps its `C0001`. Part 3 of #1138
+([#1381](https://github.com/rotnov/pycc/issues/1381)) admits the plain dotted
+`import X.Y`, which binds the root `X`, and `import X.Y as c`, which binds the
+leaf `X.Y` to `c`, under the same root condition (*The plain dotted form*,
+below).
 Only that shape is admitted, at top level or (since
 [#1383](https://github.com/rotnov/pycc/issues/1383)) inside a module-level
 `if`/`try` block, below. An aliased name
@@ -1487,6 +1556,46 @@ remain:
 - CPython 3.13's "(consider renaming '…' since it has the same name as the
   standard library module …)" variant, for a local file shadowing a
   standard-library module, is not reproduced either.
+
+**The plain dotted form** ([#1381](https://github.com/rotnov/pycc/issues/1381),
+Part 3 of #1138). `import X.Y` and `import X.Y as c`, whose root `X` is neither
+a project module nor a project package, are one call each to
+`pycc_ext_obj_import_dotted(name, bind_root)` with the whole dotted name, at
+the statement's position, at top level or nested in a module-level `if`/`try`
+block, with the same `NULL` edges as the undotted `import` (the direct return
+at top level, the #1293 bridge when nested). An undotted `import X` keeps
+`pycc_ext_obj_import`. The helper mirrors CPython 3.14's bytecode for the two
+statements:
+
+1. It calls `builtins.__import__(X.Y, None, None, None, 0)`, CPython's
+   `IMPORT_NAME` with no fromlist, which loads every package on the path and
+   returns the *root* module. When `__import__` is missing from the builtins it
+   raises CPython's `ImportError("__import__ not found")`.
+2. For `import X.Y` (`bind_root` 1), that root is the result: the statement
+   binds `X`.
+3. For `import X.Y.Z as c` (`bind_root` 0), it walks from the root through
+   each later segment with the from form's steps 2 and 3 above (the attribute,
+   then the `sys.modules` entry `<__name__>.<segment>`, then CPython's
+   `cannot import name` `ImportError`), which is the `IMPORT_FROM` chain
+   CPython 3.14 compiles the aliased statement into. The helper shares that
+   step with `pycc_ext_obj_import_from`.
+
+Every binding is compared by the module it binds: `import X.Y` binds `X`, so
+it is the same binding as `import X` or `import X.Z`. Such statements are
+accepted together and each still runs its own import, so `import xml.dom`
+then `import xml.sax` loads both. `import X.Y as X`, which would bind the
+leaf under its root's own name, is refused with `C0001`, as is an unaliased
+dotted import whose root is a name pycc resolves by its spelling
+(`import typing.x`); [DIAGNOSTICS.md](./DIAGNOSTICS.md) lists both. The
+interop policy, the native-build refusal and the lock classify the statement
+by its root, like the dotted from form. The returned reference is never
+released, like `pycc_ext_obj_import`'s, and an overridden `__import__` sees
+one call per statement, as under CPython.
+`tests/issue_1381_dotted_plain_import.rs` compares the root and leaf
+bindings, two sibling submodule imports, a missing leaf at top level and
+under `except ImportError:`, and an embedded build against the host
+interpreter's own run of the same source; the missing-`__import__` branch is
+not exercised by a test.
 
 **The relative from form** ([#1366](https://github.com/rotnov/pycc/issues/1366)).
 Only `pycc build --ext --foreign-relative-imports` emits it, and only for the
@@ -2817,7 +2926,7 @@ an optional root (#1290) that is not installed, with none.
 | Policy | Behavior |
 |---|---|
 | `auto` | Default. Permit every CPython-backed import root present in the source; an embedded build bundles its pinned dependency closure from `pycc.lock` (#1242). |
-| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. An allowed root's pinned transitive closure is bundled with it without separate entries (#1242); a submodule from-import (`from json.decoder import X`) is classified by its root, and a plain dotted `import` is `C0001` today. |
+| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. An allowed root's pinned transitive closure is bundled with it without separate entries (#1242); a submodule from-import (`from json.decoder import X`) is classified by its root, and so is a plain dotted `import a.b` or `import a.b as c` ([#1381](https://github.com/rotnov/pycc/issues/1381)). |
 | `deny` | Reject every CPython-backed import with `I0402`. Native pycc modules remain available and the artifact has no CPython/libpython dependency. `--pure` is the CLI shorthand. |
 
 - A source-level `import` is sufficient intent under `auto`; pycc does not ask

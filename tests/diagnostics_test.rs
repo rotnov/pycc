@@ -176,8 +176,10 @@ fn c0001_issue_864_repro() {
 // `C0001` catch-all, and this fixture needs a rejected first item for the
 // cascade to be a cascade at all. #1291 then admitted the undotted
 // `import os as o` as a CPython module bound to `o`, so the rejected
-// first item is the dotted `import os.path as o`, which no part of #1026
-// or #1291 admits.
+// first item became the dotted `import os.path as o`. #1381 (Part 3 of
+// #1138) admitted that too, so the rejected first item is now
+// `import os.path as os`, which binds a submodule under its own root's
+// name and keeps a `C0001`.
 #[test]
 fn c0001_hir_cascade_suppressed() {
     assert_diagnostic_matches_fixture("c0001_hir_cascade_suppressed");
@@ -842,8 +844,13 @@ fn c0001_dict_comprehension_unpacking() {
 // Part 1 of #1026 narrowed which shapes reach that catch-all: a plain
 // `import cgi` binds a CPython module object now, so what is pinned here
 // was the aliased `import cgi as c` until #1291 admitted an undotted
-// alias on the same terms; what is pinned now is the dotted
-// `import cgi.x as c`, which still falls through. The plain
+// alias on the same terms; what was pinned next was the dotted
+// `import cgi.x as c`, until #1381 (Part 3 of #1138) admitted a plain
+// dotted import of a CPython module too. No plain import of a
+// standard-library or third-party name reaches the catch-all any more, so
+// what is pinned now is the one plain shape that still does: a dotted name
+// under a project module (here the fixture's own module), which is not
+// foreign and which project imports do not resolve yet. The undotted
 // form is accepted by `pycc check` and, since `cgi` left the standard
 // library in 3.13, built by a plain `pycc build` like any
 // non-standard-library root only from the program's `pycc.lock` closure,

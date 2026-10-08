@@ -175,5 +175,6 @@ mod instance_boundary;
 mod instance_copy;
 mod method_defaults;
 mod object_text;
+mod publication_order;
 mod refusal_completeness;
 mod toolchain;

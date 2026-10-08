@@ -77,6 +77,21 @@ pub const EXT_MODULE_EXEC_SYMBOL: &str = "pycc_ext_module_exec";
 /// already set), which is *not* the per-export wrapper's (`NULL`).
 pub const EXT_MODULE_EXEC_FAILED: i64 = -1;
 
+/// The fixed C shim's per-definition publication entry point (#1199):
+/// `int pycc_ext_publish(const char *name)` binds the export named `name`
+/// on the executing module and returns `0`, or `0` without touching any
+/// state for a name the generated tables do not know, or `-1` with the
+/// CPython exception set. The module body calls it right after a top-level
+/// `def` or class statement has bound its function-pointer slots
+/// (`ext_publish.rs`), so an export becomes visible when its definition
+/// executes, as in CPython.
+///
+/// Kept here, beside [`EXT_MODULE_EXEC_SYMBOL`], so the driver's shim
+/// parity test can assert it: the `--ext` link resolves an undefined symbol
+/// lazily, so a misspelling on either side would be a crash at first call
+/// rather than a link error.
+pub const EXT_PUBLISH_SYMBOL: &str = "pycc_ext_publish";
+
 /// The name the synthetic module-body entry point carries in each mode.
 /// One function so the `add_function` call and the `MirStmt::Return`
 /// invariant that pins the name can never drift apart.
@@ -128,6 +143,17 @@ pub const EXT_OBJ_IMPORT_SYMBOL: &str = "pycc_ext_obj_import";
 /// module's own dict. Spelled once here for exactly the reason
 /// `EXT_OBJ_IMPORT_SYMBOL` is.
 pub const EXT_OBJ_IMPORT_FROM_SYMBOL: &str = "pycc_ext_obj_import_from";
+
+/// The fixed C shim's plain dotted-import helper (#1381, Part 3 of #1138):
+/// `PyObject *pycc_ext_obj_import_dotted(const char *name, long long
+/// bind_root)` runs CPython's `IMPORT_NAME` of the dotted `name` with no
+/// fromlist and returns a *new* reference to the root package when
+/// `bind_root` is non-zero (`import a.b` binds `a`), or else to the leaf it
+/// reaches with one `IMPORT_FROM` per remaining segment (`import a.b as c`
+/// binds `a.b`), or `NULL` with the CPython exception already set. An
+/// undotted `import a` keeps [`EXT_OBJ_IMPORT_SYMBOL`]. Spelled once here
+/// for exactly the reason `EXT_OBJ_IMPORT_SYMBOL` is.
+pub const EXT_OBJ_IMPORT_DOTTED_SYMBOL: &str = "pycc_ext_obj_import_dotted";
 
 /// The fixed C shim's failed-import bridge (#1293, Part 3 of #1282): called
 /// on the `NULL` edge of a foreign import nested in a module-level

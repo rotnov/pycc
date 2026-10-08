@@ -1,8 +1,8 @@
-error[C0001]: import of module `os.path` is not supported yet
+error[C0001]: binding the CPython module `os.path` to `os`, the name of its own top-level package, is not supported yet
  --> tests/diagnostics/c0001_hir_cascade_suppressed.py:1:1
   |
-1 | import os.path as o
-  | ^^^^^^^^^^^^^^^^^^^ import of module `os.path` is not supported yet
+1 | import os.path as os
+  | ^^^^^^^^^^^^^^^^^^^^ binding the CPython module `os.path` to `os`, the name of its own top-level package, is not supported yet
 error[C0001]: an async method is not supported yet
  --> tests/diagnostics/c0001_hir_cascade_suppressed.py:3:5
   |

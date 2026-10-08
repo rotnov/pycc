@@ -179,11 +179,11 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
         &default_prefix,
         &export.defaults,
     ));
+    // #1199: the thunk arm reads `fnptr_` too, for the null guard below.
     if use_thunk {
         out.push_str(&format!("extern {return_c} {thunk}({params});\n"));
-    } else {
-        out.push_str(&format!("extern void *fnptr_{symbol};\n"));
     }
+    out.push_str(&format!("extern void *fnptr_{symbol};\n"));
     // #1461: a keyword-enabled export takes `METH_KEYWORDS`' fourth
     // argument and binds through its name table; every other wrapper keeps
     // the three-argument signature byte for byte. The flag side of the same
@@ -202,6 +202,7 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
         "static PyObject *pycc_ext_wrap_{symbol}(PyObject *self, PyObject *const *args, \
          Py_ssize_t nargs{kwnames_param})\n{{\n"
     ));
+    out.push_str(&fnptr_null_guard(&symbol, source_name, "NULL"));
     // A `METH_STATIC` wrapper is handed `NULL` in `self` and a `METH_CLASS`
     // one the *type object*; both discard it, exactly as
     // `MirExpr::NullInstance` discards `cls` at a native call site -- the
@@ -857,4 +858,23 @@ pub(crate) fn pack_tuple_return(name: &str, out_slots: &[(&'static str, &'static
     }
     out.push_str("    return packed;\n}\n\n");
     out
+}
+
+/// The first statement of every generated C function that calls compiled
+/// code through `fnptr_<symbol>` (#1199): a `NameError` instead of a call
+/// through a null pointer while the slot is unbound.
+///
+/// Per-definition publication (`pycc_ext_publish`) never exposes a wrapper
+/// before its slot is stored, so this is defence in depth against a path
+/// that reaches one anyway -- a module whose body failed part-way and was
+/// kept alive by a reference the host took earlier, or a class published
+/// with its bases' methods before its own statement ran. It precedes
+/// argument unpacking, instance allocation and the error-bridge mark, so a
+/// refused call has nothing to release. `fail` is the function's own
+/// error return (`NULL` for a method wrapper, `-1` for `tp_init`).
+pub(crate) fn fnptr_null_guard(symbol: &str, source_name: &str, fail: &str) -> String {
+    format!(
+        "    if (fnptr_{symbol} == NULL) {{\n        PyErr_SetString(PyExc_NameError, \
+         \"name '{source_name}' is not defined\");\n        return {fail};\n    }}\n"
+    )
 }
