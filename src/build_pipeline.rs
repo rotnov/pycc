@@ -62,7 +62,9 @@ use std::process::ExitCode;
 /// `foreign_relative_imports`: `pycc build --ext --foreign-relative-imports`
 /// (#1366). clap accepts it only with `--ext`, and only the `--ext`
 /// frontend reads it: the entry module's relative from-imports then bind
-/// CPython objects of the package the artifact is imported under.
+/// CPython objects of the package the artifact is imported under, and since
+/// #1382 so do its absolute imports rooted at its own top-level package
+/// (`docs/CLI_SPEC.md`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_build(
     path: &Path,

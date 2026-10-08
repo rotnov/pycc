@@ -27,7 +27,7 @@ mod type_alias;
 pub(crate) use block::{lower_block_imports, nested_foreign_import};
 pub(crate) use carrier::{reject_carrier_misuse, splice_by_item};
 pub(crate) use fallback::{FallbackGroup, fallback_groups};
-pub use request::{ProjectImportRequest, project_import_requests};
+pub use request::{ProjectImportRequest, is_native_std_module, project_import_requests};
 pub(crate) use shadow::{import_local_name, reject_shadowed_foreign_imports};
 pub(crate) use type_alias::{lower_legacy_type_alias_ann_assign, lower_type_alias_stmt};
 
@@ -218,7 +218,10 @@ pub enum ResolvedImport<'a> {
     /// every other absolute foreign shape stays unanswered. Under `pycc build
     /// --ext --foreign-relative-imports` (#1366) it is also recorded for
     /// every relative `from` import of the entry module, dotted or not,
-    /// which binds attributes of the package the artifact is imported under.
+    /// which binds attributes of the package the artifact is imported under,
+    /// and since #1382 for every absolute import of the entry module rooted
+    /// at its own top-level package, in any of the shapes above, even when
+    /// that package is a project package.
     /// A buffer-carrier pair (`from numpy import ndarray`, `from
     /// numpy.typing import NDArray`, #1380) binds its name under a hidden
     /// local name instead, so the spelling keeps its annotation meaning.
@@ -625,7 +628,9 @@ fn lower_import_alias(
 /// dotted module whose root is neither a project module nor a project
 /// package -- as a CPython module, or --
 /// under `pycc build --ext --foreign-relative-imports` (#1366) -- the entry
-/// module's relative `from .x import a, b`, whose dots travel as
+/// module's absolute `from X import a, b` rooted at its own top-level
+/// package (#1382, even though that root is a project package) or its
+/// relative `from .x import a, b`, whose dots travel as
 /// [`FromImport::level`]. Each name binds, in source order, the opaque
 /// CPython object `X.<name>` that `pycc_ext_obj_import_from` fetches with
 /// CPython's own `IMPORT_FROM` semantics when the statement runs, spliced
