@@ -1982,11 +1982,13 @@ fallthrough releases it after the operation. The failure may equally be a
 pycc's own exception state, and the post-node guard's unwind
 (`exception::guard_statement_effects`) releases the held bound method, and
 any produced argument evaluated before it, on the way to the exception target
-([#1486](https://github.com/rotnov/pycc/issues/1486)). A result that is bound to a name
-or slot, passed to a user function, returned, or boxed is still leaked, as is
-each item of a `for` loop or a comprehension; Part 3 below releases the
-iterator and the remaining unbound operands, and
-[#1499](https://github.com/rotnov/pycc/issues/1499) owns bound values and items.
+([#1486](https://github.com/rotnov/pycc/issues/1486)). A result that is bound is not a
+temporary: since Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499) a
+module global owns it and releases it on rebind (below). A result bound to a
+function local or an instance slot, passed to a user function, returned, or
+boxed is still leaked, as is each item of a function-local `for` target or a
+comprehension; Part 3 below releases the iterator and the remaining unbound
+operands, and the later parts of #1499 own the rest.
 `tests/issue_1092_object_temp_release.rs` pins a zero `sys.getrefcount` delta
 for every consumer and every held-operand failure, foreign or native, at
 module level (one 200-trip loop at import, and a failed import retried 50
@@ -2019,8 +2021,9 @@ arms are produced objects, and a value boolean operator only when every arm
 is owned (a produced object, or a scalar it boxes into a new reference) --
 the rule `object_release::is_produced` implements; one with a borrowed arm is neither released nor incremented,
 so its produced arm still leaks when selected (#1499). `hash` has no object
-operand to release: `hash(o)` is refused with `C0001`. What stays leaked is bound
-values, every per-trip item and those mixed-arm results, all #1499's.
+operand to release: `hash(o)` is refused with `C0001`. What stays leaked is
+values bound outside a module global, the per-trip item of a comprehension,
+and those mixed-arm results, all #1499's.
 `tests/issue_1498_iteration_temp_release.rs` pins a zero `sys.getrefcount`
 delta for loops (nested, with a raising iterator, with a raising body, in a
 module-level `try` and uncaught out of the module body), comprehensions and
@@ -2029,17 +2032,47 @@ that reference them, so an unreleased iterator moves its iterable's count, a
 host-held positive control shows the probe sees exactly that, and the same
 test run against the Part 1 compiler reports every one of these leaks.
 
-**Binding moves the reference into the global and rebinding leaks it.** Since
+**A module global owns its reference and a rebind releases the previous one
+(Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499),
+[#1501](https://github.com/rotnov/pycc/issues/1501)).** Since
 [#1325](https://github.com/rotnov/pycc/issues/1325) a producer's result may be
-bound to a module-level name (`x = product("ab")`). `emit_assign`'s
-`Scalar::Object` arm stores the pointer into the name's `pyglobal_<name>` slot
-and sets its `initialized` flag, with no reference-count call in either
-direction: the producer's new reference simply moves into the global. A
-rebinding (`x = product("c")`) likewise stores without releasing the previous
-value, because an alias `y = x` shares that pointer without an increment, so a
-release on rebind could free an object `y` still names -- a use-after-free
-where the leak is only a leak. Each binding statement therefore leaks at most
-one reference per execution, on the same terms as the producers above.
+bound to a module-level name (`x = product("ab")`). Every store into a
+module-global `object` slot -- an assignment, a module-level `for` target's
+per-trip item, and a foreign import's binding, top-level or nested in a
+module-level `if`/`try` (#1383) -- goes through
+`crates/pycc_codegen/src/object_slot.rs`, which keeps the slot holding exactly
+one owned reference. A produced value (the `object_release::is_produced`
+allowlist, or a native value boxed into a new object) moves in; any other
+source -- another global (`y = x`), a parameter, a user function's result,
+`None` -- is borrowed, and the store first takes a reference of its own with
+the shim's `pycc_ext_obj_retain` (`Py_XINCREF`), so an unlisted source
+over-retains and leaks rather than freeing an object something else names. A
+rebind follows CPython's `Py_XSETREF` order: it stores the new value, then
+releases the old one with `pycc_ext_obj_release`. The release can run an
+arbitrary `__del__`, which may call back into a compiled function that reads
+the global; it sees the new value, never a freed one, and `x = x` is correct.
+A rebinding statement in a loop therefore leaves exactly one reference alive,
+as CPython does.
+
+Each global carries an *owned bit* (`pyglobal.owned.<name>`), which the
+module-exec entry clears before its first statement and every store sets; the
+old value is released only when the bit was set. A value an *earlier* exec
+stored -- a failed import retried, a re-import after
+`del sys.modules[name]` -- is therefore never released: that exec is no longer
+running, and a frame or host object it handed the pointer to may still borrow
+it. Each such exec leaks at most its last value per slot. `importlib.reload`
+does not run the exec again on an extension module, so it binds nothing. The
+last value of each global is never released either, because the artifact has
+no teardown hook. Releasing on rebind is sound because the suspended module
+body is the only writer of these slots: a function cannot assign a global
+(`global` is refused with `C0001`), generators are refused, and object
+globals are not published on the host module, so no frame holds a borrowed
+copy of a global's old value across the rebind. Lowering any of those three
+must revisit this rule first (the SAFETY note on `object_slot::owned_bit`).
+`tests/issue_1499_module_object_rebind.rs` runs every shape both compiled and
+as plain Python, and requires the same live-object count, dead weak
+references, `sys.getrefcount` deltas and re-entrant finalizer observation,
+at two trip counts and once under `-X dev` with `PYTHONMALLOC=debug`.
 
 **A function body adds no reference traffic of its own.** Since Part 1 of
 [#1333](https://github.com/rotnov/pycc/issues/1333)
@@ -2055,7 +2088,11 @@ unchanged -- the only reference that leaks is the one each producer returns.
 Since Part 1 of [#1367](https://github.com/rotnov/pycc/issues/1367) an object
 may also live in an instance slot, established from an `__init__` parameter
 annotated with a class a foreign import binds: the slot word is the same
-borrowed pointer (D-154), stored and read with no reference-count change.
+pointer (D-154), read with no reference-count change. Since Part 1 of #1499 a
+store of a borrowed object into an instance slot first retains it
+(`pycc_ext_obj_retain`), because the module global it was read from may now
+release it on rebind; the replaced word is still never released (Part 4,
+[#1504](https://github.com/rotnov/pycc/issues/1504)).
 `tests/issue_1333_foreign_in_function.rs` pins it against a mortal stub
 attribute at two trip counts `N`:
 
@@ -2067,8 +2104,10 @@ attribute at two trip counts `N`:
 | `w = G` where `G = stub.MESH` at module level | `0` |
 
 Every row binds, passes or returns its producer's result, so Part 1 of #1092
-(unbound temporaries only) leaves the table unchanged; a later part releases
-bound values and every row becomes `0`.
+(unbound temporaries only) leaves the table unchanged, and so does Part 1 of
+[#1499](https://github.com/rotnov/pycc/issues/1499), which makes only module
+globals own their values; when a later part (#1502) releases function-local
+bindings, every row becomes `0`.
 
 **The key slot repeats the argument slot's rule rather than inventing a second
 one.** `pycc_ext_obj_getitem` *borrows* the object and **consumes the key
@@ -2352,8 +2391,9 @@ binding):
 | `g1, g2 = l3` caught as `ValueError`, `l3` a 3-item `list` | `0`: the failing exits release the iterator, the partial tuple and the extra item | `0` |
 
 Part 1 of [#1092](https://github.com/rotnov/pycc/issues/1092) leaves these
-rows unchanged, since the element reads and the tuple are bound; when a later
-part releases bound values they stop leaking and the first two rows match
+rows unchanged, since the element reads and the tuple are bound, and so does
+Part 1 of #1499, since these are function locals; when a later part (#1502)
+releases function-local bindings they stop leaking and the first two rows match
 CPython; the third already does.
 
 **A slice deletion produces nothing.** Part 2c of

@@ -120,7 +120,10 @@ fn a_bound_comprehension_result_is_not_released() {
 /// returned -- on `iter()`'s failure edge and right after it, before the
 /// loop header. Its iterator (Part 3 of #1092) is released by the loop's
 /// cleanup target, on `next()`'s direct module-exec return, which looks
-/// through that target, and at the loop's normal exit.
+/// through that target, and at the loop's normal exit. Since Part 1 of
+/// #1499 the only other releases are on each module global's rebind branch
+/// (`object_slot.rs`): the fixture's `copy` import, and the loop target's
+/// previous item on every trip.
 #[test]
 fn a_for_loop_releases_its_produced_iterable_and_its_iterator() {
     let ir = entry_ir(
@@ -131,7 +134,10 @@ fn a_for_loop_releases_its_produced_iterable_and_its_iterator() {
             body: Vec::new(),
         }],
     );
-    assert_eq!(releases(&ir), 5, "{ir}");
+    let rebinds = blocks(&ir, "global_release_old");
+    assert_eq!(rebinds.len(), 2, "{ir}");
+    assert_eq!(releases_of(rebinds[1], "global_old1"), 1, "{ir}");
+    assert_eq!(releases(&ir), 5 + rebinds.len(), "{ir}");
     let get_iter_fail = blocks(&ir, "foreign_iter_get_fail");
     assert_eq!(get_iter_fail.len(), 1, "{ir}");
     assert_eq!(releases(get_iter_fail[0]), 1, "{ir}");

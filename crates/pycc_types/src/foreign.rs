@@ -69,8 +69,9 @@
 //!
 //! **#1325 admitted binding an object to a name in a module body.** At
 //! module scope `x = product("ab")` stores the new reference into an
-//! ordinary module global that never releases it (a rebinding leaks the old
-//! reference, #1092); Part 1 of #1333 removed `check_assignment`'s
+//! ordinary module global, which since Part 1 of #1499 owns it and releases
+//! the old reference on rebind (`pycc_codegen`'s `object_slot.rs`); Part 1
+//! of #1333 removed `check_assignment`'s
 //! remaining function-body refusal. `for t in x:` over such a name is the bare-name form
 //! of `HirStmt::ForObject`: `check_stmt`'s `ForList` arm routes a
 //! definitely-bound `object` name to the same checks ([`for_loop`]).

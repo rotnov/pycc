@@ -316,6 +316,15 @@ pub const EXT_OBJ_TYPE_SYMBOL: &str = "pycc_ext_obj_type";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_RELEASE_SYMBOL: &str = "pycc_ext_obj_release";
 
+/// The fixed C shim's object retain (Part 1 of #1499): `void
+/// pycc_ext_obj_retain(PyObject *o)` is `Py_XINCREF`. Generated code calls
+/// it before a borrowed object moves into a slot that owns its reference --
+/// a module-global `object` slot, or a compiled instance's `object`
+/// attribute (`object_slot.rs`).
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_RETAIN_SYMBOL: &str = "pycc_ext_obj_retain";
+
 /// The fixed C shim's subscript-load helper (Part 3 of #1026, PR 3b of
 /// #1082): it takes a borrowed `PyObject *` and an *owned* key reference
 /// produced by one of the `pycc_ext_obj_pack_*` helpers above, and returns a

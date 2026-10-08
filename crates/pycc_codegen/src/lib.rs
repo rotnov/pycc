@@ -71,6 +71,7 @@ mod object_box;
 mod object_comprehension;
 mod object_release;
 mod object_return;
+mod object_slot;
 mod object_unbox;
 mod sequence;
 /// Set insertion, length and iteration helpers, and the insert of a set of
@@ -5240,17 +5241,18 @@ fn emit_assign<'ctx>(
         // accompanies it either, for the identical D-182-acknowledged
         // reason `Tuple`'s own comment already gives.
         Scalar::Optional(v) => v.into(),
-        // A pass-through since #1325: storing one owned `PyObject *` into a
-        // slot `ty_to_basic_type` already allocated as a pointer, with no
-        // refcount traffic. The slot owns the new reference its producer
-        // returned and never releases it; a rebinding overwrites and leaks
-        // the previous reference, which is #1092's leak-only rule. A
-        // release here would be a use-after-free, not a fix: `y = x`
-        // aliases the pointer without an incref, so freeing `x`'s old value
-        // would free an object `y` still points at. Reached for a module
-        // global and, since Part 1 of #1333 (#1362), for a function-local
-        // slot too: `pycc_types`' `check_assignment` admits the binding in
-        // both scopes, and the same leak-only rule governs each.
+        // A pass-through since #1325: storing one `PyObject *` into a slot
+        // `ty_to_basic_type` already allocated as a pointer, with no
+        // refcount traffic. Since Part 1 of #1499 only a *frame* slot -- a
+        // function local, reached since Part 1 of #1333 (#1362) -- stores
+        // here: `MirStmt::Assign` routes a module-global `object` target
+        // through `object_slot::assign`, which owns its reference. A frame
+        // slot keeps #1092's leak-only rule, where a rebinding overwrites
+        // and leaks the previous reference. A release here would be a
+        // use-after-free, not a fix: a parameter or a local alias holds a
+        // borrowed pointer without an incref, so freeing the old value
+        // could free an object the caller still names. Part 2 (#1502)
+        // gives frame slots the ownership model.
         Scalar::Object(v) => v.into(),
         // A pass-through since Part 2a of #1142 (#1165), where it was a
         // panic (as `Object`'s arm above was until #1325): storing one
@@ -5685,8 +5687,10 @@ fn declare_module_globals<'ctx>(
                 // store (a module-level `x = <object>`, #1325) or a
                 // module-level `for` target's own store in the
                 // `MirStmt::ForObject` emission -- with the separate `initialized`
-                // flag below trapping any read that reaches it first. No
-                // exit-time release accompanies it: the reference is
+                // flag below trapping any read that reaches it first. Since
+                // Part 1 of #1499 the slot owns its one reference and a
+                // rebind releases the old value (`object_slot.rs`). No
+                // exit-time release accompanies it: the last value is
                 // owned for the artifact's lifetime (see
                 // `foreign_import.rs` and `docs/RUNTIME.md`).
                 pycc_mir::Ty::Object => (
@@ -6124,6 +6128,9 @@ fn compile_to_object_with_observer(
     let entry_block = context.append_basic_block(entry_fn, "entry");
     let top_exception_exit = context.append_basic_block(entry_fn, "top_exception_exit");
     builder.position_at_end(entry_block);
+    // Part 1 of #1499: every module-global `object` slot's owned bit,
+    // cleared before the first statement (`object_slot.rs`).
+    object_slot::declare_owned_bits(&context, &builder, &module, &rt, &module_globals);
     // Top-level statements share one `locals` map across the synthetic
     // `main` entry block (module-level Python names are one shared
     // scope); each user function gets its own, fresh map below, since
@@ -6210,6 +6217,7 @@ fn compile_to_object_with_observer(
                 &context,
                 &builder,
                 &module,
+                &rt,
                 entry_fn,
                 options.ext,
                 &module_globals,
@@ -7133,6 +7141,12 @@ fn emit_stmt<'ctx>(
         MirStmt::Assign { target, value } => {
             let ty = value.ty();
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
+            // Part 1 of #1499: a module-global `object` slot owns its
+            // reference (`object_slot.rs`); every other slot keeps
+            // `emit_assign`'s store below.
+            if object_slot::assign(context, builder, module, rt, locals, target, value, scalar) {
+                return Ok(());
+            }
             let scalar = incref_if_str_duplicate(builder, rt, value, scalar);
             let scalar = retain_if_int_duplicate(context, builder, rt, value, scalar);
             if ty == pycc_mir::Ty::Str {
@@ -7584,25 +7598,15 @@ fn emit_stmt<'ctx>(
             let held = object_release::hold(context, module, rt, iter, &iterable);
             let (loop_blocks, iterator) =
                 foreign_call::emit_iter_loop(context, builder, module, rt, iterable, held);
-            // Stored directly rather than through `emit_assign`, which also
-            // stores a `Scalar::Object` since #1325 but predates this arm's
-            // own store and is kept separate: a `for` target is this
-            // construct's own binding. The store carries no refcount
-            // traffic -- the item is a new reference this boundary still
-            // leaks (#1499), so there is nothing to release when the next
-            // iteration overwrites the slot.
+            // The item is `pycc_ext_obj_iter_next`'s new reference. Part 1
+            // of #1499: a module-global target owns it, so each trip
+            // releases the previous item (or the value bound before the
+            // loop) and the slot keeps the last one, as in CPython. A frame
+            // slot keeps the plain, leak-only store until Part 2 (#1502).
             let slot = locals
                 .get(var)
-                .cloned()
                 .expect("every for-target must have a predeclared storage slot");
-            builder
-                .build_store(slot.ptr, loop_blocks.item)
-                .expect("build_store should not fail for a slot this function itself allocated");
-            if let Some(initialized_ptr) = slot.initialized {
-                builder
-                    .build_store(initialized_ptr, context.i8_type().const_int(1, false))
-                    .expect("build_store should not fail for a declared global flag");
-            }
+            object_slot::store_new_reference(context, builder, module, rt, slot, loop_blocks.item);
             emit_body(
                 context,
                 builder,
@@ -8331,6 +8335,16 @@ fn emit_stmt<'ctx>(
                 emit_expr(context, builder, module, rt, user_functions, locals, value);
             let value_scalar = incref_if_str_duplicate(builder, rt, value, value_scalar);
             let value_scalar = retain_if_int_duplicate(context, builder, rt, value, value_scalar);
+            // Part 1 of #1499: a borrowed object takes its own reference
+            // before the slot word keeps it, because a module global it was
+            // read from now releases its old value on rebind. The replaced
+            // word is still never released (Part 4, #1504).
+            let value_scalar = match value_scalar {
+                Scalar::Object(pointer) => Scalar::Object(object_slot::retain_if_borrowed(
+                    context, builder, module, value, pointer,
+                )),
+                other => other,
+            };
             let slot_index = context.i64_type().const_int(*slot as u64, false);
             if value_ty == pycc_mir::Ty::Str {
                 decref_str_attr_slot_before_store(context, builder, rt, base_ptr, slot_index);

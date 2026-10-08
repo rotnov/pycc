@@ -168,8 +168,10 @@ pub(crate) fn scalar_to_slot_word<'ctx>(
         // D-124), and `MirStmt::AttrSet`'s release calls are gated on a
         // `str`/`int` value type.
         // Part 1 of #1367: a foreign object's `PyObject*` is stored the
-        // same way, and needs no refcount traffic either (see
-        // `slot_word_to_scalar`).
+        // same way, with no refcount traffic here (see
+        // `slot_word_to_scalar`). Since Part 1 of #1499 the
+        // `MirStmt::AttrSet` arm retains a borrowed object before this
+        // conversion (`object_slot::retain_if_borrowed`).
         // #1389: so is an instance of a class of this program.
         Scalar::List(v) | Scalar::Dict(v) | Scalar::Object(v) | Scalar::Instance(v) => builder
             .build_ptr_to_int(v, context.i64_type(), "attr_container_ptrtoint")

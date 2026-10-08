@@ -2169,12 +2169,32 @@ PyObject *pycc_ext_obj_type(PyObject *o)
  * nowhere -- the operand of an attribute load, a call argument, a
  * discarded statement value, a condition -- after that operation, or on
  * the failure edge that leaves it (`crates/pycc_codegen/src/object_release.rs`
- * owns the classification). `Py_XDECREF` rather than `Py_DECREF` because a
- * producer that failed left NULL in the value the failure edge releases.
+ * owns the classification). Since Part 1 of #1499 it also releases the
+ * value a module-global `object` slot held when that slot is rebound
+ * (`crates/pycc_codegen/src/object_slot.rs`). `Py_XDECREF` rather than
+ * `Py_DECREF` because a producer that failed left NULL in the value the
+ * failure edge releases.
  */
 void pycc_ext_obj_release(PyObject *o)
 {
     Py_XDECREF(o);
+}
+
+/*
+ * Part 1 of #1499: take a new reference to a borrowed CPython object
+ * (`EXT_OBJ_RETAIN_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * A module-global `object` slot owns the reference it holds, so a store of
+ * a *borrowed* value -- another global's (`y = x`), a parameter, `None` --
+ * retains it first, and the slot's later rebind releases it without
+ * freeing an object something else still names. A compiled-instance
+ * attribute store of a borrowed object retains it the same way, since the
+ * module global it was read from may now release it. `Py_XINCREF` mirrors
+ * `pycc_ext_obj_release`'s NULL tolerance.
+ */
+void pycc_ext_obj_retain(PyObject *o)
+{
+    Py_XINCREF(o);
 }
 
 /*

@@ -1,0 +1,414 @@
+//! Part 1 of #1499 (#1501): a module-global `object` slot owns its
+//! reference, so rebinding the name releases the previous value exactly
+//! once, as CPython does.
+//!
+//! **The oracle is CPython itself.** Every module below is also run as
+//! plain Python source, and the probe expects the compiled extension to
+//! report what CPython reports, line for line: the number of live stub
+//! objects (each counts itself in `__init__` and `__del__`), the dead
+//! weak references, `sys.getrefcount` deltas of mortal stub attributes
+//! (PEP 683, see `tests/issue_1084_refcount_probe.rs`), and what a
+//! re-entrant finalizer saw. The module body runs its loops at two trip
+//! counts, so a leak that grows with the trip count cannot hide behind a
+//! constant.
+//!
+//! **What stays leaked, pinned as such.** A function-local binding keeps
+//! #1092's leak-only rule until Part 2 (#1502); the positive control
+//! `local_fresh` leaks one object per call, which also shows the probe sees
+//! a leak. A value an *earlier* module exec stored is never released (a
+//! failed import retried, a re-import after `del sys.modules[name]`), so
+//! each such exec leaks at most the one value it left in each slot.
+//!
+//! The hosted tests are `#[ignore]`d and contribute no line coverage; the
+//! Tier-1 `native-build-test` leg runs them with `cargo test --workspace --
+//! --include-ignored`. The changed lines are covered by the unit tests in
+//! `crates/pycc_codegen/src/object_slot_tests.rs`.
+
+use pycc_scratch::ScratchDir;
+use std::path::Path;
+use std::process::{Command, Output};
+
+fn pycc() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_pycc"))
+}
+
+fn stdout_of(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n")
+}
+
+fn stderr_of(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n")
+}
+
+/// The foreign stub. Every `Thing` counts itself in `LIVE` and is
+/// weak-referenced from `REFS`; a `Peeker`'s finalizer calls `HOOK`, which
+/// the host points at the module under test.
+const STUB: &str = "\
+import weakref
+
+LIVE = 0
+REFS = []
+SEEN = []
+HOOK = None
+
+
+class Thing:
+    def __init__(self):
+        global LIVE
+        LIVE += 1
+        REFS.append(weakref.ref(self))
+
+    def __del__(self):
+        # A value pycc leaks on purpose (an earlier exec's last value) is
+        # finalized at interpreter shutdown, after this module's globals
+        # are cleared to `None`; it no longer counts then.
+        global LIVE
+        if LIVE is not None:
+            LIVE -= 1
+
+    def fail(self):
+        raise ValueError()
+
+
+class Peeker(Thing):
+    def __del__(self):
+        super().__del__()
+        if HOOK is not None:
+            SEEN.append(HOOK())
+
+
+def fresh():
+    return Thing()
+
+
+def peeker():
+    return Peeker()
+
+
+T = Thing()
+PAIR = (Thing(), Thing())
+";
+
+/// The module under test, with `{N}` the trip count. Each shape binds a
+/// module global: a rebind loop of produced values, a produced attribute
+/// load, an alias of a borrowed global, `x = x`, a borrowed global stored
+/// into a compiled-instance attribute and then rebound, a compiled
+/// instance rebound, a tuple unpack and a `for` target. The first rebind
+/// releases a `Peeker`, whose finalizer reads the global back through
+/// `peek()` and must see the new value.
+const MODULE: &str = "\
+import pycc_t1499_stub as s
+
+
+class Box:
+    def __init__(self, a: object) -> None:
+        self.a = a
+
+
+def peek() -> object:
+    return x
+
+
+def get_x() -> object:
+    return x
+
+
+def get_kept() -> object:
+    return box.a
+
+
+def get_same() -> object:
+    return same
+
+
+def get_inst() -> object:
+    return inst
+
+
+def local_fresh() -> None:
+    z = s.fresh()
+
+
+x: object = s.peeker()
+x = s.fresh()
+for i in range({N}):
+    x = s.fresh()
+t: object = None
+for i in range({N}):
+    t = s.T
+alias: object = None
+for i in range({N}):
+    alias = s.fresh()
+    x = alias
+same: object = s.fresh()
+for i in range({N}):
+    same = same
+box = Box(x)
+x = s.fresh()
+inst: object = None
+for i in range({N}):
+    inst = Box(None)
+p: object = None
+q: object = None
+for i in range({N}):
+    p, q = s.PAIR
+for w in s.PAIR:
+    p = w
+";
+
+/// Writes the stub into the scratch root, every `(module, source)` as
+/// `src/<module>.py` built into the scratch root, and the same source as
+/// plain Python `pure/<module>_py.py`, the CPython oracle.
+fn build(tag: &str, modules: &[(&str, &str)]) -> ScratchDir {
+    let dir = ScratchDir::new(tag).expect("scratch");
+    std::fs::write(dir.join("pycc_t1499_stub.py"), STUB).expect("write the stub");
+    std::fs::create_dir_all(dir.join("src")).expect("create the entry directory");
+    std::fs::create_dir_all(dir.join("pure")).expect("create the oracle directory");
+    for (module, source) in modules {
+        let entry = dir.join("src").join(format!("{module}.py"));
+        std::fs::write(&entry, source).expect("write the module");
+        std::fs::write(dir.join("pure").join(format!("{module}_py.py")), source)
+            .expect("write the oracle");
+        let build = pycc()
+            .arg("build")
+            .arg(&entry)
+            .arg("-o")
+            .arg(dir.join(module))
+            .arg("--ext")
+            .output()
+            .expect("pycc should spawn");
+        assert!(build.status.success(), "{}", stderr_of(&build));
+    }
+    dir
+}
+
+/// Runs `script` with `module` as `sys.argv[1]` under the host interpreter,
+/// with `flags` before `-c` and `env` added, and returns what it reported on
+/// stderr.
+fn python(dir: &Path, flags: &[&str], env: &[(&str, &str)], module: &str, script: &str) -> String {
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .args(flags)
+        .arg("-c")
+        .arg(script)
+        .arg(module)
+        .envs(env.iter().copied())
+        .current_dir(dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+    assert_eq!(stdout_of(&run), "");
+    stderr_of(&run)
+}
+
+/// A host prelude: the stub, `report(*fields)`, and `dead()`, the number of
+/// stub objects whose weak reference is dead.
+const PRELUDE: &str = "\
+import gc, importlib, sys
+sys.path.insert(0, '.')
+sys.path.insert(0, 'pure')
+import pycc_t1499_stub as s
+name = sys.argv[1]
+def report(*fields):
+    print(*fields, file=sys.stderr, flush=True)
+def dead():
+    return sum(1 for r in s.REFS if r() is None)
+";
+
+/// The bindings probe: imports `sys.argv[1]` and reports every count.
+fn bindings_script() -> String {
+    format!(
+        "{PRELUDE}\
+         def hook():\n\
+         \x20   m = sys.modules.get(name)\n\
+         \x20   return type(m.peek()).__name__ if m is not None else 'unbound'\n\
+         s.HOOK = hook\n\
+         live, t = s.LIVE, sys.getrefcount(s.T)\n\
+         pair = [sys.getrefcount(o) for o in s.PAIR]\n\
+         m = importlib.import_module(name)\n\
+         gc.collect()\n\
+         report('live', s.LIVE - live, 'dead', dead())\n\
+         report('seen', *s.SEEN)\n\
+         report('T', sys.getrefcount(s.T) - t)\n\
+         report('PAIR', *[sys.getrefcount(o) - b for o, b in zip(s.PAIR, pair)])\n\
+         report('kept', type(m.get_kept()).__name__, m.get_kept() is m.get_x())\n\
+         report('same', sys.getrefcount(m.get_same()))\n\
+         report('inst', type(m.get_inst()).__name__, sys.getrefcount(m.get_inst()))\n"
+    )
+}
+
+/// What CPython reports for `MODULE` at `trips`: `x`, `same` and the
+/// object `box.a` keeps are alive, and every other `Thing` the body made --
+/// the `Peeker` and each rebound value -- is dead.
+fn expected_bindings(trips: usize) -> String {
+    format!(
+        "live 3 dead {}\nseen Thing\nT 1\nPAIR 1 4\nkept Thing False\nsame 2\ninst Box 2\n",
+        2 * trips + 1
+    )
+}
+
+/// The module-level bindings release every rebound value exactly once, at
+/// two trip counts, exactly as CPython does; a function-local binding
+/// still leaks one object per call (Part 2, #1502).
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_module_global_rebind_releases_the_previous_value_as_cpython_does() {
+    let modules: Vec<(String, String)> = [50, 150]
+        .iter()
+        .map(|n| {
+            (
+                format!("pycc_t1499_m{n}"),
+                MODULE.replace("{N}", &n.to_string()),
+            )
+        })
+        .collect();
+    let refs: Vec<(&str, &str)> = modules
+        .iter()
+        .map(|(m, s)| (m.as_str(), s.as_str()))
+        .collect();
+    let dir = build("t1499_bindings", &refs);
+    let script = bindings_script();
+    for (trips, (module, _)) in [50, 150].into_iter().zip(&modules) {
+        let compiled = python(&dir, &[], &[], module, &script);
+        let oracle = python(&dir, &[], &[], &format!("{module}_py"), &script);
+        assert_eq!(compiled, oracle, "{module} against CPython");
+        assert_eq!(compiled, expected_bindings(trips), "{module}");
+    }
+    let leak = format!(
+        "{PRELUDE}\
+         m = importlib.import_module(name)\n\
+         live = s.LIVE\n\
+         for _ in range(50):\n\
+         \x20   m.local_fresh()\n\
+         report('local', s.LIVE - live)\n"
+    );
+    let module = &modules[0].0;
+    assert_eq!(python(&dir, &[], &[], module, &leak), "local 50\n");
+    assert_eq!(
+        python(&dir, &[], &[], &format!("{module}_py"), &leak),
+        "local 0\n"
+    );
+}
+
+/// The same probe under CPython's development mode and debug allocator,
+/// which detect a release of freed memory and a refcount underflow.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn the_rebind_probe_is_clean_under_the_debug_allocator() {
+    let source = MODULE.replace("{N}", "50");
+    let dir = build("t1499_dev", &[("pycc_t1499_dev", source.as_str())]);
+    let got = python(
+        &dir,
+        &["-X", "dev"],
+        &[("PYTHONMALLOC", "debug")],
+        "pycc_t1499_dev",
+        &bindings_script(),
+    );
+    assert_eq!(got, expected_bindings(50));
+}
+
+/// Import bindings own their reference too: a from-import of the same name
+/// twice, top-level or nested in a module-level `if` (#1383), holds one
+/// reference, as CPython does.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_repeated_from_import_holds_one_reference() {
+    let dir = build(
+        "t1499_from",
+        &[
+            (
+                "pycc_t1499_from",
+                "from pycc_t1499_stub import T\nfrom pycc_t1499_stub import T\n",
+            ),
+            (
+                "pycc_t1499_nested",
+                "import pycc_t1499_stub as s\n\n\
+                 if s.LIVE >= 0:\n    \
+                 from pycc_t1499_stub import T\n    \
+                 from pycc_t1499_stub import T\n",
+            ),
+        ],
+    );
+    let script = format!(
+        "{PRELUDE}\
+         t = sys.getrefcount(s.T)\n\
+         importlib.import_module(name)\n\
+         report('T', sys.getrefcount(s.T) - t)\n"
+    );
+    for module in ["pycc_t1499_from", "pycc_t1499_nested"] {
+        assert_eq!(python(&dir, &[], &[], module, &script), "T 1\n", "{module}");
+        assert_eq!(
+            python(&dir, &[], &[], &format!("{module}_py"), &script),
+            "T 1\n",
+            "{module} under CPython"
+        );
+    }
+}
+
+/// A module exec that ran before -- a failed import retried, a re-import
+/// after `del sys.modules[name]` -- leaves its last value in each slot
+/// unreleased, so each such exec leaks at most one object per slot; the
+/// values one exec rebinds are still released. `importlib.reload` does not
+/// run the exec again, and an earlier module's function stays usable.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_earlier_exec_leaks_at_most_its_last_value() {
+    let dir = build(
+        "t1499_reexec",
+        &[
+            (
+                "pycc_t1499_fail",
+                "import pycc_t1499_stub as s\n\n\
+                 x: object = s.fresh()\nx = s.fresh()\ns.T.fail()\n",
+            ),
+            (
+                "pycc_t1499_again",
+                "import pycc_t1499_stub as s\n\n\n\
+                 def get_x() -> object:\n    return x\n\n\n\
+                 x: object = s.fresh()\nx = s.fresh()\n",
+            ),
+        ],
+    );
+    let retried = format!(
+        "{PRELUDE}\
+         live, caught = s.LIVE, 0\n\
+         for _ in range(50):\n\
+         \x20   try:\n\
+         \x20       importlib.import_module(name)\n\
+         \x20   except ValueError:\n\
+         \x20       caught += 1\n\
+         \x20   sys.modules.pop(name, None)\n\
+         gc.collect()\n\
+         report('retried', caught, s.LIVE - live, dead())\n"
+    );
+    assert_eq!(
+        python(&dir, &[], &[], "pycc_t1499_fail", &retried),
+        "retried 50 50 50\n"
+    );
+    assert_eq!(
+        python(&dir, &[], &[], "pycc_t1499_fail_py", &retried),
+        "retried 50 0 100\n"
+    );
+    let again = format!(
+        "{PRELUDE}\
+         live = s.LIVE\n\
+         first = importlib.import_module(name)\n\
+         get_x = first.get_x\n\
+         for _ in range(3):\n\
+         \x20   importlib.reload(first)\n\
+         report('reload', s.LIVE - live, type(get_x()).__name__)\n\
+         for _ in range(3):\n\
+         \x20   del sys.modules[name]\n\
+         \x20   importlib.import_module(name)\n\
+         gc.collect()\n\
+         report('again', s.LIVE - live, type(get_x()).__name__)\n"
+    );
+    assert_eq!(
+        python(&dir, &[], &[], "pycc_t1499_again", &again),
+        "reload 1 Thing\nagain 4 Thing\n"
+    );
+}

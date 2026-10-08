@@ -363,8 +363,11 @@ fn borrowed_operands_and_a_consumed_bound_method_are_never_released() {
     assert_eq!(releases(&ir), 2, "{ir}");
 }
 
-/// A produced value that is bound or returned is not a temporary: Part 1
-/// leaves it to the leak-only rule.
+/// A produced value that is bound or returned is not a temporary: it is
+/// never released as one. Since Part 1 of #1499 a module global owns its
+/// value, so the only releases left are each global's *previous* value on
+/// its rebind branch (`object_slot.rs`) -- the fixture's `copy` import and
+/// `x` -- never the value just bound.
 #[test]
 fn a_bound_or_returned_produced_value_is_not_released() {
     let ir = entry_ir(
@@ -374,7 +377,16 @@ fn a_bound_or_returned_produced_value_is_not_released() {
             value: attr("a"),
         }],
     );
-    assert_eq!(releases(&ir), 0, "{ir}");
+    let rebinds = blocks(&ir, "global_release_old");
+    assert_eq!(rebinds.len(), 2, "{ir}");
+    for rebind in &rebinds {
+        assert_eq!(releases(rebind), 1, "{ir}");
+        assert!(
+            rebind.contains(&format!("{RELEASE}ptr %global_old")),
+            "{ir}"
+        );
+    }
+    assert_eq!(releases(&ir), rebinds.len(), "{ir}");
     let ir = functions_ir(
         "release_returned",
         vec![function(Ty::Object, vec![MirStmt::Return(Some(attr("a")))])],
