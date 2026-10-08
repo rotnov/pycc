@@ -16,9 +16,10 @@
 //! operand on every path -- the packer contract `foreign_call.rs` records --
 //! so a failed packer needs no edge of its own and the operation has
 //! exactly one: `foreign_fail.rs`'s, on a `NULL` result. The result is a
-//! *new* reference that is deliberately never released, on the leak-only
-//! rule `docs/RUNTIME.md` records for this boundary; a truth context tests
-//! it through `foreign_len::emit_truthy` like any other object.
+//! *new* reference: its consumer releases it when it is an unbound
+//! temporary (`object_release.rs`, Part 1 of #1092), and it is otherwise
+//! leaked on the rule `docs/RUNTIME.md` records for this boundary; a truth
+//! context tests it through `foreign_len::emit_truthy` like any other object.
 //!
 //! **`isinstance`** is `PyObject_IsInstance` behind
 //! [`EXT_OBJ_ISINSTANCE_SYMBOL`], whose `-1` takes the same failure edge.

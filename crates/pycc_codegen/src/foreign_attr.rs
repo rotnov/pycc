@@ -10,14 +10,15 @@
 //! versus an *expression* emitted wherever `emit_expr` reaches it.
 //!
 //! **Ownership** (`docs/RUNTIME.md`). `pycc_ext_obj_getattr` returns a new
-//! reference and nothing here releases it, matching the module object's own
-//! leak-only rule. Unlike the module object, though, an attribute load sits
-//! inside ordinary control flow, so a load in a loop leaks once per
-//! iteration -- the leak is trip-count-linear rather than once per process.
-//! Part 2 accepts that deliberately: D-244 rule 6's kill criterion is a
-//! speed measurement on a hot function, and a release protocol needs the
-//! borrow/own distinction that only arrives with `MirExpr::ObjMethodCall`'s
-//! argument marshalling. The deferral is recorded in `docs/RUNTIME.md`.
+//! reference and nothing here releases it. Whoever consumes the result
+//! decides: since Part 1 of #1092 an *unbound temporary* -- the operand of
+//! another object operation, a condition, a conversion, a discarded
+//! statement value, the iterable of a `for` or a comprehension -- is
+//! released by its consumer (`object_release.rs`), while a result bound to
+//! a name or slot, passed to a user function, returned, or boxed is still
+//! leaked: this boundary's leak-only
+//! rule, which later parts of #1092 narrow further. Such a leak inside a
+//! loop is trip-count-linear rather than once per process.
 
 use super::*;
 use crate::foreign_fail::{ForeignFailEdge, route_null};

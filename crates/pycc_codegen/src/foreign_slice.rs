@@ -18,9 +18,11 @@
 //! its `present` bit clear (bit 0 start, bit 1 stop, bit 2 step), and the
 //! helper hands `PySlice_New` CPython's `None` for it. The base is borrowed.
 //!
-//! **Ownership.** The load's result is a new reference, leaked on the
-//! leak-only rule `foreign_attr.rs` documents. The deletion produces
-//! nothing that outlives the call.
+//! **Ownership.** The load's result is a new reference
+//! (`object_release::is_produced`). A produced base or bound (`o.a[p.i:]`)
+//! is held across the later operands and the operation and released after
+//! it (Part 1 of #1092). The deletion produces nothing that outlives the
+//! call.
 
 use super::*;
 use crate::foreign_attr::expect_object_pointer;
@@ -30,11 +32,14 @@ use inkwell::builder::Builder;
 use inkwell::values::BasicMetadataValueEnum;
 
 /// Evaluates `base` and the present `bounds` in CPython's order, hands the
-/// scalars to `operation`, then releases every evaluated `int` temporary.
+/// scalars to `operation`, then releases every evaluated `int` temporary
+/// and every produced CPython object operand.
 ///
-/// Each bound's temporary stays protected while the later operands
+/// Each bound's `int` temporary stays protected while the later operands
 /// evaluate. The protections are popped in LIFO order before `operation`
-/// runs, and the temporaries are released after it.
+/// runs, and the temporaries are released after it. A produced object
+/// operand is held until after `operation`, whose failure edge releases it
+/// (Part 1 of #1092).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_with_operands<'ctx, T>(
     context: &'ctx Context,
@@ -48,6 +53,13 @@ pub(super) fn emit_with_operands<'ctx, T>(
     operation: impl FnOnce(Scalar<'ctx>, [Option<Scalar<'ctx>>; 3]) -> T,
 ) -> T {
     let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+    let mut holds = vec![crate::object_release::hold(
+        context,
+        module,
+        rt,
+        base,
+        &base_scalar,
+    )];
     let mut pendings = Vec::new();
     let scalars = bounds.map(|bound| {
         bound.map(|bound| {
@@ -60,6 +72,9 @@ pub(super) fn emit_with_operands<'ctx, T>(
                 locals,
                 bound,
             );
+            holds.push(crate::object_release::hold(
+                context, module, rt, bound, &scalar,
+            ));
             pendings.push(push_pending_int_release_if_scalar_temporary(
                 rt, bound, &scalar,
             ));
@@ -70,6 +85,9 @@ pub(super) fn emit_with_operands<'ctx, T>(
         pop_pending_int_release(rt, pending);
     }
     let result = operation(base_scalar, scalars);
+    for held in holds.into_iter().rev() {
+        held.release(builder, rt);
+    }
     for (bound, scalar) in bounds.into_iter().zip(scalars) {
         if let (Some(bound), Some(scalar)) = (bound, scalar) {
             release_scalar_if_int_temporary(context, builder, rt, bound, &scalar);

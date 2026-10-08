@@ -19,6 +19,12 @@ pub(super) struct ExceptionCodegenState<'ctx> {
     /// hot loop reaches, which is what keeps that loop's codegen
     /// unchanged (see `guard_statement_effects`'s own doc comment).
     pub(super) pending_int_releases: RefCell<Vec<IntValue<'ctx>>>,
+    /// The CPython-object counterpart of `pending_int_releases` (Part 1 of
+    /// #1092): produced object temporaries a consumer holds while a sibling
+    /// or the consuming operation itself can still fail. The same two
+    /// unwinds release a snapshot of it, and it is empty at every statement
+    /// boundary; `object_release.rs` owns the push/pop discipline.
+    pub(super) pending_object_releases: RefCell<Vec<crate::object_release::PendingObject<'ctx>>>,
     /// The `ext` module entry's own `top_exception_exit` while its body is
     /// emitted, and `None` otherwise (Part 1 of #1096). When it is also the
     /// innermost entry of `targets`, no module-level `try` encloses the
@@ -34,6 +40,7 @@ impl ExceptionCodegenState<'_> {
             reraise_values: RefCell::new(Vec::new()),
             targets: RefCell::new(Vec::new()),
             pending_int_releases: RefCell::new(Vec::new()),
+            pending_object_releases: RefCell::new(Vec::new()),
             module_exec_exit: Cell::new(None),
         }
     }
@@ -364,16 +371,17 @@ pub(super) fn guard_statement_effects<'ctx>(
         .expect("build_int_compare should not fail");
     let function = builder.get_insert_block().unwrap().get_parent().unwrap();
     let continuation = context.append_basic_block(function, "effect_exc_cont");
-    let pending = rt.exceptions.pending_int_releases.borrow();
-    if pending.is_empty() {
-        drop(pending);
+    // Part 1 of #1092: a held object temporary needs the unwind block
+    // exactly as a held bigint does; both empty keeps the two-block shape.
+    let nothing_pending = rt.exceptions.pending_int_releases.borrow().is_empty()
+        && rt.exceptions.pending_object_releases.borrow().is_empty();
+    if nothing_pending {
         builder
             .build_conditional_branch(has_exc, exception_target, continuation)
             .expect("build_conditional_branch should guard a statement effect");
         builder.position_at_end(continuation);
         return;
     }
-    drop(pending);
     let unwind_bb = context.append_basic_block(function, "effect_exc_unwind");
     builder
         .build_conditional_branch(has_exc, unwind_bb, continuation)
@@ -385,7 +393,8 @@ pub(super) fn guard_statement_effects<'ctx>(
 
 /// Terminates the current block with an unconditional branch to the
 /// innermost exception target, first releasing a snapshot of
-/// `rt.exceptions.pending_int_releases` (#638, D-208).
+/// `rt.exceptions.pending_int_releases` (#638, D-208) and of
+/// `rt.exceptions.pending_object_releases` (Part 1 of #1092).
 ///
 /// The one definition of that unwind: [`guard_statement_effects`] emits it
 /// into its `effect_exc_unwind` block, and `foreign_fail.rs` emits it on a
@@ -412,6 +421,7 @@ pub(super) fn jump_to_exception_target<'ctx>(
     for word in snapshot {
         emit_bigint_refcount_call(context, builder, rt, word, BigIntRefcount::Release);
     }
+    crate::object_release::release_pending(builder, rt);
     builder
         .build_unconditional_branch(exception_target)
         .expect("build_unconditional_branch should not fail for a fresh unwind block");

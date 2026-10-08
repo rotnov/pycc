@@ -49,9 +49,11 @@
 //! exists for a transfer, and this boundary performs none. The `PyObject *`
 //! references the packers create are owned by the array and consumed by
 //! `pycc_ext_obj_call` on every path, so the only thing that outlives the
-//! call is its *result* -- a new reference that is deliberately never
-//! released, on exactly the leak-only rule `foreign_attr.rs` documents for
-//! an attribute load.
+//! call is its *result* -- a new reference whose release is its consumer's
+//! business, exactly as `foreign_attr.rs` documents for an attribute load.
+//! A *produced* argument (`o.m(p.q)`) is a different matter since Part 1 of
+//! #1092: the packer took a reference of its own, so the argument is held
+//! across the call and released after it (`foreign_call_emit.rs`).
 
 use super::*;
 use crate::foreign_attr::{expect_module_exec_entry, expect_object_pointer};
@@ -140,8 +142,9 @@ fn emit_packed_array<'ctx>(
 /// handed to `pycc_ext_obj_build_list`, which consumes every packed
 /// reference on every path -- a failed packer's `NULL` and a failed
 /// `PyList_New` included -- so the display keeps exactly one failure edge,
-/// on a `NULL` result. The list is a new reference, leaked on the same
-/// leak-only rule as every other object this boundary produces (#1092).
+/// on a `NULL` result. The list is a new reference, owned like every other
+/// object this boundary produces: released by its consumer when it is an
+/// unbound temporary (Part 1 of #1092), leaked otherwise.
 pub(super) fn emit_list<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -217,15 +220,21 @@ pub(super) struct ForeignIterLoop<'ctx> {
 /// (Part 1 of #1255, `object_comprehension.rs`) shares the two halves in
 /// any function, which is why each takes its edge from
 /// [`ForeignFailEdge::for_current`].
+///
+/// `held` is the iterable's hold (`object_release::hold`): a produced
+/// iterable (`for x in o.items():`) is released once `iter()` has taken
+/// what it needs, before the loop header (Part 1 of #1092).
 pub(super) fn emit_iter_loop<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
     rt: &RtFns<'ctx>,
     iterable: Scalar<'ctx>,
+    held: crate::object_release::Held<'ctx>,
 ) -> ForeignIterLoop<'ctx> {
     expect_module_exec_entry(builder);
     let iterator = emit_get_iter(context, builder, module, rt, iterable);
+    held.release(builder, rt);
     emit_iter_header(context, builder, module, rt, iterator)
 }
 
@@ -350,7 +359,10 @@ pub(super) fn emit_iter_header<'ctx>(
 ///
 /// The bound method still never becomes a pycc value: it is an LLVM
 /// temporary that dominates the `pycc_ext_obj_call` consuming it, so it is
-/// released rather than joining the boundary's leaked set. Keeping it in an
+/// released rather than joining the boundary's leaked set. If an argument
+/// fails before that call, the bound method is still released: the caller
+/// holds it across the arguments (`foreign_call_emit::emit_method_call`,
+/// Part 1 of #1092). Keeping it in an
 /// SSA value rather than an `alloca` also matters -- an `alloca` here would
 /// grow a module-scope loop's stack per iteration, which is the defect
 /// [`alloca_in_entry_block`] exists to prevent.
@@ -415,7 +427,7 @@ pub(super) fn emit_lookup<'ctx>(
 /// then each argument left to right.
 ///
 /// `pycc_ext_obj_call` consumes `bound` and every packed argument on every
-/// path; only the call's *result* outlives it, on the leak-only rule
+/// path; only the call's *result* outlives it, owned on the rule
 /// `foreign_attr.rs` documents for an attribute load.
 pub(super) fn emit_call<'ctx>(
     context: &'ctx Context,
@@ -473,35 +485,31 @@ pub(super) fn emit_call_borrowed<'ctx>(
 /// Whether an `ObjCall` callee evaluates to a *new* reference that nothing
 /// else holds, so the call may consume it (Part 2a of #1371).
 ///
-/// An allowlist of the shim's own new-reference producers: a subscript load
-/// (`pycc_ext_obj_getitem`), an attribute load (`pycc_ext_obj_getattr`) and
-/// a method or direct call's result (`pycc_ext_obj_call`, or
-/// `pycc_ext_obj_call_kw` with keyword arguments). Each such result
-/// is otherwise leaked under the leak-only rule (#1092), so handing it to
-/// the consuming `pycc_ext_obj_call` is what releases it. Every other
+/// The allowlist of the shim's own new-reference producers is
+/// `object_release::is_produced`'s, the one classification every consumer
+/// of an object temporary shares (Part 1 of #1092): a subscript load, an
+/// attribute load, a method or direct call's result, `type(o)`, a slice, a
+/// list display, a tuple unpack and a rich comparison. Handing such a
+/// result to the consuming `pycc_ext_obj_call` is what releases it. Every other
 /// callee is a *borrow* and goes to `pycc_ext_obj_call_borrowed`: a `Name`
 /// read (#1313), and also the pycc `__class_getitem__` method call that
 /// `C[k]` lowers to for a pycc class base, whose `object` result is the
 /// caller's pointer handed back without a new reference
 /// (`docs/RUNTIME.md`). Consuming that would underflow the refcount; the
 /// borrowed helper is at worst a leak, which is why an unlisted node
-/// defaults to it.
+/// defaults to it. Unlike `object_release::hold`, this does not look through
+/// `MirExpr::ObjectUnbox`: a callee is evaluated by `emit_expr` itself, never
+/// through `object_unbox::emit_pack_operand`, so an unboxed read never
+/// reaches here as an object.
 pub(super) fn callee_is_produced(callee: &MirExpr) -> bool {
-    matches!(
-        callee,
-        MirExpr::ObjSubscript { .. }
-            | MirExpr::ObjAttrGet { .. }
-            | MirExpr::ObjMethodCall { .. }
-            | MirExpr::ObjCall { .. }
-            | MirExpr::ObjKeywordCall(_)
-    )
+    crate::object_release::is_produced(callee)
 }
 
 /// Emits `callee(args)` for an `ObjCall` once the callee and arguments are
 /// evaluated, routing the callee to the consuming or the borrowing shim
 /// helper by its MIR shape ([`callee_is_produced`]). A produced callee whose
-/// arguments raise before this point is not released: the argument's own
-/// failure edge leaves first, on the leak-only rule.
+/// arguments raise before this point is released by the argument's own
+/// failure edge (`foreign_call_emit::emit_direct_call` holds it there).
 pub(super) fn emit_object_call<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -652,9 +660,8 @@ fn emit_call_with<'ctx>(
 /// That is also why no NULL check is emitted on the packed key. A failed
 /// packer stores `NULL`, the shim tests for it and propagates the
 /// already-set exception, and the operation therefore has exactly *one*
-/// failure edge rather than two. The result is a new reference
-/// that is deliberately never released, on the leak-only rule
-/// `foreign_attr.rs` documents for an attribute load.
+/// failure edge rather than two. The result is a new reference, owned
+/// on the rule `foreign_attr.rs` documents for an attribute load.
 pub(super) fn emit_subscript<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
