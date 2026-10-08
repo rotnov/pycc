@@ -765,3 +765,147 @@ fn a_native_comprehension_releases_its_produced_object_filter() {
     assert_eq!(truthy_fail.len(), 1, "{ir}");
     assert_eq!(releases(truthy_fail[0]), 1, "{ir}");
 }
+
+/// `1 // <divisor>`: a native expression that raises `ZeroDivisionError`
+/// through pycc's own exception state, never through a foreign failure
+/// edge.
+fn native_raise(divisor: MirExpr) -> MirExpr {
+    MirExpr::BinOp {
+        op: pycc_mir::BinOpKind::FloorDiv,
+        left: boxed(MirExpr::IntLiteral(1)),
+        right: boxed(divisor),
+        ty: Ty::Int,
+    }
+}
+
+/// `z`: the `int` parameter of the function the native-raise tests build,
+/// so the divisor is a runtime value no pass can fold.
+fn z() -> MirExpr {
+    MirExpr::Name {
+        name: "z".to_string(),
+        ty: Ty::Int,
+    }
+}
+
+/// #1486: a *native* raise in a method call's argument (`copy.m(1 // z)`)
+/// leaves through `guard_statement_effects`' `effect_exc_unwind` block,
+/// which releases the held bound method -- and every produced argument
+/// evaluated before it -- before the branch to the exception target. The
+/// call's own failure edge still releases only the produced arguments: the
+/// call consumed the bound method. The keyword path holds the bound method
+/// across its keyword values the same way.
+#[test]
+fn a_native_raise_in_an_argument_releases_the_bound_method() {
+    let method_call = |args: Vec<MirExpr>| MirExpr::ObjMethodCall {
+        base: boxed(copy_name()),
+        method: "m".to_string(),
+        args,
+    };
+    let keyword_call = |args: Vec<MirExpr>| {
+        MirExpr::ObjKeywordCall(Box::new(ObjKeywordCall {
+            call: method_call(args),
+            names: vec!["k".to_string()],
+            values: vec![native_raise(z())],
+        }))
+    };
+    // (label, call, releases on the native unwind, on the call's failure).
+    let cases = [
+        (
+            "release_native_arg",
+            method_call(vec![native_raise(z())]),
+            1,
+            0,
+        ),
+        (
+            "release_native_later_arg",
+            method_call(vec![attr("a"), native_raise(z())]),
+            2,
+            1,
+        ),
+        ("release_native_keyword", keyword_call(Vec::new()), 1, 0),
+        (
+            "release_native_keyword_after_arg",
+            keyword_call(vec![attr("a")]),
+            2,
+            1,
+        ),
+    ];
+    for (label, call, unwind_releases, call_releases) in cases {
+        let ir = functions_ir(
+            label,
+            vec![MirItem::Function {
+                name: "f".to_string(),
+                params: vec![("z".to_string(), Ty::Int)],
+                return_ty: Ty::None,
+                body: vec![MirStmt::ExprStmt(call), MirStmt::Return(None)],
+            }],
+            &["pyfn_f"],
+        )
+        .remove(0);
+        // A produced earlier argument has a guard of its own; every guard
+        // taken while the bound method is held releases it, and the
+        // native raise's guard is the last one before the call.
+        let unwind = blocks(&ir, "effect_exc_unwind");
+        assert_eq!(unwind.len(), unwind_releases, "{label}\n{ir}");
+        for block in &unwind {
+            let bound = format!("{RELEASE}ptr %foreign_call_bound)");
+            assert_eq!(block.matches(&bound).count(), 1, "{label}\n{ir}");
+        }
+        let native = unwind.last().expect("the native raise's guard");
+        let release = native.find(RELEASE).unwrap_or_else(|| panic!("{ir}"));
+        let branch = native.rfind("br label %").unwrap_or_else(|| panic!("{ir}"));
+        assert!(release < branch, "{label}: release, then branch\n{ir}");
+        assert_eq!(releases(native), unwind_releases, "{label}\n{ir}");
+        let call_fail = blocks(&ir, "foreign_call_fail");
+        assert_eq!(call_fail.len(), 1, "{label}\n{ir}");
+        assert_eq!(releases(call_fail[0]), call_releases, "{label}\n{ir}");
+    }
+}
+
+/// The direct-call form of #1486: `copy.a(copy.b, 1 // z)` holds its
+/// produced callee and its produced earlier argument across the native
+/// raise, and the last unwind releases both before its branch.
+#[test]
+fn a_native_raise_in_an_argument_releases_a_produced_callee() {
+    let ir = functions_ir(
+        "release_native_callee",
+        vec![MirItem::Function {
+            name: "f".to_string(),
+            params: vec![("z".to_string(), Ty::Int)],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::ExprStmt(MirExpr::ObjCall {
+                    callee: boxed(attr("a")),
+                    args: vec![attr("b"), native_raise(z())],
+                }),
+                MirStmt::Return(None),
+            ],
+        }],
+        &["pyfn_f"],
+    )
+    .remove(0);
+    let unwind = blocks(&ir, "effect_exc_unwind");
+    let native = unwind.last().unwrap_or_else(|| panic!("{ir}"));
+    assert_eq!(releases(native), 2, "{ir}");
+    let release = native.find(RELEASE).unwrap_or_else(|| panic!("{ir}"));
+    let branch = native.rfind("br label %").unwrap_or_else(|| panic!("{ir}"));
+    assert!(release < branch, "{ir}");
+}
+
+/// #1486 at module level: outside every `try`, the native raise's unwind
+/// branches to the module's top exception exit, and still releases the
+/// held bound method first.
+#[test]
+fn a_module_level_native_raise_in_an_argument_releases_the_bound_method() {
+    let ir = entry_ir(
+        "release_native_arg_module",
+        vec![MirStmt::ExprStmt(MirExpr::ObjMethodCall {
+            base: boxed(copy_name()),
+            method: "m".to_string(),
+            args: vec![native_raise(MirExpr::IntLiteral(0))],
+        })],
+    );
+    let unwind = blocks(&ir, "effect_exc_unwind");
+    assert_eq!(unwind.len(), 1, "{ir}");
+    assert_eq!(releases(unwind[0]), 1, "the bound method\n{ir}");
+}
