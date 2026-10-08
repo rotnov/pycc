@@ -633,139 +633,6 @@ fn retiring_a_hold_twice_is_an_internal_error() {
     twin.consumed(&rt);
 }
 
-/// A comprehension over a CPython object holds a produced filter across its
-/// truth test and releases a produced element once the packer has taken its
-/// own reference (`[x.v for x in copy.a if x.ok]`).
-#[test]
-fn a_comprehension_releases_its_produced_filter_and_element() {
-    let var = || MirExpr::Name {
-        name: "x".to_string(),
-        ty: Ty::Object,
-    };
-    let comprehension = MirExpr::Comprehension(Box::new(pycc_mir::MirComprehension {
-        var: "x".to_string(),
-        var_ty: Ty::Object,
-        source: pycc_mir::CompSource::Object(attr("a")),
-        cond: Some(attr_of(var(), "ok")),
-        elt: pycc_mir::MirCompElt::List(attr_of(var(), "v")),
-    }));
-    let ir = discard_ir("release_comprehension", comprehension);
-    // The source on `iter()`'s failure edge and right after it, the filter
-    // on its truth test's failure edge and on its fallthrough, the element
-    // right after its packer: nothing else is released (the iterator, each
-    // item and the result stay leaked, later parts of #1092).
-    assert_eq!(releases(&ir), 5, "{ir}");
-    let get_iter_fail = blocks(&ir, "foreign_iter_get_fail");
-    assert_eq!(get_iter_fail.len(), 1, "{ir}");
-    assert_eq!(releases(get_iter_fail[0]), 1, "{ir}");
-    let truthy_fail = blocks(&ir, "foreign_truthy_fail");
-    assert_eq!(truthy_fail.len(), 1, "{ir}");
-    assert_eq!(releases(truthy_fail[0]), 1, "{ir}");
-    let packed = ir
-        .find("@pycc_ext_obj_pack_object(")
-        .expect("the element is packed");
-    let collected = ir
-        .find("@pycc_ext_obj_collect(")
-        .expect("the element is collected");
-    assert_eq!(releases(&ir[packed..collected]), 1, "{ir}");
-}
-
-/// `for x in copy.a:` releases its produced iterable once `iter()` has
-/// returned -- on `iter()`'s failure edge and right after it, before the
-/// loop header -- and nothing inside the loop.
-#[test]
-fn a_for_loop_releases_its_produced_iterable_before_the_header() {
-    let ir = entry_ir(
-        "release_for_iterable",
-        vec![MirStmt::ForObject {
-            var: "x".to_string(),
-            iter: attr("a"),
-            body: Vec::new(),
-        }],
-    );
-    assert_eq!(releases(&ir), 2, "{ir}");
-    let get_iter_fail = blocks(&ir, "foreign_iter_get_fail");
-    assert_eq!(get_iter_fail.len(), 1, "{ir}");
-    assert_eq!(releases(get_iter_fail[0]), 1, "{ir}");
-    let got = ir
-        .find("@pycc_ext_obj_get_iter(")
-        .expect("the iterable is iterated");
-    let header = ir
-        .find("@pycc_ext_obj_iter_next(")
-        .expect("the loop advances");
-    assert_eq!(releases(&ir[got..header]), 2, "{ir}");
-}
-
-/// A comprehension evaluated while an outer operand is held -- here as the
-/// argument of a method call, whose bound method is held across its
-/// arguments -- releases that outer operand on every one of its own
-/// failure edges: `copy.m([x for x in copy.a])`.
-#[test]
-fn a_comprehension_failure_releases_an_outer_held_operand() {
-    let comprehension = MirExpr::Comprehension(Box::new(pycc_mir::MirComprehension {
-        var: "x".to_string(),
-        var_ty: Ty::Object,
-        source: pycc_mir::CompSource::Object(attr("a")),
-        cond: None,
-        elt: pycc_mir::MirCompElt::List(MirExpr::Name {
-            name: "x".to_string(),
-            ty: Ty::Object,
-        }),
-    }));
-    let ir = discard_ir(
-        "release_comprehension_outer",
-        MirExpr::ObjMethodCall {
-            base: boxed(copy_name()),
-            method: "m".to_string(),
-            args: vec![comprehension],
-        },
-    );
-    for label in [
-        "objcomp_result_fail",
-        "foreign_iter_next_fail",
-        "objcomp_collect_fail",
-    ] {
-        let found = blocks(&ir, label);
-        assert_eq!(found.len(), 1, "{label}\n{ir}");
-        assert_eq!(
-            releases(found[0]),
-            1,
-            "{label} releases the bound method\n{ir}"
-        );
-    }
-    // `iter()`'s failure releases the produced source and the bound method.
-    let get_iter_fail = blocks(&ir, "foreign_iter_get_fail");
-    assert_eq!(get_iter_fail.len(), 1, "{ir}");
-    assert_eq!(releases(get_iter_fail[0]), 2, "{ir}");
-}
-
-/// A native comprehension (`[i for i in range(2) if copy.a]`) holds a
-/// produced CPython-object filter across its truth test and releases it on
-/// that test's failure edge and on its fallthrough, once per iteration.
-#[test]
-fn a_native_comprehension_releases_its_produced_object_filter() {
-    let int = |value: i64| MirExpr::IntLiteral(value);
-    let comprehension = MirExpr::Comprehension(Box::new(pycc_mir::MirComprehension {
-        var: "i".to_string(),
-        var_ty: Ty::Int,
-        source: pycc_mir::CompSource::Range {
-            start: int(0),
-            stop: int(2),
-            step: int(1),
-        },
-        cond: Some(attr("a")),
-        elt: pycc_mir::MirCompElt::List(MirExpr::Name {
-            name: "i".to_string(),
-            ty: Ty::Int,
-        }),
-    }));
-    let ir = discard_ir("release_native_comprehension_filter", comprehension);
-    assert_eq!(releases(&ir), 2, "{ir}");
-    let truthy_fail = blocks(&ir, "foreign_truthy_fail");
-    assert_eq!(truthy_fail.len(), 1, "{ir}");
-    assert_eq!(releases(truthy_fail[0]), 1, "{ir}");
-}
-
 /// `1 // <divisor>`: a native expression that raises `ZeroDivisionError`
 /// through pycc's own exception state, never through a foreign failure
 /// edge.
@@ -909,3 +776,9 @@ fn a_module_level_native_raise_in_an_argument_releases_the_bound_method() {
     assert_eq!(unwind.len(), 1, "{ir}");
     assert_eq!(releases(unwind[0]), 1, "the bound method\n{ir}");
 }
+
+#[path = "object_release_iteration_tests.rs"]
+mod iteration;
+
+#[path = "object_release_operand_tests.rs"]
+mod operand;

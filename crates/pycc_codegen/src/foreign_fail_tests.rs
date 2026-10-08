@@ -576,7 +576,8 @@ fn a_module_failure_after_a_try_keeps_the_direct_return() {
 
 /// A foreign `for` inside a module-level `try`: both of the loop's
 /// failure blocks -- `iter()` and a raising `__next__` -- bridge to the
-/// handler dispatch.
+/// handler dispatch, the second through the loop's cleanup block, which
+/// releases the iterator first (Part 3 of #1092).
 #[test]
 fn a_module_try_foreign_for_loop_bridges_both_failure_points() {
     let ir = entry_ir(
@@ -603,6 +604,17 @@ fn a_module_try_foreign_for_loop_bridges_both_failure_points() {
     );
     assert!(
         next_fail
+            .trim_end()
+            .ends_with("br label %foreign_iter_cleanup"),
+        "{ir}"
+    );
+    let cleanup = block(&ir, "foreign_iter_cleanup");
+    assert!(
+        cleanup.contains("call void @pycc_ext_obj_release(ptr %foreign_iter_get)"),
+        "{ir}"
+    );
+    assert!(
+        cleanup
             .trim_end()
             .ends_with("br label %try_handler_dispatch"),
         "{ir}"

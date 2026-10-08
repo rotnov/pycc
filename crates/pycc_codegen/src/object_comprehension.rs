@@ -23,11 +23,16 @@
 //! # Ownership
 //!
 //! A produced source (`[e for e in s.items]`) is released right after
-//! `iter()` has taken its own reference (Part 1 of #1092). The iterator,
-//! each item and the result are new references this boundary still leaks
-//! (#1092, `docs/RUNTIME.md`): the result is the
-//! comprehension's value, and the loop variable's slot holds the borrowed
-//! item without refcount traffic, exactly as `MirStmt::ForObject`'s target.
+//! `iter()` has taken its own reference (Part 1 of #1092). The iterator and
+//! the result collection are held on `pending_object_releases` from the
+//! moment each exists (Part 3 of #1092), so every failure edge below
+//! releases both; the normal exit releases the iterator and hands the
+//! result on as the node's value, which `object_release::is_produced`
+//! lists as a producer, so an unbound result is released by its consumer.
+//! Each item is a new reference this boundary still leaks (#1499,
+//! `docs/RUNTIME.md`): the loop variable's slot holds it without refcount
+//! traffic, exactly as `MirStmt::ForObject`'s target, and the element or
+//! condition can hand it to a user function that stores it.
 //! A pycc `int` temporary built by the condition or the element is released
 //! once it has been tested or packed, since the packers borrow their operand,
 //! and so is a produced CPython object condition or element (`if x.ok()`,
@@ -83,6 +88,11 @@ pub(super) fn emit_object_comprehension<'ctx>(
     let held_source = crate::object_release::hold(context, module, rt, iterable, &source);
     let iterator = foreign_call::emit_get_iter(context, builder, module, rt, source);
     held_source.release(builder, rt);
+    // Part 3 of #1092: the iterator and, once it exists, the result are
+    // held for the comprehension's whole extent -- an expression, so no
+    // `try` can catch inside it -- and every failure edge below releases
+    // both.
+    let held_iterator = crate::object_release::hold_new_reference(context, module, rt, iterator);
 
     let edge = ForeignFailEdge::for_current(builder);
     let new_collection = shim_fn(
@@ -106,6 +116,8 @@ pub(super) fn emit_object_comprehension<'ctx>(
         collection,
         "objcomp_result",
     );
+    let held_collection =
+        crate::object_release::hold_new_reference(context, module, rt, collection);
 
     let lp = foreign_call::emit_iter_header(context, builder, module, rt, iterator);
     builder
@@ -169,5 +181,10 @@ pub(super) fn emit_object_comprehension<'ctx>(
         .expect("build_unconditional_branch should not fail closing the loop body");
 
     builder.position_at_end(lp.after_bb);
+    held_iterator.release(builder, rt);
+    // The result is the comprehension's value: a producer
+    // (`object_release::is_produced`), which its consumer releases or
+    // binds.
+    held_collection.consumed(rt);
     Scalar::Object(collection)
 }

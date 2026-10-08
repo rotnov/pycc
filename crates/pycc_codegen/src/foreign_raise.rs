@@ -9,7 +9,8 @@
 //! emits, and `emit_body` replaces it with a branch to the innermost
 //! exception target: an enclosing `try`, the function's exceptional exit,
 //! or the module body's exit, which hands the original object back to the
-//! host.
+//! host. A produced operand is released right after the helper returns
+//! (Part 3 of #1092).
 //!
 //! Unlike the other foreign-object operations this one takes no
 //! [`crate::foreign_fail::ForeignFailEdge`]: every `raise` raises, so
@@ -41,6 +42,11 @@ pub(super) fn emit_obj_raise<'ctx>(
     builder
         .build_call(raise, &[expect_object_pointer(scalar).into()], "")
         .expect("build_call should not fail for pycc_ext_obj_raise");
+    // Part 3 of #1092: a produced operand (`raise o.Error()`) is released
+    // once the helper is done with it. The raised exception outlives it:
+    // `PyErr_SetObject` takes its own reference to the instance, which the
+    // bridge table then owns, and an instance keeps its class alive.
+    crate::object_release::release_if_produced(context, builder, module, value, &scalar);
     // The same marker `MirStmt::Raise` leaves for `emit_body` to route.
     builder
         .build_unreachable()

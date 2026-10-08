@@ -7582,15 +7582,15 @@ fn emit_stmt<'ctx>(
         MirStmt::ForObject { var, iter, body } => {
             let iterable = emit_expr(context, builder, module, rt, user_functions, locals, iter);
             let held = object_release::hold(context, module, rt, iter, &iterable);
-            let loop_blocks =
+            let (loop_blocks, iterator) =
                 foreign_call::emit_iter_loop(context, builder, module, rt, iterable, held);
             // Stored directly rather than through `emit_assign`, which also
             // stores a `Scalar::Object` since #1325 but predates this arm's
             // own store and is kept separate: a `for` target is this
             // construct's own binding. The store carries no refcount
-            // traffic -- the item is a new reference this boundary
-            // deliberately leaks (#1092), so there is nothing to release
-            // when the next iteration overwrites the slot.
+            // traffic -- the item is a new reference this boundary still
+            // leaks (#1499), so there is nothing to release when the next
+            // iteration overwrites the slot.
             let slot = locals
                 .get(var)
                 .cloned()
@@ -7628,6 +7628,9 @@ fn emit_stmt<'ctx>(
                 );
             }
             builder.position_at_end(loop_blocks.after_bb);
+            // Part 3 of #1092: the normal exit releases the iterator; every
+            // exception edge already did through its cleanup target.
+            iterator.exit(builder, rt);
             Ok(())
         }
         // Part 2 of #1175 (#1179): `return b[start:stop]` for a

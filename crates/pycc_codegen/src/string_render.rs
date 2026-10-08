@@ -31,6 +31,7 @@ use inkwell::context::Context;
 use inkwell::values::PointerValue;
 use pycc_mir::MirExpr;
 
+use crate::object_release::{self, Held};
 use crate::{
     RtFns, Scalar, StorageSlot, UserFunction, emit_expr, emit_string_literal, foreign_len,
     incref_if_str_duplicate, release_scalar_if_int_temporary, to_str,
@@ -204,25 +205,31 @@ pub(super) fn emit_print_call<'ctx>(
     locals: &HashMap<String, StorageSlot<'ctx>>,
     args: &[MirExpr],
 ) {
-    let mut evaluated: Vec<PrintArg<'ctx>> = Vec::with_capacity(args.len());
+    // Part 3 of #1092: a produced object argument (`print(o.x)`) is held
+    // from its evaluation until its own phase-2 `str()` has run, so a later
+    // argument's failure, or an earlier argument's conversion failure,
+    // releases it; it is released right after its conversion.
+    let mut evaluated: Vec<(PrintArg<'ctx>, Option<Held<'ctx>>)> = Vec::with_capacity(args.len());
     for arg in args.iter() {
-        evaluated.push(emit_eval_print_arg(
-            context,
-            builder,
-            module,
-            rt,
-            user_functions,
-            locals,
-            arg,
-        ));
+        let value = emit_eval_print_arg(context, builder, module, rt, user_functions, locals, arg);
+        let held = match value {
+            PrintArg::Object(scalar) => {
+                Some(object_release::hold(context, module, rt, arg, &scalar))
+            }
+            PrintArg::None | PrintArg::Str(_) => None,
+        };
+        evaluated.push((value, held));
     }
-    for (i, arg) in evaluated.into_iter().enumerate() {
+    for (i, (arg, held)) in evaluated.into_iter().enumerate() {
         if i > 0 {
             builder
                 .build_call(rt.print_space, &[], "print_sep")
                 .expect("build_call should not fail for a well-formed print separator");
         }
         emit_write_print_arg(context, builder, module, rt, arg);
+        if let Some(held) = held {
+            held.release(builder, rt);
+        }
     }
     builder
         .build_call(rt.print_newline, &[], "print_end")
@@ -254,7 +261,12 @@ pub(super) fn emit_fstring_interpolation<'ctx>(
         // the converted `str`, it would treat an object-typed `inner` as a
         // borrowed `str` read.
         let as_str = if matches!(scalar, Scalar::Object(_)) {
-            foreign_len::emit_format(context, builder, module, rt, scalar)
+            // Part 3 of #1092: a produced part (`f"{o.x}"`) is held across
+            // its own `format()` and released once it is text.
+            let held = object_release::hold(context, module, rt, inner, &scalar);
+            let text = foreign_len::emit_format(context, builder, module, rt, scalar);
+            held.release(builder, rt);
+            text
         } else {
             to_str(builder, rt, scalar)
         };

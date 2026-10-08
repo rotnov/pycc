@@ -186,9 +186,9 @@ pub(super) struct ForeignIterLoop<'ctx> {
     pub header_bb: inkwell::basic_block::BasicBlock<'ctx>,
     /// Where control resumes after clean exhaustion.
     pub after_bb: inkwell::basic_block::BasicBlock<'ctx>,
-    /// A *new* reference to this iteration's item, deliberately never
-    /// released -- this is the reference that makes the boundary's leak
-    /// trip-count-linear (#1092).
+    /// A *new* reference to this iteration's item, still never released:
+    /// the loop variable's slot holds it without a reference of its own,
+    /// and releasing it needs the bound-value model (#1499).
     pub item: PointerValue<'ctx>,
 }
 
@@ -224,6 +224,13 @@ pub(super) struct ForeignIterLoop<'ctx> {
 /// `held` is the iterable's hold (`object_release::hold`): a produced
 /// iterable (`for x in o.items():`) is released once `iter()` has taken
 /// what it needs, before the loop header (Part 1 of #1092).
+///
+/// The iterator itself is owned by the returned
+/// [`LoopIterator`](crate::object_release::LoopIterator) from the moment
+/// `iter()` succeeds (Part 3 of #1092): its cleanup target, installed
+/// before the header, releases it on every exception edge out of the
+/// header and the body, and the caller calls its `exit` at `after_bb`
+/// once the body is emitted.
 pub(super) fn emit_iter_loop<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -231,16 +238,26 @@ pub(super) fn emit_iter_loop<'ctx>(
     rt: &RtFns<'ctx>,
     iterable: Scalar<'ctx>,
     held: crate::object_release::Held<'ctx>,
-) -> ForeignIterLoop<'ctx> {
+) -> (
+    ForeignIterLoop<'ctx>,
+    crate::object_release::LoopIterator<'ctx>,
+) {
     expect_module_exec_entry(builder);
     let iterator = emit_get_iter(context, builder, module, rt, iterable);
     held.release(builder, rt);
-    emit_iter_header(context, builder, module, rt, iterator)
+    let owned = crate::object_release::enter_loop_iterator(context, builder, module, rt, iterator);
+    (
+        emit_iter_header(context, builder, module, rt, iterator),
+        owned,
+    )
 }
 
 /// The preheader half of [`emit_iter_loop`]: `iter(iterable)`, with its
 /// NULL routed to the current function's failure edge. Returns the
-/// iterator, a *new* reference that is deliberately never released (#1092).
+/// iterator, a *new* reference the caller owns and releases on every exit
+/// (Part 3 of #1092): [`emit_iter_loop`] through its
+/// `object_release::LoopIterator`, a comprehension over an object through
+/// the pending stack.
 pub(super) fn emit_get_iter<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,

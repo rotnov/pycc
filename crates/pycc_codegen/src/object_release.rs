@@ -51,19 +51,51 @@
 //! shape, so a function that performs no object operation (the D-084/D-140
 //! nbody hot loop) emits exactly the code it always did.
 //!
-//! **Not yet released** (later parts of #1092): a produced value bound to a
-//! name or slot, passed to a user function, returned, or boxed; the
-//! iterator and per-trip item of `for x in <object>:` and of a
-//! comprehension over one, and the comprehension's result; an operand of
-//! `print`, an f-string, `hash`, `raise`, a conditional expression or a
-//! boolean operator. The *iterable* of such a loop or comprehension is
-//! released, right after `iter()` has taken its own reference. The read of
-//! a narrowed `object` name
-//! (`MirExpr::ObjectUnbox`) needs no release: its operand is always a
-//! borrowed slot.
+//! **Iteration and operand temporaries** (Part 3 of #1092). The iterator
+//! `pycc_ext_obj_get_iter` returns for a comprehension over an object, and
+//! that comprehension's result collection while it is being filled, are
+//! held on the same pending stack for the comprehension's whole extent --
+//! an expression, so no `try` can sit inside it -- and the iterator is
+//! released at the loop's exit. A comprehension over an object is itself
+//! a producer in [`is_produced`], so an unbound result (`len([...])`, a
+//! discarded one) is released by the consumer that reads it.
+//!
+//! A `for x in <object>:` statement's iterator cannot use that stack: the
+//! loop body is a statement suite, and a `try` inside it would release the
+//! iterator on its own caught edge. [`enter_loop_iterator`] instead pushes
+//! a *cleanup block* onto the exception-target stack -- release the
+//! iterator, then branch to the target that enclosed the loop -- so every
+//! exception edge out of the body runs it, and [`LoopIterator::exit`]
+//! releases the iterator on the normal exit. The module-exec direct return
+//! (`foreign_fail::emit_failure`) looks through those blocks with
+//! [`loop_iterators_above_handler`] and releases their iterators itself,
+//! so a failure in the loop still fails the import with CPython's own
+//! exception set. `break` is not admitted yet (C0001), so the loop has no
+//! third exit.
+//!
+//! The operand of `print`, of an f-string interpolation and of
+//! `raise <object>` is a consumer like any other, and so is the condition
+//! of a conditional expression and every operand of a truth-only `and`/`or`.
+//! A value `and`/`or` holds its left operand across that operand's truth
+//! test and releases it on the arm that discards it; the node is a
+//! producer itself only when every arm it can select is owned (a produced
+//! object or a boxed native value), and a conditional expression only when
+//! both of its arms are produced objects.
+//!
+//! **Not yet released** (#1499): a produced value bound to a name or slot,
+//! passed to a user function, returned, or boxed; the per-trip item of
+//! `for x in <object>:` and of a comprehension over one, which the loop
+//! variable's slot holds without a reference of its own -- a body can hand
+//! it to a user function that stores it, so releasing it at the trip's end
+//! needs the bound-value model; and the result of an `and`/`or` or a
+//! conditional expression whose arms mix produced and borrowed objects.
+//! `hash(<object>)` is not admitted yet (C0001), so it has no site. The
+//! read of a narrowed `object` name (`MirExpr::ObjectUnbox`) needs no
+//! release: its operand is always a borrowed slot.
 
 use super::*;
 use crate::ext::EXT_OBJ_RELEASE_SYMBOL;
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 
 /// One held reference: the pointer and the release helper declared in the
@@ -101,8 +133,40 @@ pub(super) fn is_produced(expr: &MirExpr) -> bool {
         | MirExpr::ObjList { .. }
         | MirExpr::ObjUnpack { .. } => true,
         MirExpr::ObjCompare { .. } => expr.ty() == pycc_mir::Ty::Object,
+        // Part 3 of #1092: the fresh CPython `list`/`set` the comprehension
+        // builds (`object_comprehension.rs`).
+        MirExpr::Comprehension(comp) => matches!(comp.source, pycc_mir::CompSource::Object(_)),
+        MirExpr::BoolOp {
+            left,
+            right,
+            ty: pycc_mir::Ty::Object,
+            truth_only: false,
+            ..
+        } => owned_arm(left) && owned_arm(right),
+        MirExpr::IfExp {
+            body,
+            orelse,
+            ty: pycc_mir::Ty::Object,
+            ..
+        } => is_produced_object(body) && is_produced_object(orelse),
         _ => false,
     }
+}
+
+/// Whether `operand`, an arm an `object`-valued `and`/`or` can select, is
+/// a reference the node owns: a produced object, or a native value
+/// `boolop.rs` boxes into a new reference (`boolop::needs_boxing`). An
+/// arm of any other type is never treated as owned.
+fn owned_arm(operand: &MirExpr) -> bool {
+    match operand.ty() {
+        pycc_mir::Ty::Bool | pycc_mir::Ty::Int | pycc_mir::Ty::Float | pycc_mir::Ty::Str => true,
+        _ => is_produced_object(operand),
+    }
+}
+
+/// Whether `operand` is an `object` arm evaluated to a produced reference.
+fn is_produced_object(operand: &MirExpr) -> bool {
+    operand.ty() == pycc_mir::Ty::Object && is_produced(operand_source(operand))
 }
 
 /// The node an operand's value really comes from:
@@ -248,6 +312,104 @@ pub(super) fn release_pending<'ctx>(builder: &Builder<'ctx>, rt: &RtFns<'ctx>) {
     let snapshot: Vec<PendingObject<'ctx>> = rt.exceptions.pending_object_releases.borrow().clone();
     for object in snapshot.into_iter().rev() {
         emit_release(builder, object);
+    }
+}
+
+/// One entry of `ExceptionCodegenState::loop_iterators`: an enclosing
+/// `for x in <object>:` loop's cleanup target and the iterator it releases.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) struct LoopCleanup<'ctx> {
+    block: BasicBlock<'ctx>,
+    iterator: PendingObject<'ctx>,
+}
+
+/// The iterator of a `for x in <object>:` statement, owned from the moment
+/// `iter()` succeeds until the loop exits, on every path (Part 3 of #1092).
+#[must_use = "a loop iterator must be exited, or the exception-target stack drifts"]
+pub(super) struct LoopIterator<'ctx>(LoopCleanup<'ctx>);
+
+/// Takes ownership of `iterator`, the new reference `iter()` just returned,
+/// for the loop about to be emitted at the builder's position: appends a
+/// `foreign_iter_cleanup` block that releases it and branches to the
+/// exception target enclosing the loop, and installs that block as the
+/// innermost target, so every exception edge out of the loop's header and
+/// body -- the guard, a foreign failure's bridge, an explicit `raise`, a
+/// handler's re-raise -- releases the iterator before it unwinds further.
+pub(super) fn enter_loop_iterator<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    iterator: PointerValue<'ctx>,
+) -> LoopIterator<'ctx> {
+    let iterator = PendingObject {
+        pointer: iterator,
+        release: release_fn(context, module),
+    };
+    let enclosing = *rt
+        .exceptions
+        .targets
+        .borrow()
+        .last()
+        .expect("a loop is always emitted inside an exception target");
+    let current = builder
+        .get_insert_block()
+        .expect("the builder is positioned inside a block");
+    let function = current
+        .get_parent()
+        .expect("every basic block belongs to a function");
+    let block = context.append_basic_block(function, "foreign_iter_cleanup");
+    builder.position_at_end(block);
+    emit_release(builder, iterator);
+    builder
+        .build_unconditional_branch(enclosing)
+        .expect("build_unconditional_branch should not fail for a fresh cleanup block");
+    builder.position_at_end(current);
+    let cleanup = LoopCleanup { block, iterator };
+    rt.exceptions.targets.borrow_mut().push(block);
+    rt.exceptions.loop_iterators.borrow_mut().push(cleanup);
+    LoopIterator(cleanup)
+}
+
+impl<'ctx> LoopIterator<'ctx> {
+    /// Uninstalls the loop's cleanup target once its body is emitted, and
+    /// releases the iterator at the builder's position: the loop's normal
+    /// exit, which the exhausted iterator branches to.
+    pub(super) fn exit(self, builder: &Builder<'ctx>, rt: &RtFns<'ctx>) {
+        let target = rt.exceptions.targets.borrow_mut().pop();
+        let cleanup = rt.exceptions.loop_iterators.borrow_mut().pop();
+        assert!(
+            target == Some(self.0.block) && cleanup == Some(self.0),
+            "pycc_codegen: internal error: a loop's cleanup target is not the innermost one \
+             at its exit"
+        );
+        emit_release(builder, self.0.iterator);
+    }
+}
+
+/// The innermost exception target once the cleanup blocks of the loops
+/// directly above it are looked through, and those loops' iterators,
+/// innermost first -- for `foreign_fail::emit_failure`, which keeps its
+/// direct module-exec return when that target is the entry's own exit and
+/// must then release the iterators the skipped blocks would have.
+pub(super) fn loop_iterators_above_handler<'ctx>(
+    rt: &RtFns<'ctx>,
+) -> (Option<BasicBlock<'ctx>>, Vec<PendingObject<'ctx>>) {
+    let targets = rt.exceptions.targets.borrow();
+    let loops = rt.exceptions.loop_iterators.borrow();
+    let mut iterators = Vec::new();
+    let handler = targets.iter().rev().copied().find(|target| {
+        let cleanup = loops.iter().find(|cleanup| cleanup.block == *target);
+        iterators.extend(cleanup.map(|cleanup| cleanup.iterator));
+        cleanup.is_none()
+    });
+    (handler, iterators)
+}
+
+/// Emits a release of each of `objects`, in order.
+pub(super) fn release_all<'ctx>(builder: &Builder<'ctx>, objects: &[PendingObject<'ctx>]) {
+    for object in objects {
+        emit_release(builder, *object);
     }
 }
 
