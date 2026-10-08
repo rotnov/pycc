@@ -291,7 +291,11 @@ directory once project mode exists.
                     directory reached by climbing from the entry's
                     directory while each holds an `__init__.py` (`lark`
                     for `lark/parsers/lalr_parser_state.py`), read from the
-                    source tree and never from `pycc.toml`. Every shape an
+                    source tree and never from `pycc.toml`. The climb
+                    follows the entry path as spelled, made absolute with
+                    `..` folded, so a package directory reached through a
+                    symlink is named by the link, the name it is imported
+                    under, and not by its target. Every shape an
                     absolute import of a non-project root takes binds
                     foreign (`from lark.exceptions import E`,
                     `from lark import x`, `import lark`,

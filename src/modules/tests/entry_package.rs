@@ -307,3 +307,52 @@ fn without_the_flag_a_package_named_like_a_native_std_module_loads() {
     let program = load(&entry, None).unwrap_or_else(|failure| panic!("{}", describe(&failure)));
     assert_eq!(file_names(&program), vec!["m.py".to_string()]);
 }
+
+/// The own package is read from the entry's spelling, not its canonical
+/// path (#1382): a package directory reached through a symlink `alias ->
+/// real` is imported as `alias`, so `from alias.x import v` is foreign while
+/// `from real.x import w` names another project package and links
+/// `real/x.py` natively.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_package_is_named_by_its_spelling() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "real/__init__.py", "");
+    write(&scratch, "real/x.py", "v: int = 1\nw: int = 2\n");
+    write(&scratch, "real/pkg/__init__.py", "");
+    write(
+        &scratch,
+        "real/pkg/m.py",
+        "from alias.x import v\nfrom real.x import w\n",
+    );
+    std::os::unix::fs::symlink(scratch.join("real"), scratch.join("alias")).expect("symlink");
+    let entry = scratch.join("alias/pkg/m.py");
+    let program = must_load_foreign(&entry);
+    assert_eq!(
+        entry_foreign_from_imports(&program),
+        vec![("alias.x".to_string(), "v".to_string(), 0)]
+    );
+    assert_eq!(
+        file_names(&program),
+        vec![
+            "__init__.py".to_string(),
+            "x.py".to_string(),
+            "m.py".to_string()
+        ]
+    );
+}
+
+/// A `..` in the entry's spelling is folded before the climb, so it never
+/// reads as a directory name.
+#[test]
+fn the_entry_spelling_is_folded_before_the_climb() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    package_tree(&scratch, "from top.other import y\n");
+    let entry = scratch.join("top/pkg/../pkg/./m.py");
+    let canonical = entry.canonicalize().expect("canonical");
+    let spelled = spelled_path(&entry, &canonical);
+    assert_eq!(spelled, scratch.join("top/pkg/m.py"));
+    assert_eq!(top_level_package(&spelled), Some("top".to_string()));
+    let program = must_load_foreign(&entry);
+    assert_eq!(file_names(&program), vec!["m.py".to_string()]);
+}

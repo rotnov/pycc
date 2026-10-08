@@ -26,7 +26,7 @@ use pycc_hir::{
     LoweredModule, ProjectImportRequest, ResolvedImport, ResolvedImports, ResolvedModule,
 };
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// One loaded project module: the path diagnostics render for it, its
 /// decoded source (kept so a later pass can render against it), and its
@@ -199,7 +199,9 @@ pub(crate) fn load_with(
         manifest: None,
         entry_module_name: entry_module_name.map(str::to_string),
         entry_package: match relative_imports {
-            RelativeImports::ForeignFromEntry => top_level_package(&canonical),
+            RelativeImports::ForeignFromEntry => {
+                top_level_package(&spelled_path(entry, &canonical))
+            }
             RelativeImports::Project => None,
         },
         relative_imports,
@@ -800,6 +802,27 @@ fn submodule_names(dir: &Path) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+/// `entry` made absolute without resolving symlinks, the spelling the
+/// package name is read from (#1382): a package directory reached through a
+/// symlink `alias -> real` is imported as `alias`, so climbing the
+/// canonical path would name `real`. [`std::path::absolute`] already drops
+/// `.` components and keeps `..`, which is folded lexically here so the
+/// climb never meets a `..` directory name; `canonical` stands in only when
+/// the working directory cannot be read.
+fn spelled_path(entry: &Path, canonical: &Path) -> PathBuf {
+    let absolute = std::path::absolute(entry).unwrap_or_else(|_| canonical.to_path_buf());
+    let mut folded = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::ParentDir => {
+                folded.pop();
+            }
+            other => folded.push(other),
+        }
+    }
+    folded
 }
 
 /// The name of the top-level package the module file `entry` belongs to
