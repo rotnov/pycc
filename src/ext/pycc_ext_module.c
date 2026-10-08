@@ -347,7 +347,9 @@ static pycc_ext_bridge_table *pycc_ext_bridge_reserve(void)
  * module object created from one shared object (the same artifact imported
  * under a second name) shares both. Read and written only with the GIL
  * held: a free-threaded build is refused at compile time, because
- * CPython's `Python.h` rejects `Py_LIMITED_API` under `Py_GIL_DISABLED`.
+ * CPython's `Python.h` rejects `Py_LIMITED_API` under `Py_GIL_DISABLED`,
+ * and a free-threaded interpreter loading this abi3 artifact is refused at
+ * import, by the `Py_GetVersion()` guard in `PyInit_`.
  * A frame that released the GIL inside a foreign call is still counted.
  */
 static Py_ssize_t pycc_ext_live_activations = 0;

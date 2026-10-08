@@ -2039,7 +2039,7 @@ host-held positive control shows the probe sees exactly that, and the same
 test run against the Part 1 compiler reports every one of these leaks.
 
 **A module global owns its reference and a rebind releases the previous one
-(Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499),
+when it is the only live activation (Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499),
 [#1501](https://github.com/rotnov/pycc/issues/1501)).** Since
 [#1325](https://github.com/rotnov/pycc/issues/1325) a producer's result may be
 bound to a module-level name (`x = product("ab")`). Every store into a
@@ -2086,8 +2086,10 @@ hash slot, a PEP 562 hook, `Py_tp_init`) -- and the store's release branch
 also requires `pycc_ext_obj_rebind_may_release()`, which is 1 only when the
 count is 1. The count is a file static, so it is per artifact, like the
 slots it guards; it is read and written with the GIL held, and a
-free-threaded build is refused at compile time because CPython's `Python.h`
-rejects `Py_LIMITED_API` under `Py_GIL_DISABLED`. Within the rebinding
+free-threaded host is refused twice: at compile time, because CPython's
+`Python.h` rejects `Py_LIMITED_API` under `Py_GIL_DISABLED`, and at import,
+because the shim's `PyInit_` refuses an interpreter whose `Py_GetVersion()`
+names a free-threading build. Within the rebinding
 exec's own activation no frame can hold a borrowed copy across the store:
 only the module body stores a global (`global` is refused with `C0001`), a
 compiled function it calls has returned before its next statement, and
@@ -2103,7 +2105,9 @@ as plain Python, and requires the same live-object count, dead weak
 references, `sys.getrefcount` deltas and re-entrant finalizer observation,
 at two trip counts and once under `-X dev` with `PYTHONMALLOC=debug`; its
 nested-exec test pins that a body re-imported beneath itself leaks each
-value it rebinds while both outer and nested reads see a live object.
+value it rebinds while both outer and nested reads see a live object, and
+its wrapper test pins the same beneath a host's call into a compiled
+export.
 
 **A function body adds no reference traffic of its own.** Since Part 1 of
 [#1333](https://github.com/rotnov/pycc/issues/1333)

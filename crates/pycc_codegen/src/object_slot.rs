@@ -135,8 +135,10 @@ pub(super) fn declare_owned_bits<'ctx>(
 /// slots and PEP 562 hooks, and `Py_tp_init`). No other entry runs compiled
 /// code: a carrier's `__copy__` and `tp_dealloc` run only the runtime. It is
 /// per artifact (a file static in each artifact's own shim), read with the
-/// GIL held, and a free-threaded build is refused at compile time
-/// (`Python.h` rejects `Py_LIMITED_API` under `Py_GIL_DISABLED`).
+/// GIL held, and a free-threaded host is refused both at compile time
+/// (`Python.h` rejects `Py_LIMITED_API` under `Py_GIL_DISABLED`) and at
+/// import (the shim's `PyInit_` refuses an interpreter whose
+/// `Py_GetVersion()` names a free-threading build).
 ///
 /// Each of these invalidates the argument and must revisit this part first:
 /// lowering `global` (a function would then write the slot), generator

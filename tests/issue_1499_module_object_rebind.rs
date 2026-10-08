@@ -442,6 +442,74 @@ fn a_rebind_beneath_another_live_exec_leaks_instead_of_releasing() {
     assert_eq!(oracle, "held Thing Thing\nx Thing\nlive 1 dead 7\n");
 }
 
+/// The module under test for a wrapper-entered activation: the body only
+/// binds `x`; the host later calls the export `probe`, which keeps `x`
+/// borrowed as an argument across `s.nest()`, so the same body runs again
+/// beneath a live wrapper frame rather than beneath another exec.
+const WRAPPED_MODULE: &str = "\
+import pycc_t1499_stub as s
+
+
+def get_x() -> object:
+    return x
+
+
+def probe() -> None:
+    s.hold(x, s.nest())
+
+
+x: object = s.fresh()
+x = s.fresh()
+x = s.fresh()
+";
+
+/// #1501: a compiled call a host entered through a wrapper is a live
+/// activation too. The outer exec has returned, so `probe`'s wrapper is the
+/// only other activation while the nested exec rebinds; the nested rebinds
+/// leak, and `hold` reads a live object. The outer exec, which ran alone,
+/// released what it rebound: the positive control.
+///
+/// Compiled, the outer body makes `a1`..`a3`, releasing `a1` and `a2`.
+/// `probe` holds `a3` across the nested body, which makes `b1`..`b3`: the
+/// bit it clears at its entry leaves `a3` unreleased, and the gate leaves
+/// `b1` and `b2` unreleased. Alive: `a3`, `b1`, `b2`, `b3`; dead: `a1`,
+/// `a2`. Were the wrapper frame not counted, the nested exec would see
+/// itself alone and release `b1` and `b2` (`live 2 dead 4`). CPython's
+/// nested module is collected with its `b3`: alive `a3`, dead the rest.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_rebind_beneath_a_live_wrapper_call_leaks_instead_of_releasing() {
+    let dir = build(
+        "t1499_wrapped",
+        &[("pycc_t1499_wrapped_exec", WRAPPED_MODULE)],
+    );
+    let script = format!(
+        "{PRELUDE}\
+         s.NEST = name\n\
+         live = s.LIVE\n\
+         m = importlib.import_module(name)\n\
+         gc.collect()\n\
+         report('after import', s.LIVE - live, 'dead', dead())\n\
+         m.probe()\n\
+         gc.collect()\n\
+         report('held', *s.HELD)\n\
+         report('x', type(m.get_x()).__name__)\n\
+         report('live', s.LIVE - live, 'dead', dead())\n"
+    );
+    let flags: &[&str] = &["-X", "dev"];
+    let env = &[("PYTHONMALLOC", "debug")];
+    let compiled = python(&dir, flags, env, "pycc_t1499_wrapped_exec", &script);
+    let oracle = python(&dir, flags, env, "pycc_t1499_wrapped_exec_py", &script);
+    assert_eq!(
+        compiled,
+        "after import 1 dead 2\nheld Thing\nx Thing\nlive 4 dead 2\n"
+    );
+    assert_eq!(
+        oracle,
+        "after import 1 dead 2\nheld Thing\nx Thing\nlive 1 dead 5\n"
+    );
+}
+
 /// A module exec that ran before -- a failed import retried, a re-import
 /// after `del sys.modules[name]` -- leaves its last value in each slot
 /// unreleased, so each such exec leaks at most one object per slot; the
