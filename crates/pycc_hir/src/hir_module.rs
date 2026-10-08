@@ -559,11 +559,29 @@ pub fn opens_foreign_statement(from: Option<&FromImport>) -> bool {
 }
 
 /// The source form of a foreign import as diagnostics quote it:
-/// `import numpy`, or `from tkinter import Tk, Label` (#1278), or `from
-/// ..lexer import Token` for a relative one (#1366).
-pub fn foreign_import_statement(module_path: &str, from: Option<&FromImport>) -> String {
+/// `import numpy`, `import numpy as np` (#1291), `import xml.dom` or
+/// `import xml.dom as d` (#1381), or `from tkinter import Tk, Label`
+/// (#1278), or `from ..lexer import Token` for a relative one (#1366).
+///
+/// A plain import is aliased exactly when its `local_name` differs from
+/// the root segment of `module_path`: unaliased `import a` binds `a`, and
+/// unaliased `import a.b` binds its root `a` ([`foreign_binds_root`]);
+/// `import a.b as a`, the one alias equal to its root, is refused before
+/// any diagnostic quotes it. A from-import ignores `local_name`.
+pub fn foreign_import_statement(
+    local_name: &str,
+    module_path: &str,
+    from: Option<&FromImport>,
+) -> String {
     match from {
-        None => format!("import {module_path}"),
+        None => {
+            let root = module_path.split('.').next().unwrap_or(module_path);
+            if local_name == root {
+                format!("import {module_path}")
+            } else {
+                format!("import {module_path} as {local_name}")
+            }
+        }
         Some(from) => format!(
             "from {} import {}",
             from.spelled_module(module_path),

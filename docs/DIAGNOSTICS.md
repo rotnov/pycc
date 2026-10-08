@@ -263,7 +263,8 @@ fallback `import`/`from ... import` statement is supported as the fallback of
 a foreign import yet". A handler of such a `try` that only reads `N` without
 rebinding it is the `T0021` "name is not defined" refusal. `I0402` and `I0403` are reported once per statement, not once per name:
 `from tkinter import Tk, Label` under a native build is one `I0403`, and its
-message quotes the whole statement.
+message quotes the whole statement -- an aliased plain import with its alias,
+`import xml.dom as d` (#1381).
 
 `pycc_types` also uses it for calls to known Python 3.14
 callable builtins that this compiler version does not implement (e.g.

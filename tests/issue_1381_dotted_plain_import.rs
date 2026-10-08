@@ -163,6 +163,19 @@ fn an_allowlist_classifies_a_plain_dotted_import_by_its_root() {
         rendered.contains("its root `xml` is not in `[interop] allow`"),
         "{rendered}"
     );
+    assert!(
+        rendered.contains("`import xml.dom` is a CPython-backed import"),
+        "{rendered}"
+    );
+    // The aliased form is quoted as written, alias included.
+    let aliased = check_with(&dir, "import xml.dom as d\n", &[]);
+    assert_eq!(aliased.status.code(), Some(1), "{}", stderr_of(&aliased));
+    let rendered = stdout_of(&aliased);
+    assert_eq!(rendered.matches("error[I0402]").count(), 1, "{rendered}");
+    assert!(
+        rendered.contains("`import xml.dom as d` is a CPython-backed import"),
+        "{rendered}"
+    );
 }
 
 /// A native build cannot embed `tkinter`: one `I0403` for the statement,
@@ -182,6 +195,21 @@ fn a_native_build_refuses_a_plain_dotted_import_of_an_excluded_root_once() {
     assert_eq!(rendered.matches("error[I0403]").count(), 1, "{rendered}");
     assert!(
         rendered.contains("`import tkinter.ttk` imports a standard-library module"),
+        "{rendered}"
+    );
+    // The aliased form is quoted as written, alias included.
+    let aliased = pycc()
+        .arg("build")
+        .arg(write(&dir, "a.py", "import tkinter.ttk as t\n"))
+        .arg("-o")
+        .arg(dir.join("a"))
+        .output()
+        .expect("pycc should spawn");
+    assert_eq!(aliased.status.code(), Some(1), "{}", stderr_of(&aliased));
+    let rendered = stderr_of(&aliased);
+    assert_eq!(rendered.matches("error[I0403]").count(), 1, "{rendered}");
+    assert!(
+        rendered.contains("`import tkinter.ttk as t` imports a standard-library module"),
         "{rendered}"
     );
 }

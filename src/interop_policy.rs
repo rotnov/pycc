@@ -235,18 +235,19 @@ fn describe(policy: InteropPolicy, source: &PolicySource) -> String {
     }
 }
 
-/// The `I0402` for `import {module_path}` -- or, when `from` is `Some`, for
-/// `from {module_path} import a, b` (#1278) -- under `policy`, or `None`
-/// when the policy admits it. The root is the first dot segment of the
+/// The `I0402` for `import {module_path}` (`as {local_name}` when aliased,
+/// #1381) -- or, when `from` is `Some`, for `from {module_path} import a,
+/// b` (#1278) -- under `policy`, or `None` when the policy admits it. The root is the first dot segment of the
 /// module, the same rule the embedding gate uses.
 pub(crate) fn rejection(
     policy: &EffectivePolicy,
+    local_name: &str,
     module_path: &str,
     from: Option<&FromImport>,
     span: Span,
 ) -> Option<Diagnostic> {
     let root = module_path.split('.').next().unwrap_or(module_path);
-    let statement = foreign_import_statement(module_path, from);
+    let statement = foreign_import_statement(local_name, module_path, from);
     let message = match policy {
         EffectivePolicy::Auto => return None,
         EffectivePolicy::Deny { source } => format!(
@@ -280,12 +281,14 @@ pub(crate) fn policy_gaps(hir: &HirModule, policy: &EffectivePolicy) -> Vec<(usi
         .enumerate()
         .filter_map(|(position, binding)| match binding {
             ImportBinding::Foreign {
+                local_name,
                 module_path,
                 from,
                 span,
                 ..
             } if opens_foreign_statement(from.as_ref()) => {
-                rejection(policy, module_path, from.as_ref(), *span).map(|gap| (position, gap))
+                rejection(policy, local_name, module_path, from.as_ref(), *span)
+                    .map(|gap| (position, gap))
             }
             ImportBinding::Foreign { .. } => None,
             ImportBinding::Module { .. }
