@@ -126,7 +126,8 @@ enum Resolution {
     Foreign,
 }
 
-/// How the loader answers a relative import (#1366).
+/// How the loader answers the entry module's relative imports (#1366), and
+/// since #1382 its absolute imports rooted at its own top-level package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelativeImports {
     /// D-222: a relative import is a project import, resolved against the
@@ -164,8 +165,9 @@ pub(crate) fn load(
 /// -- withholding it from dependencies is the fail-closed choice until
 /// per-module namespaces land.
 ///
-/// `relative_imports` is how the entry module's relative imports resolve
-/// (#1366): [`RelativeImports::Project`] everywhere but a `pycc build --ext
+/// `relative_imports` is how the entry module's relative imports (#1366),
+/// and since #1382 its absolute imports rooted at its own top-level package,
+/// resolve: [`RelativeImports::Project`] everywhere but a `pycc build --ext
 /// --foreign-relative-imports`.
 ///
 /// `ext_module` is whether the program is compiled into an `ext` artifact
@@ -226,7 +228,8 @@ struct Loader {
     /// The `__name__` value the entry module is compiled with, or `None` when
     /// the caller supplied none (#1156). Only the entry module ever sees it.
     entry_module_name: Option<String>,
-    /// How the entry module's relative imports are answered (#1366).
+    /// How the entry module's relative imports (#1366), and since #1382 its
+    /// absolute imports rooted at its own top-level package, are answered.
     relative_imports: RelativeImports,
     /// The name of the entry module's own top-level package (#1382), set
     /// only under [`RelativeImports::ForeignFromEntry`] and only when the
