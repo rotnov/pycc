@@ -120,7 +120,8 @@ enum Resolution {
     /// answer to every relative `from` import of the entry module, dotted or
     /// not, without any filesystem probe: the names bind attributes of the
     /// package the artifact is imported under, resolved when its `Py_mod_exec`
-    /// runs.
+    /// runs. So it is, again without a probe, to every absolute import of the
+    /// entry module rooted at the entry's own top-level package (#1382).
     Foreign,
 }
 
@@ -134,7 +135,8 @@ pub(crate) enum RelativeImports {
     /// `pycc build --ext --foreign-relative-imports`: the *entry* module's
     /// relative imports are answered [`Resolution::Foreign`] without
     /// touching the disk, and bind CPython objects of the package the
-    /// artifact is imported under. A dependency's relative imports keep
+    /// artifact is imported under; so are its absolute imports rooted at its
+    /// own top-level package (#1382). A dependency's relative imports keep
     /// D-222: its body runs inside the entry module's `Py_mod_exec`, so a
     /// foreign relative import there would resolve against the entry's
     /// package, not its own.
@@ -192,6 +194,10 @@ pub(crate) fn load_with(
         root: None,
         manifest: None,
         entry_module_name: entry_module_name.map(str::to_string),
+        entry_package: match relative_imports {
+            RelativeImports::ForeignFromEntry => top_level_package(&canonical),
+            RelativeImports::Project => None,
+        },
         relative_imports,
         ext_module,
     };
@@ -221,6 +227,10 @@ struct Loader {
     entry_module_name: Option<String>,
     /// How the entry module's relative imports are answered (#1366).
     relative_imports: RelativeImports,
+    /// The name of the entry module's own top-level package (#1382), set
+    /// only under [`RelativeImports::ForeignFromEntry`] and only when the
+    /// entry's directory is a package: see [`top_level_package`].
+    entry_package: Option<String>,
     /// Whether every module is lowered for an `ext` artifact (D-258, #1397).
     ext_module: bool,
 }
@@ -360,7 +370,8 @@ impl Loader {
     ///
     /// `importer_is_entry` is whether the importer is the entry module: under
     /// [`RelativeImports::ForeignFromEntry`] its relative imports are foreign
-    /// before any base directory is resolved (#1366).
+    /// before any base directory is resolved (#1366), and so are its absolute
+    /// imports rooted at its own top-level package (#1382).
     ///
     /// A nested `from ... import` request (#1383) is answered only
     /// [`Resolution::Foreign`] or [`Resolution::Unanswered`]: it never
@@ -374,7 +385,7 @@ impl Loader {
     ) -> Result<Resolution, FrontendFailure> {
         if importer_is_entry
             && self.relative_imports == RelativeImports::ForeignFromEntry
-            && request.level > 0
+            && (request.level > 0 || self.names_entry_package(request))
         {
             return Ok(Resolution::Foreign);
         }
@@ -443,6 +454,21 @@ impl Loader {
             submodules: target.submodules,
             package_inits,
         })
+    }
+
+    /// Whether `request` is an absolute import whose first segment is the
+    /// entry module's own top-level package (#1382). Such an import names
+    /// the package the artifact is installed in, which the host interpreter
+    /// imports by that same absolute name, so under
+    /// [`RelativeImports::ForeignFromEntry`] it binds CPython's module and
+    /// is never linked natively, exactly as an absolute import of a
+    /// non-project root (Part 1 of #1026, Part 1 of #1138).
+    fn names_entry_package(&self, request: &ProjectImportRequest) -> bool {
+        let root = request
+            .module
+            .as_deref()
+            .and_then(|module| module.split('.').next());
+        request.level == 0 && root.is_some() && root == self.entry_package.as_deref()
     }
 
     /// The directory `request`'s dotted name resolves against: the source
@@ -737,6 +763,22 @@ fn submodule_names(dir: &Path) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+/// The name of the top-level package the module file `entry` belongs to
+/// (#1382): the outermost directory reached by climbing from `entry`'s own
+/// directory while each directory holds an `__init__.py`, or `None` when
+/// `entry`'s directory is not a package. Read from the source tree alone,
+/// never from `pycc.toml`: the package a module sits in is a property of
+/// the tree CPython imports it from, not of pycc's source root.
+fn top_level_package(entry: &Path) -> Option<String> {
+    let mut package = None;
+    let mut dir = entry.parent();
+    while let Some(current) = dir.filter(|dir| dir.join("__init__.py").is_file()) {
+        package = current.file_name();
+        dir = current.parent();
+    }
+    package.map(|name| name.to_string_lossy().into_owned())
 }
 
 /// How many directory components separate `dir` from its ancestor `root`,
