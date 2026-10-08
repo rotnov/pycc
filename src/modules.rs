@@ -21,11 +21,12 @@
 use crate::frontend::FrontendFailure;
 use crate::project_config;
 use crate::source;
+use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
     LoweredModule, ProjectImportRequest, ResolvedImport, ResolvedImports, ResolvedModule,
 };
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// One loaded project module: the path diagnostics render for it, its
 /// decoded source (kept so a later pass can render against it), and its
@@ -55,7 +56,8 @@ pub(crate) struct LoadedProgram {
 /// every `ImportBinding::Foreign` the policy can see depends on discovery
 /// having run: the loader answers `Resolution::Foreign` for a non-relative
 /// base, which always comes from `Loader::source_root`, and otherwise only
-/// for the entry module's relative imports under
+/// for the entry module's relative imports and, since #1382, its absolute
+/// imports rooted at its own top-level package under
 /// [`RelativeImports::ForeignFromEntry`] (#1366). That mode is passed only
 /// by `pycc build --ext`, which discards the manifest and never runs the
 /// policy, so discovery being skipped for such an import is unobservable
@@ -120,11 +122,13 @@ enum Resolution {
     /// answer to every relative `from` import of the entry module, dotted or
     /// not, without any filesystem probe: the names bind attributes of the
     /// package the artifact is imported under, resolved when its `Py_mod_exec`
-    /// runs.
+    /// runs. So it is, again without a probe, to every absolute import of the
+    /// entry module rooted at the entry's own top-level package (#1382).
     Foreign,
 }
 
-/// How the loader answers a relative import (#1366).
+/// How the loader answers the entry module's relative imports (#1366), and
+/// since #1382 its absolute imports rooted at its own top-level package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelativeImports {
     /// D-222: a relative import is a project import, resolved against the
@@ -134,7 +138,8 @@ pub(crate) enum RelativeImports {
     /// `pycc build --ext --foreign-relative-imports`: the *entry* module's
     /// relative imports are answered [`Resolution::Foreign`] without
     /// touching the disk, and bind CPython objects of the package the
-    /// artifact is imported under. A dependency's relative imports keep
+    /// artifact is imported under; so are its absolute imports rooted at its
+    /// own top-level package (#1382). A dependency's relative imports keep
     /// D-222: its body runs inside the entry module's `Py_mod_exec`, so a
     /// foreign relative import there would resolve against the entry's
     /// package, not its own.
@@ -161,8 +166,9 @@ pub(crate) fn load(
 /// -- withholding it from dependencies is the fail-closed choice until
 /// per-module namespaces land.
 ///
-/// `relative_imports` is how the entry module's relative imports resolve
-/// (#1366): [`RelativeImports::Project`] everywhere but a `pycc build --ext
+/// `relative_imports` is how the entry module's relative imports (#1366),
+/// and since #1382 its absolute imports rooted at its own top-level package,
+/// resolve: [`RelativeImports::Project`] everywhere but a `pycc build --ext
 /// --foreign-relative-imports`.
 ///
 /// `ext_module` is whether the program is compiled into an `ext` artifact
@@ -192,6 +198,12 @@ pub(crate) fn load_with(
         root: None,
         manifest: None,
         entry_module_name: entry_module_name.map(str::to_string),
+        entry_package: match relative_imports {
+            RelativeImports::ForeignFromEntry => {
+                top_level_package(&spelled_path(entry, &canonical))
+            }
+            RelativeImports::Project => None,
+        },
         relative_imports,
         ext_module,
     };
@@ -219,8 +231,13 @@ struct Loader {
     /// The `__name__` value the entry module is compiled with, or `None` when
     /// the caller supplied none (#1156). Only the entry module ever sees it.
     entry_module_name: Option<String>,
-    /// How the entry module's relative imports are answered (#1366).
+    /// How the entry module's relative imports (#1366), and since #1382 its
+    /// absolute imports rooted at its own top-level package, are answered.
     relative_imports: RelativeImports,
+    /// The name of the entry module's own top-level package (#1382), set
+    /// only under [`RelativeImports::ForeignFromEntry`] and only when the
+    /// entry's directory is a package: see [`top_level_package`].
+    entry_package: Option<String>,
     /// Whether every module is lowered for an `ext` artifact (D-258, #1397).
     ext_module: bool,
 }
@@ -246,6 +263,14 @@ impl Loader {
             .map_err(|message| FrontendFailure::input(display.clone(), message))?;
         let parsed = pycc_parser::parse_all(&source)
             .map_err(|diagnostics| FrontendFailure::compile(&display, &source, diagnostics))?;
+        if is_entry && let Some(message) = self.entry_package_collision() {
+            let diagnostic = Diagnostic::error("C0001", message, Span::new(0, 0));
+            return Err(FrontendFailure::compile(
+                &display,
+                &source,
+                vec![diagnostic],
+            ));
+        }
 
         self.in_progress
             .push((canonical.to_path_buf(), display.clone()));
@@ -360,7 +385,8 @@ impl Loader {
     ///
     /// `importer_is_entry` is whether the importer is the entry module: under
     /// [`RelativeImports::ForeignFromEntry`] its relative imports are foreign
-    /// before any base directory is resolved (#1366).
+    /// before any base directory is resolved (#1366), and so are its absolute
+    /// imports rooted at its own top-level package (#1382).
     ///
     /// A nested `from ... import` request (#1383) is answered only
     /// [`Resolution::Foreign`] or [`Resolution::Unanswered`]: it never
@@ -374,7 +400,7 @@ impl Loader {
     ) -> Result<Resolution, FrontendFailure> {
         if importer_is_entry
             && self.relative_imports == RelativeImports::ForeignFromEntry
-            && request.level > 0
+            && (request.level > 0 || self.names_entry_package(request))
         {
             return Ok(Resolution::Foreign);
         }
@@ -443,6 +469,45 @@ impl Loader {
             submodules: target.submodules,
             package_inits,
         })
+    }
+
+    /// The `C0001` refusal for an entry whose own top-level package (#1382)
+    /// has the name of a module `pycc_std` compiles natively (`math`,
+    /// `typing`, ...), or `None` when there is no such collision.
+    ///
+    /// Request generation answers `import math` and `from math import x`
+    /// from `pycc_std` before the loader sees them, so under the flag such a
+    /// statement would silently compile against pycc's model of the standard
+    /// module instead of binding the package the artifact is imported under.
+    /// CPython's own answer for the same name depends on `sys.path` order
+    /// and on what `sys.modules` already holds, so the build refuses the
+    /// collision instead of picking a side.
+    fn entry_package_collision(&self) -> Option<String> {
+        let package = self.entry_package.as_deref()?;
+        if !pycc_hir::is_native_std_module(package) {
+            return None;
+        }
+        Some(format!(
+            "the entry module's top-level package `{package}` has the name of a standard \
+             module pycc compiles natively, which `--foreign-relative-imports` does not \
+             support yet -- `import {package}` would bind pycc's `{package}` instead of the \
+             package; rename the package"
+        ))
+    }
+
+    /// Whether `request` is an absolute import whose first segment is the
+    /// entry module's own top-level package (#1382). Such an import names
+    /// the package the artifact is installed in, which the host interpreter
+    /// imports by that same absolute name, so under
+    /// [`RelativeImports::ForeignFromEntry`] it binds CPython's module and
+    /// is never linked natively, exactly as an absolute import of a
+    /// non-project root (Part 1 of #1026, Part 1 of #1138).
+    fn names_entry_package(&self, request: &ProjectImportRequest) -> bool {
+        let root = request
+            .module
+            .as_deref()
+            .and_then(|module| module.split('.').next());
+        request.level == 0 && root.is_some() && root == self.entry_package.as_deref()
     }
 
     /// The directory `request`'s dotted name resolves against: the source
@@ -737,6 +802,53 @@ fn submodule_names(dir: &Path) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+/// `entry` made absolute without resolving the symlinks it spells, the
+/// spelling the package name is read from (#1382): a package directory
+/// reached through a symlink `alias -> real` is imported as `alias`, so
+/// climbing the canonical path would name `real`.
+///
+/// A `..` cannot be folded lexically, since after a symlink the OS resolves
+/// it against the link's target. So the prefix up to and including the last
+/// `..` is canonicalized, which gives it the OS's meaning, and the
+/// components after it are appended as spelled; they hold no `..`, and
+/// [`std::path::absolute`] already dropped every `.`. A path with no `..`
+/// is kept whole. `canonical` stands in when the working directory or that
+/// prefix cannot be resolved.
+fn spelled_path(entry: &Path, canonical: &Path) -> PathBuf {
+    let absolute = std::path::absolute(entry).unwrap_or_else(|_| canonical.to_path_buf());
+    let components: Vec<Component> = absolute.components().collect();
+    let last_parent = components
+        .iter()
+        .rposition(|component| matches!(component, Component::ParentDir));
+    let Some(last_parent) = last_parent else {
+        return absolute;
+    };
+    let prefix: PathBuf = components[..=last_parent].iter().collect();
+    match prefix.canonicalize() {
+        Ok(mut resolved) => {
+            resolved.extend(&components[last_parent + 1..]);
+            resolved
+        }
+        Err(_) => canonical.to_path_buf(),
+    }
+}
+
+/// The name of the top-level package the module file `entry` belongs to
+/// (#1382): the outermost directory reached by climbing from `entry`'s own
+/// directory while each directory holds an `__init__.py`, or `None` when
+/// `entry`'s directory is not a package. Read from the source tree alone,
+/// never from `pycc.toml`: the package a module sits in is a property of
+/// the tree CPython imports it from, not of pycc's source root.
+fn top_level_package(entry: &Path) -> Option<String> {
+    let mut package = None;
+    let mut dir = entry.parent();
+    while let Some(current) = dir.filter(|dir| dir.join("__init__.py").is_file()) {
+        package = current.file_name();
+        dir = current.parent();
+    }
+    package.map(|name| name.to_string_lossy().into_owned())
 }
 
 /// How many directory components separate `dir` from its ancestor `root`,

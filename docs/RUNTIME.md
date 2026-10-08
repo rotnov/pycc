@@ -1372,7 +1372,8 @@ Only that shape is admitted, at top level or (since
 (`from X import a as b`), the wildcard and a from-import inside a
 function, class, loop, `with` or `match` body keep their `C0001` (a relative import is a project import, D-222,
 and never reaches this channel, except the entry module's relative
-from-imports under `pycc build --ext --foreign-relative-imports`, #1366, below), and so does a name pycc
+from-imports under `pycc build --ext --foreign-relative-imports`, #1366, below; under that flag
+the entry's absolute imports of its own top-level package are foreign too, #1382), and so does a name pycc
 already resolves by its spelling (`from builtins import range`,
 `from numpy import NDArray`), because binding it to a CPython object would
 change what every later use of that spelling means. The exception is the two
@@ -1623,6 +1624,26 @@ emits, raises `SystemError` rather than resolve against the wrong package.
 `tests/issue_1366_relative_foreign_import.rs` installs the `.py` source and
 then the artifact at the same path of one package tree and compares their
 output and final traceback line for every case.
+
+**The entry's own package, absolutely** ([#1382](https://github.com/rotnov/pycc/issues/1382)).
+Under the same flag the driver also answers foreign an absolute import of
+the entry module whose first segment names the entry's own top-level package
+(`docs/CLI_SPEC.md` defines it from the source tree), so
+`from lark.exceptions import UnexpectedToken` in an in-tree
+`lark/parsers/lalr_parser_state.py` no longer links `lark/exceptions.py`
+natively. Nothing new is emitted: the import is an ordinary absolute foreign
+import (`level` `0`, `globals` `None`), resolved by its name in the host's
+`sys.path` when `Py_mod_exec` runs, which is exactly what the same statement
+in the installed `.py` module does. A missing module or name therefore raises
+CPython's own `ModuleNotFoundError` or `ImportError`, and one nested in a
+module-level `try` takes its `except ImportError` fallback. The one exception
+is an own package named like a module `pycc_std` compiles natively (`math`,
+`typing`, ...): `pycc_hir`'s request generation answers `import math` from
+`pycc_std` before the driver sees it, so the build refuses that package with
+a `C0001` instead of compiling the import against pycc's model
+(`docs/CLI_SPEC.md`).
+`tests/issue_1382_entry_package_import.rs` builds the entry inside its
+package tree and compares the installed artifact with the `.py` it replaces.
 
 An attribute load fails the same way and takes the same edge.
 `pycc_ext_obj_getattr` returns `NULL` with CPython's error indicator set, and
@@ -1956,15 +1977,20 @@ reference. **Each held operand is released exactly once on every path:** a
 failure while it is held (a later sibling operand, or the consuming
 operation itself) releases it on the failure edge -- both the error bridge to
 an enclosing handler and the direct module-exec failure return -- and the
-fallthrough releases it after the operation. A result that is bound to a name
+fallthrough releases it after the operation. The failure may equally be a
+*native* raise in an operand: `o.m(1 // z)` raises `ZeroDivisionError` through
+pycc's own exception state, and the post-node guard's unwind
+(`exception::guard_statement_effects`) releases the held bound method, and
+any produced argument evaluated before it, on the way to the exception target
+([#1486](https://github.com/rotnov/pycc/issues/1486)). A result that is bound to a name
 or slot, passed to a user function, returned, or boxed is still leaked, as is
 each item of a `for` loop or a comprehension; Part 3 below releases the
 iterator and the remaining unbound operands, and
 [#1499](https://github.com/rotnov/pycc/issues/1499) owns bound values and items.
 `tests/issue_1092_object_temp_release.rs` pins a zero `sys.getrefcount` delta
-for every consumer and every held-operand failure, at module level (one
-200-trip loop at import, and a failed import retried 50 times) and in a
-function body (at two trip counts).
+for every consumer and every held-operand failure, foreign or native, at
+module level (one 200-trip loop at import, and a failed import retried 50
+times) and in a function body (at two trip counts).
 
 **The iterator, a comprehension's result and the remaining unbound operands
 are released (Part 3 of #1092, [#1498](https://github.com/rotnov/pycc/issues/1498)).**

@@ -830,6 +830,7 @@ fn a_bare_file_name_importer_renders_its_directory_as_a_single_dot() {
         manifest: None,
         entry_module_name: None,
         relative_imports: RelativeImports::Project,
+        entry_package: None,
         ext_module: false,
     };
     let request = ProjectImportRequest {
@@ -982,4 +983,5 @@ fn a_dependency_relative_import_stays_a_project_import_under_foreign_from_entry(
     );
 }
 
+mod entry_package;
 mod nested;

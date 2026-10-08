@@ -101,9 +101,12 @@ pub enum Command {
         /// as CPython objects of the package the `--ext` artifact is
         /// imported under, resolved when it is imported, instead of as
         /// project modules (D-222's opt-in, #1366). Applies to the entry
-        /// module's relative from-imports only, at top level or nested in a
-        /// module-level `if`/`try` block (#1383); a dependency's relative
-        /// imports stay project imports. Requires `--ext`.
+        /// module's relative from-imports, at top level or nested in a
+        /// module-level `if`/`try` block (#1383), and since #1382 to its
+        /// absolute imports rooted at its own top-level package (the
+        /// outermost directory above it that holds an `__init__.py`), in
+        /// every `import`/`from` shape; a dependency's imports stay project
+        /// imports (docs/CLI_SPEC.md). Requires `--ext`.
         #[arg(long, requires = "ext")]
         foreign_relative_imports: bool,
         /// Link libpython into the executable from the embed interpreter's
