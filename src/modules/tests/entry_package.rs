@@ -239,3 +239,71 @@ fn an_own_package_import_skips_source_root_discovery() {
     let (path, _) = input_failure(&entry);
     assert!(path.ends_with("pycc.toml"), "{path}");
 }
+
+/// Writes the package `math` (with the package `math.pkg`) under `scratch`,
+/// plus the entry `math/pkg/m.py` holding `body`: an own package named like
+/// a module `pycc_std` compiles natively.
+fn math_tree(scratch: &Path, body: &str) -> PathBuf {
+    write(scratch, "math/__init__.py", "");
+    write(scratch, "math/pkg/__init__.py", "");
+    write(scratch, "math/pkg/m.py", body)
+}
+
+/// `(file, code, message)` of the one diagnostic a flagged load reports.
+fn foreign_refusal(entry: &Path) -> (String, String, String) {
+    match load_foreign(entry)
+        .map(|_| ())
+        .expect_err("this fixture must fail")
+    {
+        FrontendFailure::Compile { files } => {
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].diagnostics.len(), 1);
+            let diagnostic = &files[0].diagnostics[0];
+            (
+                files[0].path.clone(),
+                diagnostic.code.to_string(),
+                diagnostic.message.clone(),
+            )
+        }
+        FrontendFailure::Input { path, message } => {
+            panic!("expected a diagnostic: {path}: {message}")
+        }
+    }
+}
+
+/// An own package named like a natively compiled standard module is refused
+/// under the flag: request generation answers `import math` and `from math
+/// import pi` from `pycc_std` before the loader sees them, so they would
+/// silently bind pycc's `math` instead of the package. The refusal names
+/// the collision and holds whether or not the entry imports the name.
+#[test]
+fn an_own_package_named_like_a_native_std_module_is_refused() {
+    for body in [
+        "import math\n",
+        "from math import pi\n",
+        "c = True\nif c:\n    import math\n",
+        "x: int = 1\n",
+    ] {
+        let scratch = ScratchDir::new("modules_tests").expect("scratch");
+        let entry = math_tree(&scratch, body);
+        let (path, code, message) = foreign_refusal(&entry);
+        assert!(path.ends_with("m.py"), "{path}");
+        assert_eq!(code, "C0001", "{body}");
+        assert!(
+            message.contains("top-level package `math`")
+                && message.contains("--foreign-relative-imports")
+                && message.contains("rename the package"),
+            "{message}"
+        );
+    }
+}
+
+/// Without the flag nothing changes for such a package: `import math` and
+/// `from math import pi` compile against `pycc_std` exactly as before #1382.
+#[test]
+fn without_the_flag_a_package_named_like_a_native_std_module_loads() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    let entry = math_tree(&scratch, "import math\nfrom math import pi\n");
+    let program = load(&entry, None).unwrap_or_else(|failure| panic!("{}", describe(&failure)));
+    assert_eq!(file_names(&program), vec!["m.py".to_string()]);
+}

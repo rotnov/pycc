@@ -1636,7 +1636,12 @@ import (`level` `0`, `globals` `None`), resolved by its name in the host's
 `sys.path` when `Py_mod_exec` runs, which is exactly what the same statement
 in the installed `.py` module does. A missing module or name therefore raises
 CPython's own `ModuleNotFoundError` or `ImportError`, and one nested in a
-module-level `try` takes its `except ImportError` fallback.
+module-level `try` takes its `except ImportError` fallback. The one exception
+is an own package named like a module `pycc_std` compiles natively (`math`,
+`typing`, ...): `pycc_hir`'s request generation answers `import math` from
+`pycc_std` before the driver sees it, so the build refuses that package with
+a `C0001` instead of compiling the import against pycc's model
+(`docs/CLI_SPEC.md`).
 `tests/issue_1382_entry_package_import.rs` builds the entry inside its
 package tree and compares the installed artifact with the `.py` it replaces.
 

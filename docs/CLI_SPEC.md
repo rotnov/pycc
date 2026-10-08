@@ -301,7 +301,14 @@ directory once project mode exists.
                     when `Py_mod_exec` runs, exactly as the same statement
                     in a `.py` module does. An entry whose own directory is
                     not a package has no such package, and every other
-                    project package keeps D-222. A dependency module's
+                    project package keeps D-222. An own package named like
+                    a module pycc compiles natively (`math`, `enum`,
+                    `typing`, `abc`, `dataclasses`) is refused with
+                    `C0001` at the entry's line 1, whether or not the entry
+                    imports it: `import math` and `from math import x`
+                    would otherwise bind pycc's own model of the standard
+                    module, while CPython's answer depends on `sys.path`
+                    order and on what `sys.modules` already holds. A dependency module's
                     relative imports, and its absolute imports of the
                     entry's package, stay project imports (its body runs
                     with the entry module's globals, so it has no package

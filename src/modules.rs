@@ -21,6 +21,7 @@
 use crate::frontend::FrontendFailure;
 use crate::project_config;
 use crate::source;
+use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
     LoweredModule, ProjectImportRequest, ResolvedImport, ResolvedImports, ResolvedModule,
 };
@@ -260,6 +261,14 @@ impl Loader {
             .map_err(|message| FrontendFailure::input(display.clone(), message))?;
         let parsed = pycc_parser::parse_all(&source)
             .map_err(|diagnostics| FrontendFailure::compile(&display, &source, diagnostics))?;
+        if is_entry && let Some(message) = self.entry_package_collision() {
+            let diagnostic = Diagnostic::error("C0001", message, Span::new(0, 0));
+            return Err(FrontendFailure::compile(
+                &display,
+                &source,
+                vec![diagnostic],
+            ));
+        }
 
         self.in_progress
             .push((canonical.to_path_buf(), display.clone()));
@@ -467,6 +476,30 @@ impl Loader {
     /// [`RelativeImports::ForeignFromEntry`] it binds CPython's module and
     /// is never linked natively, exactly as an absolute import of a
     /// non-project root (Part 1 of #1026, Part 1 of #1138).
+    /// The `C0001` refusal for an entry whose own top-level package (#1382)
+    /// has the name of a module `pycc_std` compiles natively (`math`,
+    /// `typing`, ...), or `None` when there is no such collision.
+    ///
+    /// Request generation answers `import math` and `from math import x`
+    /// from `pycc_std` before the loader sees them, so under the flag such a
+    /// statement would silently compile against pycc's model of the standard
+    /// module instead of binding the package the artifact is imported under.
+    /// CPython's own answer for the same name depends on `sys.path` order
+    /// and on what `sys.modules` already holds, so the build refuses the
+    /// collision instead of picking a side.
+    fn entry_package_collision(&self) -> Option<String> {
+        let package = self.entry_package.as_deref()?;
+        if !pycc_hir::is_native_std_module(package) {
+            return None;
+        }
+        Some(format!(
+            "the entry module's top-level package `{package}` has the name of a standard \
+             module pycc compiles natively, which `--foreign-relative-imports` does not \
+             support yet -- `import {package}` would bind pycc's `{package}` instead of the \
+             package; rename the package"
+        ))
+    }
+
     fn names_entry_package(&self, request: &ProjectImportRequest) -> bool {
         let root = request
             .module

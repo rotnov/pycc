@@ -249,7 +249,7 @@ project or `pycc_std` module keeps the block-body C0001. (A relative import is a
 the foreign channel, unless `pycc build --ext --foreign-relative-imports`
 (#1366) makes the entry module's relative from-imports foreign; its failures are the `T0021` row above. Under that flag the
 entry's absolute imports of its own top-level package are foreign as well (#1382), so they never meet the project-import
-diagnostics: a missing module or name there is CPython's runtime `ImportError`, not a `C0001` or `T0021`.) A foreign import's identity for the shadowing
+diagnostics: a missing module or name there is CPython's runtime `ImportError`, not a `C0001` or `T0021`. The one compile-time refusal is a `C0001` at the entry's line 1 when that package is named like a module `pycc_std` compiles natively, such as `math` (`docs/CLI_SPEC.md`).) A foreign import's identity for the shadowing
 rules is its module, its relative level and its name (so `from .x import a`
 and `from x import a` are two objects), and `import copy` followed by
 `from copy import copy` is the same C0001 as any other rebinding of a foreign

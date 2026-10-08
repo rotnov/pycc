@@ -104,12 +104,21 @@ fn nested_import_requests(stmt: &Stmt, nested: bool, requests: &mut Vec<ProjectI
     }
 }
 
+/// Whether `name` is a module `pycc_std` compiles natively (`math`,
+/// `typing`, ...): an absolute import of it never becomes a
+/// [`ProjectImportRequest`], so the driver never resolves it. The driver
+/// reads the same predicate to refuse an entry package of that name under
+/// `--foreign-relative-imports` (#1382).
+pub fn is_native_std_module(name: &str) -> bool {
+    pycc_std::resolve_module(name).is_some()
+}
+
 fn project_import_request(stmt: &Stmt, nested: bool) -> Vec<ProjectImportRequest> {
     match stmt {
         Stmt::Import(import) => import
             .names
             .iter()
-            .filter(|alias| pycc_std::resolve_module(alias.name.as_str()).is_none())
+            .filter(|alias| !is_native_std_module(alias.name.as_str()))
             .map(|alias| ProjectImportRequest {
                 level: 0,
                 module: Some(alias.name.to_string()),
@@ -127,11 +136,7 @@ fn project_import_request(stmt: &Stmt, nested: bool) -> Vec<ProjectImportRequest
                 return Vec::new();
             }
             let module = import.module.as_ref().map(ToString::to_string);
-            if import.level == 0
-                && module
-                    .as_deref()
-                    .is_some_and(|name| pycc_std::resolve_module(name).is_some())
-            {
+            if import.level == 0 && module.as_deref().is_some_and(is_native_std_module) {
                 return Vec::new();
             }
             vec![ProjectImportRequest {
