@@ -2069,16 +2069,41 @@ running, and a frame or host object it handed the pointer to may still borrow
 it. Each such exec leaks at most its last value per slot. `importlib.reload`
 does not run the exec again on an extension module, so it binds nothing. The
 last value of each global is never released either, because the artifact has
-no teardown hook. Releasing on rebind is sound because the suspended module
-body is the only writer of these slots: a function cannot assign a global
-(`global` is refused with `C0001`), generators are refused, and object
-globals are not published on the host module, so no frame holds a borrowed
-copy of a global's old value across the rebind. Lowering any of those three
-must revisit this rule first (the SAFETY note on `object_slot::owned_bit`).
+no teardown hook.
+
+A rebind releases the old value only while the rebinding exec is the
+artifact's *only live compiled activation*; otherwise it leaks it. Another
+live activation can still use the old value borrowed: a nested exec (the
+shared object imported under a second name, or re-imported from its own
+body), an exec on another thread, or a compiled function a host entered
+through a wrapper -- on another thread, suspended where a foreign call
+released the GIL (`h(x, slow())` keeps `x` borrowed while `slow()` runs).
+The shim counts live activations in `pycc_ext_live_activations`, through the
+bridge watermark every frame that enters compiled code from CPython already
+takes and releases on each exit -- each `pycc_ext_exec_module` body and each
+generated wrapper (an export, a method, a field descriptor, a comparison or
+hash slot, a PEP 562 hook, `Py_tp_init`) -- and the store's release branch
+also requires `pycc_ext_obj_rebind_may_release()`, which is 1 only when the
+count is 1. The count is a file static, so it is per artifact, like the
+slots it guards; it is read and written with the GIL held, and a
+free-threaded build is refused at compile time because CPython's `Python.h`
+rejects `Py_LIMITED_API` under `Py_GIL_DISABLED`. Within the rebinding
+exec's own activation no frame can hold a borrowed copy across the store:
+only the module body stores a global (`global` is refused with `C0001`), a
+compiled function it calls has returned before its next statement, and
+generators are refused. So the remaining limits are: lowering `global` or
+generators, publishing object globals on the host module, or adding an entry
+into compiled code that does not take the bridge watermark must revisit this
+rule first (the SAFETY note on `object_slot::owned_bit`); and a rebind under
+another live activation leaks, so a module body that keeps rebinding while a
+host thread sits in a compiled call, or a nested exec, leaks one value per
+rebind.
 `tests/issue_1499_module_object_rebind.rs` runs every shape both compiled and
 as plain Python, and requires the same live-object count, dead weak
 references, `sys.getrefcount` deltas and re-entrant finalizer observation,
-at two trip counts and once under `-X dev` with `PYTHONMALLOC=debug`.
+at two trip counts and once under `-X dev` with `PYTHONMALLOC=debug`; its
+nested-exec test pins that a body re-imported beneath itself leaks each
+value it rebinds while both outer and nested reads see a live object.
 
 **A function body adds no reference traffic of its own.** Since Part 1 of
 [#1333](https://github.com/rotnov/pycc/issues/1333)

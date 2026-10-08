@@ -17,6 +17,11 @@
 //!   and that finalizer can call a compiled function that reads the global:
 //!   it must see the new value, never a freed one. Storing first also makes
 //!   `x = x` correct.
+//! - the release runs only while the rebinding exec is the artifact's only
+//!   live compiled activation (`pycc_ext_obj_rebind_may_release`, #1501);
+//!   otherwise the old value leaks, because another activation -- a nested
+//!   exec, an exec on another thread, a compiled call a host entered
+//!   through a wrapper -- may still use it borrowed (see [`owned_bit`]).
 //!
 //! The stores are a module-level `x = <object>` (`MirStmt::Assign`), a
 //! module-level `for x in <object>:` target ([`store_new_reference`], whose
@@ -55,7 +60,9 @@
 //! class is Part 4 ([#1504](https://github.com/rotnov/pycc/issues/1504)).
 
 use super::*;
-use crate::ext::{EXT_OBJ_RELEASE_SYMBOL, EXT_OBJ_RETAIN_SYMBOL};
+use crate::ext::{
+    EXT_OBJ_REBIND_MAY_RELEASE_SYMBOL, EXT_OBJ_RELEASE_SYMBOL, EXT_OBJ_RETAIN_SYMBOL,
+};
 use inkwell::builder::Builder;
 use std::cell::RefCell;
 
@@ -109,14 +116,34 @@ pub(super) fn declare_owned_bits<'ctx>(
 /// This predicate becomes obsolete in Part 2 (#1502), when every `object`
 /// slot owns its reference.
 ///
-/// SAFETY: releasing on rebind is sound only because the suspended module
-/// body is the one writer of these slots, so no frame can hold a borrowed
-/// copy of a global's old value across the rebind (`docs/RUNTIME.md`). Each
-/// of these invalidates that argument and must revisit this part first:
+/// SAFETY: a rebind may release the old value only when no frame can still
+/// use it borrowed. [`store_owned`] therefore releases only when the shim's
+/// `pycc_ext_obj_rebind_may_release()` reports the rebinding exec as the
+/// artifact's only live compiled activation (`docs/RUNTIME.md`, "A module
+/// global owns its reference"). Another activation -- a nested exec of the
+/// same shared object, an exec on another thread, or a compiled function a
+/// host entered through a wrapper, possibly on a thread that released the
+/// GIL mid-call -- may hold the old value borrowed, so the rebind leaks it
+/// instead. Within the rebinding exec's own activation no frame holds a
+/// borrowed copy across the store: only the module body writes a global, and
+/// every compiled callee has returned before the body's next statement.
+///
+/// The count is the shim's `pycc_ext_live_activations`, kept by the bridge
+/// watermark every CPython-to-compiled entry already takes and releases on
+/// each exit: `pycc_ext_exec_module`, and every generated wrapper
+/// (`wrapper_for`'s exports, methods, field descriptors, comparison and hash
+/// slots and PEP 562 hooks, and `Py_tp_init`). No other entry runs compiled
+/// code: a carrier's `__copy__` and `tp_dealloc` run only the runtime. It is
+/// per artifact (a file static in each artifact's own shim), read with the
+/// GIL held, and a free-threaded build is refused at compile time
+/// (`Python.h` rejects `Py_LIMITED_API` under `Py_GIL_DISABLED`).
+///
+/// Each of these invalidates the argument and must revisit this part first:
 /// lowering `global` (a function would then write the slot), generator
-/// support (a suspended frame could keep a borrowed copy across a rebind),
-/// and publishing object globals on the host module (the host could then
-/// write the slot).
+/// support (a suspended frame of the same activation could keep a borrowed
+/// copy across a rebind), publishing object globals on the host module (the
+/// host could then write the slot), and any new entry into compiled code
+/// that does not take the bridge watermark (it would be uncounted).
 pub(super) fn owned_bit<'ctx>(
     rt: &RtFns<'ctx>,
     slot: &StorageSlot<'ctx>,
@@ -175,9 +202,12 @@ pub(super) fn retain_if_borrowed<'ctx>(
 /// `slot` whose owned bit is `bit`, in the `Py_XSETREF` order: load the old
 /// value and the bit, store the new value and raise the `initialized` flag
 /// and the bit, then -- on a branch taken only when the loaded bit was set
-/// -- release the old value through `pycc_ext_obj_release`. The release
-/// cannot fail: a finalizer's exception is CPython's unraisable hook's, not
-/// this statement's.
+/// and `pycc_ext_obj_rebind_may_release()` answers non-zero (see the SAFETY
+/// note on [`owned_bit`]) -- release the old value through
+/// `pycc_ext_obj_release`. When the gate is closed the old value leaks; the
+/// new value and the bit are stored either way. The release cannot fail: a
+/// finalizer's exception is CPython's unraisable hook's, not this
+/// statement's.
 ///
 /// Panics outside the module-exec entry: a module global is written only
 /// there, so a store anywhere else is a misclassified frame slot, which must
@@ -220,6 +250,24 @@ pub(super) fn store_owned<'ctx>(
             "global_was_owned",
         )
         .expect("build_int_compare should not fail");
+    let i32t = context.i32_type();
+    let gate = crate::foreign_pack::shim_fn(
+        module,
+        EXT_OBJ_REBIND_MAY_RELEASE_SYMBOL,
+        i32t.fn_type(&[], false),
+    );
+    let may = builder
+        .build_call(gate, &[], "rebind_may_release")
+        .expect("build_call should not fail for pycc_ext_obj_rebind_may_release")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_rebind_may_release returns int")
+        .into_int_value();
+    let alone = builder
+        .build_int_compare(IntPredicate::NE, may, i32t.const_zero(), "global_alone")
+        .expect("build_int_compare should not fail");
+    let owned = builder
+        .build_and(owned, alone, "global_release_gate")
+        .expect("build_and should not fail");
     let release_bb = context.append_basic_block(function, "global_release_old");
     let cont_bb = context.append_basic_block(function, "global_stored");
     builder

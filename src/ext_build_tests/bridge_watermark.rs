@@ -74,14 +74,15 @@ fn the_watermark_helpers_are_defined_above_the_generated_include() {
 fn module_exec_releases_to_its_own_mark_instead_of_clearing_the_table() {
     let shim = shim_c();
     assert!(!shim.contains("pycc_ext_bridge_table_clear"));
-    // The mark is taken at exec entry; #1366's exec-target save/set sits
-    // between it and the body, and adds no bridge entry of its own.
+    // The mark is taken immediately before the body (#1501: after #1366's
+    // exec-target save/set and every early return), with no bridge entry
+    // made between them.
     let taken = "    mark = pycc_ext_bridge_mark();\n";
     let mark = shim.find(taken).expect("the mark is taken") + taken.len();
     let exec = shim
         .find("    exec_status = pycc_ext_module_exec();\n")
         .expect("the body runs");
-    assert!(mark < exec);
+    assert!(mark <= exec);
     assert!(!shim[mark..exec].contains("pycc_ext_bridge_"));
     assert!(shim[exec..].starts_with(
         "    exec_status = pycc_ext_module_exec();\n    \
@@ -101,6 +102,36 @@ fn module_exec_releases_to_its_own_mark_instead_of_clearing_the_table() {
         "    if (PyModule_AddFunctions(module, pycc_ext_module_hooks) != 0) {\n        \
          return -1;\n    }\n    return 0;\n}\n"
     ));
+}
+
+/// #1501: the watermark bracket doubles as the live-activation count the
+/// module-global rebind gate reads. The mark counts a frame in and the
+/// release counts it out before anything it releases can run a
+/// finalizer; exec takes its mark only once every early return is behind
+/// it, so each mark is released exactly once; and the gate answers 1 only
+/// for the rebinding exec alone.
+#[test]
+fn the_watermark_counts_live_activations_for_the_rebind_gate() {
+    let shim = shim_c();
+    assert!(shim.contains("static Py_ssize_t pycc_ext_live_activations = 0;\n"));
+    assert!(shim.contains(
+        "    pycc_ext_bridge_table *table = pycc_ext_bridge_current();\n\n    \
+         pycc_ext_live_activations++;\n    return table == NULL ? 0 : table->len;\n}\n"
+    ));
+    assert!(shim.contains(
+        "    PyObject *saved;\n\n    pycc_ext_live_activations--;\n    \
+         if (table == NULL || mark >= table->len) {\n"
+    ));
+    assert!(shim.contains(
+        "int pycc_ext_obj_rebind_may_release(void)\n{\n    \
+         return pycc_ext_live_activations == 1;\n}\n"
+    ));
+    assert_eq!(shim.matches("pycc_ext_live_activations++").count(), 1);
+    assert_eq!(shim.matches("pycc_ext_live_activations--").count(), 1);
+    assert!(shim.contains(
+        "    mark = pycc_ext_bridge_mark();\n    exec_status = pycc_ext_module_exec();\n"
+    ));
+    assert_eq!(shim.matches("mark = pycc_ext_bridge_mark();").count(), 1);
 }
 
 #[test]

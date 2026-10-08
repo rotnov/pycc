@@ -7,7 +7,7 @@
 //! `Py_XSETREF` sequence `store_owned` emits: load the old value and the
 //! owned bit, store the new value, raise the flag and the bit, and release
 //! the old value on a `global_release_old` branch taken only when the
-//! loaded bit was set.
+//! loaded bit was set and the shim's only-live-activation gate is open.
 
 use super::*;
 use crate::{CompileOptions, EXT_MODULE_EXEC_SYMBOL, compile_to_object_with_observer};
@@ -155,6 +155,44 @@ fn a_rebind_stores_first_and_releases_the_old_value_behind_the_owned_bit() {
     }
     assert_eq!(ir.matches(RELEASE).count(), rebinds.len(), "{ir}");
     assert_eq!(ir.matches(RETAIN).count(), 0, "{ir}");
+}
+
+/// The release branch is gated by the shim's activation count as well as
+/// the owned bit (#1501): every rebind asks
+/// `pycc_ext_obj_rebind_may_release` after its store and branches to
+/// `global_release_old` only on the conjunction, so a rebind while another
+/// compiled activation of the artifact is live leaks the old value.
+#[test]
+fn the_release_branch_is_gated_by_the_only_live_activation_predicate() {
+    let ir = entry_ir(
+        "slot_rebind_gate",
+        vec![bind("x", attr("a")), bind("x", attr("b"))],
+    );
+    let rebinds = blocks(&ir, "global_release_old");
+    let gates = defined_by(&ir, "call i32 @pycc_ext_obj_rebind_may_release()");
+    assert_eq!(gates.len(), rebinds.len(), "{ir}");
+    let owned = defined_by(&ir, "= icmp ne i8 %global_owned");
+    assert_eq!(owned.len(), rebinds.len(), "{ir}");
+    for (gate, owned) in gates.iter().zip(&owned) {
+        let call = at(
+            &ir,
+            &format!("{gate} = call i32 @pycc_ext_obj_rebind_may_release()"),
+        );
+        let alone = defined_by(&ir[call..], &format!("= icmp ne i32 {gate}, 0"))[0];
+        let both = defined_by(&ir[call..], &format!("= and i1 {owned}, {alone}"))[0];
+        let branch = call
+            + at(
+                &ir[call..],
+                &format!("br i1 {both}, label %global_release_old"),
+            );
+        assert!(call < branch, "{ir}");
+    }
+    // The last rebind's store into `x` precedes its gate call.
+    let last_store = ir.rfind(", ptr @pyglobal_x,").expect("x is stored");
+    let last_gate = ir
+        .rfind("call i32 @pycc_ext_obj_rebind_may_release()")
+        .expect("the gate is called");
+    assert!(last_store < last_gate, "{ir}");
 }
 
 /// `y = x` aliases a borrowed global: the store takes its own reference

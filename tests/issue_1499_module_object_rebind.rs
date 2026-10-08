@@ -44,12 +44,17 @@ fn stderr_of(output: &Output) -> String {
 /// weak-referenced from `REFS`; a `Peeker`'s finalizer calls `HOOK`, which
 /// the host points at the module under test.
 const STUB: &str = "\
+import importlib
+import sys
 import weakref
 
 LIVE = 0
 REFS = []
 SEEN = []
 HOOK = None
+NEST = None
+NESTED = False
+HELD = []
 
 
 class Thing:
@@ -87,6 +92,28 @@ def peeker():
 
 def make_things(n):
     return [Thing() for _ in range(n)]
+
+
+def nest():
+    # Drops the module named `NEST` from `sys.modules` and imports it
+    # again, once: a second `Py_mod_exec` of the same shared object while
+    # the first is suspended in this call.
+    global NESTED
+    if NEST is None or NESTED:
+        return None
+    NESTED = True
+    outer = sys.modules[NEST]
+    del sys.modules[NEST]
+    try:
+        importlib.import_module(NEST)
+    finally:
+        sys.modules[NEST] = outer
+    return None
+
+
+def hold(o, _):
+    # Reads `o`, a borrowed global the caller kept across `nest()`.
+    HELD.append(type(o).__name__)
 
 
 T = Thing()
@@ -356,6 +383,63 @@ fn a_repeated_from_import_holds_one_reference() {
             "{module} under CPython"
         );
     }
+}
+
+/// The module under test for the nested exec: the outer body keeps its
+/// `x` borrowed as an argument across `s.nest()`, which runs the same body
+/// again beneath it. The nested body's own `hold` finds nothing to nest.
+const NESTED_MODULE: &str = "\
+import pycc_t1499_stub as s
+
+
+def get_x() -> object:
+    return x
+
+
+x: object = s.fresh()
+x = s.fresh()
+s.hold(x, s.nest())
+x = s.fresh()
+x = s.fresh()
+";
+
+/// #1501: a rebind releases the replaced value only while the rebinding
+/// exec is the artifact's only live compiled activation. The nested exec
+/// runs beneath the outer one, so each of its rebinds leaks the value it
+/// replaces instead of releasing it, and both `hold` calls read a live
+/// object -- as under CPython, whose report the compiled one matches
+/// except for the counts. The outer exec, alone again after the nested
+/// one returns, still releases what it rebinds: the positive control.
+///
+/// Compiled, the outer body makes `a1`, `a2` (releasing `a1`), then the
+/// nested body `b1`..`b4`: the bits it clears at its entry leave `a2`
+/// unreleased, and the gate leaves `b1` and `b2` unreleased too, where
+/// releasing them would have been sound (no frame holds them). Its own
+/// `hold` reads `b2`, still live. Back in the outer body, `hold` reads
+/// `a2`, and its rebinds to `a3` and `a4` release `b4` and `a3`. Alive:
+/// `a2`, `b1`, `b2`, `b3`, `a4`; dead: `a1`, `b4`, `a3`. CPython gives each
+/// module its own `x`, and the nested module, dropped once `nest` restores
+/// the outer one, is collected with its `b4`: alive `a4`, dead the rest.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_rebind_beneath_another_live_exec_leaks_instead_of_releasing() {
+    let dir = build("t1499_nested", &[("pycc_t1499_nested_exec", NESTED_MODULE)]);
+    let script = format!(
+        "{PRELUDE}\
+         s.NEST = name\n\
+         live = s.LIVE\n\
+         m = importlib.import_module(name)\n\
+         gc.collect()\n\
+         report('held', *s.HELD)\n\
+         report('x', type(m.get_x()).__name__)\n\
+         report('live', s.LIVE - live, 'dead', dead())\n"
+    );
+    let flags: &[&str] = &["-X", "dev"];
+    let env = &[("PYTHONMALLOC", "debug")];
+    let compiled = python(&dir, flags, env, "pycc_t1499_nested_exec", &script);
+    let oracle = python(&dir, flags, env, "pycc_t1499_nested_exec_py", &script);
+    assert_eq!(compiled, "held Thing Thing\nx Thing\nlive 5 dead 3\n");
+    assert_eq!(oracle, "held Thing Thing\nx Thing\nlive 1 dead 7\n");
 }
 
 /// A module exec that ran before -- a failed import retried, a re-import

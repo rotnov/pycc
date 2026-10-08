@@ -332,13 +332,36 @@ static pycc_ext_bridge_table *pycc_ext_bridge_reserve(void)
 }
 
 /*
+ * Part 1 of #1499 (#1501): the number of this artifact's compiled
+ * activations that are live right now, on any thread -- every
+ * `pycc_ext_exec_module` body and every generated wrapper (an export, a
+ * method, a slot, `Py_tp_init`) between entering compiled code and
+ * returning to CPython. The bridge watermark below is already the one
+ * bracket every such frame takes before compiled code runs and leaves on
+ * each of its exits (`src/ext_build_tests/bridge_watermark.rs` pins the
+ * pairing), so `pycc_ext_bridge_mark` counts a frame in and
+ * `pycc_ext_bridge_release_to` counts it out.
+ *
+ * A file static, so it is per artifact: each artifact compiles its own copy
+ * of this shim, exactly as it owns its own module-global slots, and every
+ * module object created from one shared object (the same artifact imported
+ * under a second name) shares both. Read and written only with the GIL
+ * held: a free-threaded build is refused at compile time, because
+ * CPython's `Python.h` rejects `Py_LIMITED_API` under `Py_GIL_DISABLED`.
+ * A frame that released the GIL inside a foreign call is still counted.
+ */
+static Py_ssize_t pycc_ext_live_activations = 0;
+
+/*
  * The watermark: this thread's current entry count, 0 when it has no
- * table. Taken before a frame runs compiled code.
+ * table. Taken before a frame runs compiled code, which also counts the
+ * frame as a live activation (see `pycc_ext_live_activations`).
  */
 static Py_ssize_t pycc_ext_bridge_mark(void)
 {
     pycc_ext_bridge_table *table = pycc_ext_bridge_current();
 
+    pycc_ext_live_activations++;
     return table == NULL ? 0 : table->len;
 }
 
@@ -350,13 +373,16 @@ static Py_ssize_t pycc_ext_bridge_mark(void)
  * must not clobber, so it is set aside across the releases and restored
  * afterwards (a NULL round-trips). Each entry leaves the table before its
  * release, so a finalizer that bridges again (and may grow the buffer)
- * never sees a released entry.
+ * never sees a released entry. Called exactly once per mark, it also
+ * counts the frame out of `pycc_ext_live_activations`, before any release
+ * here can run a finalizer.
  */
 static void pycc_ext_bridge_release_to(Py_ssize_t mark)
 {
     pycc_ext_bridge_table *table = pycc_ext_bridge_current();
     PyObject *saved;
 
+    pycc_ext_live_activations--;
     if (table == NULL || mark >= table->len) {
         return;
     }
@@ -2203,6 +2229,24 @@ void pycc_ext_obj_release(PyObject *o)
 void pycc_ext_obj_retain(PyObject *o)
 {
     Py_XINCREF(o);
+}
+
+/*
+ * Part 1 of #1499 (#1501): whether a module-global `object` rebind may
+ * release the value it replaced (`EXT_OBJ_REBIND_MAY_RELEASE_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`). Only the module-exec body rebinds a
+ * global, so the rebinding exec is always one of the live activations; the
+ * answer is 1 only when it is the *only* one. Any other live activation of
+ * this artifact -- a nested exec (the shared object imported under a
+ * second name, or re-imported from its own body), an exec on another
+ * thread, or a compiled function a host entered through a wrapper, on this
+ * thread or on one that released the GIL mid-call -- may hold the old value
+ * borrowed, so the rebind leaks it instead, the direction that can never
+ * free an object still in use.
+ */
+int pycc_ext_obj_rebind_may_release(void)
+{
+    return pycc_ext_live_activations == 1;
 }
 
 /*
@@ -4826,13 +4870,6 @@ static int pycc_ext_exec_module(PyObject *module)
         pycc_ext_exec_classes_key = key;
     }
     /*
-     * The watermark, not a whole-table clear: when this exec runs beneath a
-     * live wrapper on the same thread (a handler whose foreign helper
-     * re-imports the module), that wrapper's entries survive it. When exec
-     * is the outermost frame the mark is 0, which empties the table.
-     */
-    mark = pycc_ext_bridge_mark();
-    /*
      * #1199: this exec's classes, taken now, before the body can run a
      * nested exec that replaces the type statics; installed and restored
      * on both exits alongside the #1366 target below, and released only
@@ -4858,6 +4895,16 @@ static int pycc_ext_exec_module(PyObject *module)
         PyErr_SetString(PyExc_RuntimeError, "pycc: cannot record the executing module");
         return -1;
     }
+    /*
+     * The watermark, not a whole-table clear: when this exec runs beneath a
+     * live wrapper on the same thread (a handler whose foreign helper
+     * re-imports the module), that wrapper's entries survive it. When exec
+     * is the outermost frame the mark is 0, which empties the table. Taken
+     * immediately before the body, after every early return above, so each
+     * mark is released exactly once and this exec is counted as a live
+     * activation (`pycc_ext_live_activations`) for exactly the body.
+     */
+    mark = pycc_ext_bridge_mark();
     exec_status = pycc_ext_module_exec();
     (void)PyThread_tss_set(pycc_ext_exec_target_key, saved_target);
     (void)PyThread_tss_set(pycc_ext_exec_classes_key, saved_classes);

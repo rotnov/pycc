@@ -325,6 +325,15 @@ pub const EXT_OBJ_RELEASE_SYMBOL: &str = "pycc_ext_obj_release";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_RETAIN_SYMBOL: &str = "pycc_ext_obj_retain";
 
+/// The fixed C shim's rebind gate (Part 1 of #1499, #1501): `int
+/// pycc_ext_obj_rebind_may_release(void)` answers non-zero only when the
+/// module-exec body calling it is the artifact's only live compiled
+/// activation. A module-global rebind releases the replaced value only
+/// then, and otherwise leaks it (`object_slot.rs`).
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_REBIND_MAY_RELEASE_SYMBOL: &str = "pycc_ext_obj_rebind_may_release";
+
 /// The fixed C shim's subscript-load helper (Part 3 of #1026, PR 3b of
 /// #1082): it takes a borrowed `PyObject *` and an *owned* key reference
 /// produced by one of the `pycc_ext_obj_pack_*` helpers above, and returns a
