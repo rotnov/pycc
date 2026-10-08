@@ -370,6 +370,8 @@ fn the_shim_adds_the_hook_table_only_after_the_body_succeeds() {
         .find("PyErr_SetString(PyExc_ImportError, \"pycc module body failed\");")
         .expect("the failure arm");
     assert!(exec < failure && failure < add);
-    // The hook table is never the module's creation-time method table.
-    assert!(shim.contains("    pycc_ext_methods,\n    pycc_ext_slots,\n"));
+    // The module has no creation-time method table at all (#1199), so the
+    // hook table is never it.
+    assert!(shim.contains("    NULL,\n    pycc_ext_slots,\n"));
+    assert!(!shim.contains("    pycc_ext_module_hooks,\n    pycc_ext_slots,\n"));
 }

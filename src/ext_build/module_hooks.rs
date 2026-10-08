@@ -12,10 +12,12 @@
 //! module function, but only **after** the module body has run: the
 //! wrapper calls through a `fnptr_` slot the body fills, and importlib's
 //! `_init_module_attrs` reads attributes of the half-initialised module
-//! before `Py_mod_exec`, so a hook installed from `PyModuleDef.m_methods`
-//! would be called through a null slot. `pycc_ext_exec_module` adds the
-//! `pycc_ext_module_hooks[]` table once the body has succeeded, which also
-//! matches CPython, where the hook enters the dict when its `def` executes.
+//! before `Py_mod_exec`, so a hook installed at module creation would be
+//! called through a null slot. `pycc_ext_exec_module` adds the
+//! `pycc_ext_module_hooks[]` table once the body has succeeded. Every other
+//! export is bound as its definition executes (#1199), as CPython binds a
+//! name; a hook is not, so a host read from inside the body does not see
+//! it yet (D-244's #1467 amendment records that residual).
 //!
 //! Which hooks are published is read from the **entry** module's own
 //! source, because the export set is collected from D-222's linked program,
