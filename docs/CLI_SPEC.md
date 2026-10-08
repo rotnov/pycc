@@ -285,18 +285,52 @@ directory once project mode exists.
                     artifact as a top-level module is CPython's own
                     `ImportError`. The driver never probes the disk for
                     such an import, so a same-named `.py` beside the source
-                    changes nothing. A dependency module's relative imports
-                    stay project imports (its body runs with the entry
-                    module's globals, so it has no package of its own), and
+                    changes nothing. Since #1382 the flag also covers the
+                    entry module's *absolute* imports whose first segment
+                    names the entry's own top-level package: the outermost
+                    directory reached by climbing from the entry's
+                    directory while each holds an `__init__.py` (`lark`
+                    for `lark/parsers/lalr_parser_state.py`), read from the
+                    source tree and never from `pycc.toml`. The climb
+                    follows the entry path as spelled, made absolute, with
+                    the prefix through its last `..` resolved as the OS
+                    resolves it and the rest kept as spelled, so a package
+                    directory reached through a symlink is named by the
+                    link, the name it is imported under, and not by its
+                    target. Every shape an
+                    absolute import of a non-project root takes binds
+                    foreign (`from lark.exceptions import E`,
+                    `from lark import x`, `import lark`,
+                    `import lark.exceptions [as e]`), at top level or in a
+                    module-level `if`/`try` block, so none of the package's
+                    modules is linked natively; CPython resolves the name
+                    when `Py_mod_exec` runs, exactly as the same statement
+                    in a `.py` module does. An entry whose own directory is
+                    not a package has no such package, and every other
+                    project package keeps D-222. An own package named like
+                    a module pycc compiles natively (`math`, `enum`,
+                    `typing`, `abc`, `dataclasses`) is refused with
+                    `C0001` at the entry's line 1, whether or not the entry
+                    imports it: `import math` and `from math import x`
+                    would otherwise bind pycc's own model of the standard
+                    module, while CPython's answer depends on `sys.path`
+                    order and on what `sys.modules` already holds. A dependency module's
+                    relative imports, and its absolute imports of the
+                    entry's package, stay project imports (its body runs
+                    with the entry module's globals, so it has no package
+                    of its own; a dependency that imports the entry's
+                    package therefore links a second, native copy of the
+                    module it names), and
                     aliasing, `*`, and a relative import outside the top
                     level and a module-level `if`/`try` block keep their
                     `C0001`s. `check`, `run`, `lock` and a native
                     `build` have no counterpart and keep D-222, so `pycc
                     check` of such a module still reports `T0021` or links
                     the sibling. An entry module whose only non-`pycc_std`
-                    imports are relative skips `pycc.toml` source-root
-                    discovery, so a malformed manifest beside it is not
-                    reported; `--ext` never reads the manifest anyway.
+                    imports are relative or of its own package skips
+                    `pycc.toml` source-root discovery, so a malformed
+                    manifest beside it is not reported; `--ext` never reads
+                    the manifest anyway.
 --static-libpython  embedded build only: link libpython into the executable
                     from the embed interpreter's static archive
                     (`sysconfig` `LIBPL/LIBRARY`, e.g.

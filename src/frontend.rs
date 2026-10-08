@@ -211,8 +211,9 @@ impl ProgramSources {
 /// The third value is the `pycc.toml` source-root discovery parsed, if any,
 /// which the interop policy reads (#1224); `--ext` drops it.
 ///
-/// `relative_imports` is how the entry module's relative imports resolve
-/// (#1366): [`RelativeImports::Project`] everywhere but a `pycc build --ext
+/// `relative_imports` is how the entry module's relative imports (#1366),
+/// and since #1382 its absolute imports rooted at its own top-level package,
+/// resolve: [`RelativeImports::Project`] everywhere but a `pycc build --ext
 /// --foreign-relative-imports`.
 ///
 /// `ext_module` is whether the program is compiled into an `ext` artifact
@@ -358,7 +359,8 @@ pub(crate) fn resolve_frontend(
 }
 
 /// Link and type-check the entry file's program, the `pycc build --ext`
-/// frontend. `relative_imports` is how the entry module's relative imports
+/// frontend. `relative_imports` is how the entry module's relative imports,
+/// and since #1382 its absolute imports rooted at its own top-level package,
 /// resolve: `--foreign-relative-imports` passes
 /// [`RelativeImports::ForeignFromEntry`] (#1366), every other caller
 /// [`RelativeImports::Project`].
