@@ -1954,15 +1954,20 @@ reference. **Each held operand is released exactly once on every path:** a
 failure while it is held (a later sibling operand, or the consuming
 operation itself) releases it on the failure edge -- both the error bridge to
 an enclosing handler and the direct module-exec failure return -- and the
-fallthrough releases it after the operation. A result that is bound to a name
+fallthrough releases it after the operation. The failure may equally be a
+*native* raise in an operand: `o.m(1 // z)` raises `ZeroDivisionError` through
+pycc's own exception state, and the post-node guard's unwind
+(`exception::guard_statement_effects`) releases the held bound method, and
+any produced argument evaluated before it, on the way to the exception target
+([#1486](https://github.com/rotnov/pycc/issues/1486)). A result that is bound to a name
 or slot, passed to a user function, returned, or boxed is still leaked, as are
 the iterator, each item and a comprehension's result, and an operand of
 `print`, an f-string, `hash`, `raise`, a conditional expression or a boolean
 operator; later parts of #1092 narrow those.
 `tests/issue_1092_object_temp_release.rs` pins a zero `sys.getrefcount` delta
-for every consumer and every held-operand failure, at module level (one
-200-trip loop at import, and a failed import retried 50 times) and in a
-function body (at two trip counts).
+for every consumer and every held-operand failure, foreign or native, at
+module level (one 200-trip loop at import, and a failed import retried 50
+times) and in a function body (at two trip counts).
 
 **Binding moves the reference into the global and rebinding leaks it.** Since
 [#1325](https://github.com/rotnov/pycc/issues/1325) a producer's result may be

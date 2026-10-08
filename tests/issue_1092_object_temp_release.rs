@@ -20,7 +20,9 @@
 //! consuming operation's own failure (`s.BAD[s.T]`) -- inside a function's
 //! `try`, out of a function into the module body's `try`, inside a
 //! module-level `try`, and uncaught out of a module body (the module-exec
-//! failure return).
+//! failure return). A further set (#1486) raises natively instead
+//! (`ZeroDivisionError` from `1 // zero`) in a call's argument while the
+//! bound method or a produced callee is held.
 //!
 //! The hosted tests are `#[ignore]`d and contribute no line coverage; the
 //! Tier-1 `native-build-test` leg runs them with `cargo test --workspace --
@@ -239,6 +241,13 @@ fn build(tag: &str, module: &str, source: &str) -> ScratchDir {
     let dir = ScratchDir::new(tag).expect("scratch");
     std::fs::write(dir.join("pycc_t1092_stub.py"), STUB).expect("write the stub");
     std::fs::create_dir_all(dir.join("src")).expect("create the entry directory");
+    build_into(&dir, module, source);
+    dir
+}
+
+/// Writes `source` as `src/<module>.py` in an existing [`build`] directory
+/// and builds it next to the modules already there.
+fn build_into(dir: &Path, module: &str, source: &str) {
     let entry = dir.join("src").join(format!("{module}.py"));
     std::fs::write(&entry, source).expect("write the module");
     let build = pycc()
@@ -250,7 +259,6 @@ fn build(tag: &str, module: &str, source: &str) -> ScratchDir {
         .output()
         .expect("pycc should spawn");
     assert!(build.status.success(), "{}", stderr_of(&build));
-    dir
 }
 
 fn python(dir: &Path, script: &str) -> Output {
@@ -358,5 +366,103 @@ fn a_failed_module_body_releases_its_held_operands() {
     assert_eq!(
         stdout_of(&python(&dir, &script)),
         format!("{} 50\n", zeros())
+    );
+}
+
+/// #1486's shapes: a *native* raise (`1 // zero`) in a call's argument,
+/// evaluated while the bound method (or a produced callee) and any
+/// earlier produced argument are held. Each raising line sits in its own
+/// `try`, so `divisor` names the zero the line divides by.
+fn native_raises(indent: &str, divisor: &str) -> String {
+    [
+        "s.T.m(1 // {d})",
+        "s.T.m(s.U, k=1 // {d})",
+        "s.f(s.T, 1 // {d})",
+    ]
+    .iter()
+    .map(|line| {
+        let line = line.replace("{d}", divisor);
+        format!(
+            "{indent}try:\n{indent}    {line}\n{indent}except ZeroDivisionError:\n{indent}    caught += 1\n"
+        )
+    })
+    .collect()
+}
+
+/// #1486: a native raise in a call's argument releases the held bound
+/// method (whose `__self__` is `T`) and the held earlier argument, in a
+/// module-level `try`, in a function's `try`, and uncaught out of a module
+/// body. The host control line keeps ten bound methods alive and reads
+/// `10` on `T`, so the probe does see this leak when it happens.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_native_raise_in_an_argument_releases_the_bound_method() {
+    let source = format!(
+        "import pycc_t1092_stub as s\n\
+         \n\
+         zero: int = 0\n\
+         caught: int = 0\n\
+         for i in range(200):\n\
+         {top}\
+         \n\
+         \n\
+         def natives(trips: int, z: int) -> int:\n\
+         \x20   caught = 0\n\
+         \x20   i = 0\n\
+         \x20   while i < trips:\n\
+         {body}\
+         \x20       i += 1\n\
+         \x20   return caught\n\
+         \n\
+         \n\
+         def total() -> int:\n\
+         \x20   return caught\n",
+        top = native_raises("    ", "zero"),
+        body = native_raises("        ", "z"),
+    );
+    let dir = build("t1486_native", "pycc_t1486_mod", &source);
+    build_into(
+        &dir,
+        "pycc_t1486_boom",
+        "import pycc_t1092_stub as s\n\nzero: int = 0\ns.T.m(s.U, 1 // zero)\n",
+    );
+    let script = format!(
+        "{prelude}\
+         d, _ = deltas(lambda: [s.T.m for _ in range(10)])\n\
+         print('control', d)\n\
+         d, _ = deltas(lambda: __import__('pycc_t1486_mod'))\n\
+         import pycc_t1486_mod as mod\n\
+         print('import', d, mod.total())\n\
+         for trips in (100, 300):\n\
+         \x20   d, r = deltas(lambda: mod.natives(trips, 0))\n\
+         \x20   print('natives', trips, d, r)\n\
+         def attempt():\n\
+         \x20   caught = 0\n\
+         \x20   for _ in range(50):\n\
+         \x20       try:\n\
+         \x20           import pycc_t1486_boom\n\
+         \x20       except ZeroDivisionError:\n\
+         \x20           caught += 1\n\
+         \x20       sys.modules.pop('pycc_t1486_boom', None)\n\
+         \x20   return caught\n\
+         d, r = deltas(attempt)\n\
+         print('uncaught', d, r)\n",
+        prelude = prelude()
+    );
+    let z = zeros();
+    let control = MEASURED
+        .iter()
+        .map(|name| if *name == "T" { "10" } else { "0" })
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(
+        stdout_of(&python(&dir, &script)),
+        format!(
+            "control {control}\n\
+             import {z} 600\n\
+             natives 100 {z} 300\n\
+             natives 300 {z} 900\n\
+             uncaught {z} 50\n"
+        )
     );
 }
