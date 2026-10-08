@@ -99,8 +99,8 @@ fn a_plain_entry_import_of_its_own_package_is_foreign() {
     );
 }
 
-/// A from-import nested in a module-level `if`/`try` body (#1383) is
-/// answered foreign the same way, where a nested project import would keep
+/// A from-import or plain import nested in a module-level `if`/`try` body
+/// (#1383, #1291) is answered foreign the same way, where a nested project import would keep
 /// its block-body `C0001`.
 #[test]
 fn a_nested_entry_import_of_its_own_package_is_foreign() {
@@ -108,7 +108,9 @@ fn a_nested_entry_import_of_its_own_package_is_foreign() {
     let entry = package_tree(
         &scratch,
         "c = True\nif c:\n    from top.other import y\ntry:\n    \
-         from top import other\nexcept ImportError:\n    pass\n",
+         from top import other\nexcept ImportError:\n    pass\nif c:\n    \
+         import top.other as o\ntry:\n    import top\nexcept ImportError:\n    \
+         pass\n",
     );
     let program = must_load_foreign(&entry);
     assert_eq!(file_names(&program), vec!["m.py".to_string()]);
@@ -117,6 +119,13 @@ fn a_nested_entry_import_of_its_own_package_is_foreign() {
         vec![
             ("top.other".to_string(), "y".to_string(), 0),
             ("top".to_string(), "other".to_string(), 0),
+        ]
+    );
+    assert_eq!(
+        entry_foreign_plain_imports(&program),
+        vec![
+            ("o".to_string(), "top.other".to_string()),
+            ("top".to_string(), "top".to_string()),
         ]
     );
 }

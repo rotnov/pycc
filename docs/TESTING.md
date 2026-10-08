@@ -839,7 +839,7 @@ on the subject's path (a skeleton tree); a copy of the whole `lark` package inst
 for the out-of-package configuration: the same `--ext
 --foreign-relative-imports` build of the subject copied alone goes from four
 errors to three (rows 1 and 4), while both in-tree counts are unchanged.
-#1382 clears row 3 in the package tree as well: the unmodified pinned subject
+#1382, measured out of order on a later `main` (`a3f045a1`, which already carries every change this paragraph lists after it, so its counts follow those), clears row 3 in the package tree as well: the unmodified pinned subject
 (`419d76a7...`) built with `--ext --foreign-relative-imports` inside a copy of
 the whole `lark` 1.3.1 package (debug build of the #1382 branch over `main`
 `a3f045a1`, CPython 3.14.7) reports no diagnostic and writes the extension,

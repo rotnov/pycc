@@ -55,7 +55,8 @@ pub(crate) struct LoadedProgram {
 /// every `ImportBinding::Foreign` the policy can see depends on discovery
 /// having run: the loader answers `Resolution::Foreign` for a non-relative
 /// base, which always comes from `Loader::source_root`, and otherwise only
-/// for the entry module's relative imports under
+/// for the entry module's relative imports and, since #1382, its absolute
+/// imports rooted at its own top-level package under
 /// [`RelativeImports::ForeignFromEntry`] (#1366). That mode is passed only
 /// by `pycc build --ext`, which discards the manifest and never runs the
 /// policy, so discovery being skipped for such an import is unobservable

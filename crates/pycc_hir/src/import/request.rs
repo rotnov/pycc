@@ -16,7 +16,9 @@ use pycc_diag::Span;
 /// touches the filesystem: this is the request half of the contract, and
 /// [`ResolvedImports`] is the answer half. Under the driver's
 /// `--ext --foreign-relative-imports` mode (#1366) the entry module's
-/// relative requests are answered as foreign without a filesystem probe.
+/// relative requests, and since #1382 its absolute requests rooted at its
+/// own top-level package, are answered as foreign without a filesystem
+/// probe.
 ///
 /// `names` is empty exactly for a bare `import m` (which binds a module
 /// namespace, a shape Part 1 only recognizes) and lists every imported
