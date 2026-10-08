@@ -1911,8 +1911,9 @@ straight through.
 Part 1 of [#1371](https://github.com/rotnov/pycc/issues/1371) adds
 `pycc_ext_obj_richcompare(l, r, op, owned)`, which wraps
 `PyObject_RichCompare` and returns its new reference unreleased, so `o == 1`
-or `o < p` leaks one reference per evaluation on the same terms as an
-attribute load. An `object` operand is borrowed; a scalar operand is packed by
+or `o < p` leaks one reference per evaluation when bound or passed on, on the
+same terms as an attribute load (an unbound one is released, Part 1 of #1092
+above). An `object` operand is borrowed; a scalar operand is packed by
 the same four packers (a pycc instance, since #1470, by
 `pycc_ext_obj_pack_instance`) and the `owned` bit mask tells the helper which slots it
 received a new reference for, and the helper **consumes those on every
@@ -1939,8 +1940,9 @@ the leaked set either. An out-of-range selector or a `NULL` operand raises
 **`type(o)` is one more producer.** Part 11 of
 [#1371](https://github.com/rotnov/pycc/issues/1371) adds
 `pycc_ext_obj_type(o)`, which wraps `PyObject_Type`: it borrows the operand
-and returns a new reference to its class, leaked once per evaluation on the
-same terms as an attribute load (`crates/pycc_codegen/src/foreign_type.rs`).
+and returns a new reference to its class, leaked once per evaluation when
+bound or passed on, on the same terms as an attribute load (an unbound one is
+released, Part 1 of #1092 above) (`crates/pycc_codegen/src/foreign_type.rs`).
 `PyObject_Type` cannot fail for a live object; the helper answers `NULL` only
 for a `NULL` operand, the defence in depth `pycc_ext_obj_getattr` and
 `pycc_ext_obj_len` keep, without setting a second exception, and that `NULL`
@@ -2127,7 +2129,7 @@ as `NULL`, which `PySlice_New` reads as `None` -- and answers it with
 of the five packers and is **consumed on every path**, including the one where
 a packer already failed with `NULL`, and the temporary `slice` is released
 before the helper returns. The result is a new reference, leaked on the same
-terms as a subscript load's. `pycc_ext_obj_contains(container, item)` wraps
+terms as a subscript load's (released when unbound, Part 1 of #1092 above). `pycc_ext_obj_contains(container, item)` wraps
 `PySequence_Contains` and answers a C `int` (`-1` on failure, routed to the
 operation's failure edge); it borrows the container, consumes the packed item
 on every path, and so adds nothing to the leaked set: the hosted test runs
@@ -2262,7 +2264,7 @@ the same terms as every other producer, so each successful display leaks the
 list and the one reference it holds per element. An element that raises
 before packing (`[o, 1 // z]`) leaves nothing to release. The hosted test
 `tests/issue_1371_object_list_display.rs` pins `sys.getrefcount` of a mortal
-element across 100 calls: `+2` per call for a discarded `[probe, probe]`,
+element across 100 calls: `+2` per call for a `[probe, probe]` bound and dropped,
 unchanged for a packer failure and for a raising element. The display shares
 the packers' divergence: an `int` element outside the inline range raises
 `OverflowError` where CPython would build the list, until

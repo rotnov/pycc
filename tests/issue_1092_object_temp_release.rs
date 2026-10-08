@@ -129,6 +129,7 @@ fn shapes(indent: &str) -> String {
         "s.T.slot = s.U",
         "del s.T.slot",
         "c = [e for e in s.T if s.U]",
+        "d = [k for k in range(2) if s.U]",
     ]
     .iter()
     .map(|line| format!("{indent}{}\n", line.replace("{i}", indent)))

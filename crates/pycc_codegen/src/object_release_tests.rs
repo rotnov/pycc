@@ -738,3 +738,30 @@ fn a_comprehension_failure_releases_an_outer_held_operand() {
     assert_eq!(get_iter_fail.len(), 1, "{ir}");
     assert_eq!(releases(get_iter_fail[0]), 2, "{ir}");
 }
+
+/// A native comprehension (`[i for i in range(2) if copy.a]`) holds a
+/// produced CPython-object filter across its truth test and releases it on
+/// that test's failure edge and on its fallthrough, once per iteration.
+#[test]
+fn a_native_comprehension_releases_its_produced_object_filter() {
+    let int = |value: i64| MirExpr::IntLiteral(value);
+    let comprehension = MirExpr::Comprehension(Box::new(pycc_mir::MirComprehension {
+        var: "i".to_string(),
+        var_ty: Ty::Int,
+        source: pycc_mir::CompSource::Range {
+            start: int(0),
+            stop: int(2),
+            step: int(1),
+        },
+        cond: Some(attr("a")),
+        elt: pycc_mir::MirCompElt::List(MirExpr::Name {
+            name: "i".to_string(),
+            ty: Ty::Int,
+        }),
+    }));
+    let ir = discard_ir("release_native_comprehension_filter", comprehension);
+    assert_eq!(releases(&ir), 2, "{ir}");
+    let truthy_fail = blocks(&ir, "foreign_truthy_fail");
+    assert_eq!(truthy_fail.len(), 1, "{ir}");
+    assert_eq!(releases(truthy_fail[0]), 1, "{ir}");
+}
