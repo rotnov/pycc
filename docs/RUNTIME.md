@@ -2602,8 +2602,8 @@ the pycc exception it handles. Every path ends in
 exception through the same tag map as a failed object operation, and the
 original object is kept for `pycc_ext_raise_pending` to restore. An uncaught
 `raise o` therefore reaches the host as the identical object, not as a
-copy. The operand is borrowed (an operand produced by a call is leaked on
-the same terms as any object call result). The statement ends its block
+copy. The operand is borrowed; an operand produced by a call is released
+once `PyErr_SetObject` has taken its own reference (Part 3 of #1092, above). The statement ends its block
 exactly like a native `raise`, with `unreachable` that the body emitter
 replaces with a branch to the innermost exception target, in the module body
 too, so a module-level `try` catches it as it now catches every other foreign
@@ -2702,10 +2702,13 @@ never released, and the returned object is handed to the host as a fresh
 reference. A method call's bound or passed-on result leaks on exactly the same
 terms and is trip-count-linear in exactly the same way. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
-rule 6's 5× kill criterion must not measure a hot loop that *binds*, passes,
-returns or boxes the result of a foreign attribute load, method call or
-subscript load, and must not measure a foreign `for` loop at all**, since that
-one leaks an item per trip whatever its body contains. Since Part 1 of #1092
+rule 6's 5× kill criterion must not measure a hot loop that passes, returns or
+boxes the result of a foreign attribute load, method call or subscript load, or
+binds it inside a compiled function, and must not measure a comprehension over
+an object**, since that one leaks an item per trip whatever its body contains.
+Since Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499) a module
+global owns what it binds and a module-level foreign `for` loop releases each
+previous item, so neither leaks per trip any more. Since Part 1 of #1092
 an *unbound* producer result -- `len(o.items)`, `o.a < o.b`, `float(o.x)`, a
 discarded `o.m()` -- is released by its consumer, so a hot loop of only those
 is a legitimate measurement. **The caveat
