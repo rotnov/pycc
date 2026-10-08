@@ -128,11 +128,18 @@ pub(super) fn declare_owned_bits<'ctx>(
 /// borrowed copy across the store: only the module body writes a global, and
 /// every compiled callee has returned before the body's next statement.
 ///
-/// The count is the shim's `pycc_ext_live_activations`, kept by the bridge
-/// watermark every CPython-to-compiled entry already takes and releases on
-/// each exit: `pycc_ext_exec_module`, and every generated wrapper
-/// (`wrapper_for`'s exports, methods, field descriptors, comparison and hash
-/// slots and PEP 562 hooks, and `Py_tp_init`). No other entry runs compiled
+/// The count is the shim's `pycc_ext_live_activations`. The bridge watermark
+/// mark every CPython-to-compiled entry already takes counts the frame in:
+/// `pycc_ext_exec_module`, and every generated wrapper (`wrapper_for`'s
+/// exports, methods, field descriptors, comparison and hash slots and PEP
+/// 562 hooks, and `Py_tp_init`). Each of its exits counts it out through
+/// `pycc_ext_activation_exit` (or `_status`), around the `return` itself --
+/// not in the watermark release -- so a wrapper stays counted until its
+/// return value holds its own host reference and every cleanup that can run
+/// a finalizer (the watermark release, a `PyBuffer_Release`) has finished. A
+/// finalizer may switch the GIL; counted out before it, a suspended wrapper
+/// would let a paused exec's rebind release the borrowed result it is about
+/// to pack. No other entry runs compiled
 /// code: a carrier's `__copy__` and `tp_dealloc` run only the runtime. It is
 /// per artifact (a file static in each artifact's own shim), read with the
 /// GIL held, and a free-threaded host is refused both at compile time
@@ -145,7 +152,8 @@ pub(super) fn declare_owned_bits<'ctx>(
 /// support (a suspended frame of the same activation could keep a borrowed
 /// copy across a rebind), publishing object globals on the host module (the
 /// host could then write the slot), and any new entry into compiled code
-/// that does not take the bridge watermark (it would be uncounted).
+/// that does not take the bridge watermark (it would be uncounted), or an
+/// exit that counts its frame out before its pack and cleanup.
 pub(super) fn owned_bit<'ctx>(
     rt: &RtFns<'ctx>,
     slot: &StorageSlot<'ctx>,

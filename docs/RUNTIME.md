@@ -2078,11 +2078,18 @@ shared object imported under a second name, or re-imported from its own
 body), an exec on another thread, or a compiled function a host entered
 through a wrapper -- on another thread, suspended where a foreign call
 released the GIL (`h(x, slow())` keeps `x` borrowed while `slow()` runs).
-The shim counts live activations in `pycc_ext_live_activations`, through the
-bridge watermark every frame that enters compiled code from CPython already
-takes and releases on each exit -- each `pycc_ext_exec_module` body and each
-generated wrapper (an export, a method, a field descriptor, a comparison or
-hash slot, a PEP 562 hook, `Py_tp_init`) -- and the store's release branch
+The shim counts live activations in `pycc_ext_live_activations`. The bridge
+watermark mark every frame that enters compiled code from CPython already
+takes counts it in -- each `pycc_ext_exec_module` body and each generated
+wrapper (an export, a method, a field descriptor, a comparison or hash slot,
+a PEP 562 hook, `Py_tp_init`) -- and each of the frame's exits counts it out
+through `pycc_ext_activation_exit`, wrapped around the `return` itself. The
+watermark release only truncates the bridge table, so a wrapper is still
+counted while that release and every `PyBuffer_Release` run their
+finalizers, and until its pack has given the return value its own host
+reference: a finalizer can switch the GIL, and a wrapper counted out before
+it would let a paused exec's rebind release the borrowed result it is
+about to pack. The store's release branch
 also requires `pycc_ext_obj_rebind_may_release()`, which is 1 only when the
 count is 1. The count is a file static, so it is per artifact, like the
 slots it guards; it is read and written with the GIL held, and a
@@ -2094,8 +2101,9 @@ exec's own activation no frame can hold a borrowed copy across the store:
 only the module body stores a global (`global` is refused with `C0001`), a
 compiled function it calls has returned before its next statement, and
 generators are refused. So the remaining limits are: lowering `global` or
-generators, publishing object globals on the host module, or adding an entry
-into compiled code that does not take the bridge watermark must revisit this
+generators, publishing object globals on the host module, adding an entry
+into compiled code that does not take the bridge watermark, or counting a
+frame out before its pack and cleanup must revisit this
 rule first (the SAFETY note on `object_slot::owned_bit`); and a rebind under
 another live activation leaks, so a module body that keeps rebinding while a
 host thread sits in a compiled call, or a nested exec, leaks one value per
@@ -2107,7 +2115,10 @@ at two trip counts and once under `-X dev` with `PYTHONMALLOC=debug`; its
 nested-exec test pins that a body re-imported beneath itself leaks each
 value it rebinds while both outer and nested reads see a live object, and
 its wrapper test pins the same beneath a host's call into a compiled
-export.
+export. A threaded test pins the exit order: a wrapper whose
+`PyBuffer_Release` hands the GIL to a paused exec that then rebinds the
+global the wrapper is returning still returns a live object; counting the
+wrapper out before that cleanup crashes the debug-allocator run.
 
 **A function body adds no reference traffic of its own.** Since Part 1 of
 [#1333](https://github.com/rotnov/pycc/issues/1333)

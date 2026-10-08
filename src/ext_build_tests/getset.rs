@@ -633,7 +633,7 @@ fn an_instance_slot_getter_packs_through_the_instance_egress() {
         assert!(inc.contains(expected), "missing:\n{expected}\nin:\n{inc}");
     }
     assert!(
-        inc.contains("return pycc_ext_pack_instance(result);"),
+        inc.contains("return pycc_ext_activation_exit(pycc_ext_pack_instance(result));"),
         "{inc}"
     );
     for absent in ["_St_5_color", "_St_3_err", "_St_4_tint"] {

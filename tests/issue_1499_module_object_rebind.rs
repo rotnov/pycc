@@ -44,8 +44,10 @@ fn stderr_of(output: &Output) -> String {
 /// weak-referenced from `REFS`; a `Peeker`'s finalizer calls `HOOK`, which
 /// the host points at the module under test.
 const STUB: &str = "\
+import array
 import importlib
 import sys
+import threading
 import weakref
 
 LIVE = 0
@@ -114,6 +116,29 @@ def nest():
 def hold(o, _):
     # Reads `o`, a borrowed global the caller kept across `nest()`.
     HELD.append(type(o).__name__)
+
+
+PAUSED = threading.Event()
+GO = threading.Event()
+DONE = threading.Event()
+
+
+def pause():
+    # Suspends the module body, the GIL released, until the host lets it go.
+    PAUSED.set()
+    GO.wait(30)
+
+
+class Exporter:
+    # A float64 buffer whose release hands the GIL to the paused body and
+    # waits until that body has finished.
+    def __buffer__(self, flags):
+        return memoryview(array.array('d', [1.0]))
+
+    def __release_buffer__(self, view):
+        GO.set()
+        DONE.wait(30)
+        view.release()
 
 
 T = Thing()
@@ -572,4 +597,70 @@ fn an_earlier_exec_leaks_at_most_its_last_value() {
         python(&dir, &[], &[], "pycc_t1499_again", &again),
         "reload 1 Thing\nagain 4 Thing\n"
     );
+}
+
+/// The module under test for a wrapper suspended in its own cleanup: the
+/// body binds `x` twice, then pauses in `s.pause()` (the GIL released)
+/// until the host lets it go, and rebinds `x` once more.
+const SUSPENDED_MODULE: &str = "\
+import pycc_t1499_stub as s
+
+
+def get_x(b: memoryview) -> object:
+    return x
+
+
+x: object = s.fresh()
+x = s.fresh()
+s.pause()
+x = s.fresh()
+";
+
+/// The second Codex P1 on #1505: a wrapper stays a live activation until
+/// its return value holds its own host reference. A thread imports the
+/// module, whose body pauses after binding `x` (`a2`); the host calls
+/// `get_x` with an `Exporter`, whose `__release_buffer__` -- run by the
+/// wrapper's `PyBuffer_Release`, after the compiled call returned `a2`
+/// borrowed and before the pack -- lets the body go and waits until it has
+/// rebound `x` to `a3` and returned. Were the wrapper counted out before
+/// that cleanup, the paused exec would see itself alone, release `a2`, and
+/// the pack would take a reference to freed memory, which the debug
+/// allocator catches. Counted, the rebind leaks `a2` (one reference more
+/// than under CPython) and the host gets a live `a2`.
+///
+/// CPython calls no buffer hook for a pure function's argument, so the
+/// host lets the body go itself after the call; there `got` is `a2` too,
+/// read before the rebind. Alive in both: `a2` and `a3`; dead: `a1`.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_wrapper_suspended_in_its_cleanup_still_counts_as_a_live_activation() {
+    let dir = build(
+        "t1499_suspended",
+        &[("pycc_t1499_suspended", SUSPENDED_MODULE)],
+    );
+    let script = format!(
+        "{PRELUDE}\
+         import threading\n\
+         live = s.LIVE\n\
+         def run():\n\
+         \x20   importlib.import_module(name)\n\
+         \x20   s.DONE.set()\n\
+         th = threading.Thread(target=run)\n\
+         th.start()\n\
+         s.PAUSED.wait(30)\n\
+         got = sys.modules[name].get_x(s.Exporter())\n\
+         s.GO.set()\n\
+         th.join()\n\
+         m = sys.modules[name]\n\
+         gc.collect()\n\
+         report('got', type(got).__name__, got is m.get_x(s.Exporter()))\n\
+         report('refs', sys.getrefcount(got))\n\
+         report('live', s.LIVE - live, 'dead', dead())\n"
+    );
+    let flags: &[&str] = &["-X", "dev"];
+    let env = &[("PYTHONMALLOC", "debug")];
+    let compiled = python(&dir, flags, env, "pycc_t1499_suspended", &script);
+    let oracle = python(&dir, flags, env, "pycc_t1499_suspended_py", &script);
+    assert_eq!(compiled, "got Thing False\nrefs 3\nlive 2 dead 1\n");
+    assert_eq!(oracle, "got Thing False\nrefs 2\nlive 2 dead 1\n");
 }

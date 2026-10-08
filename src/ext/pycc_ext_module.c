@@ -337,10 +337,16 @@ static pycc_ext_bridge_table *pycc_ext_bridge_reserve(void)
  * `pycc_ext_exec_module` body and every generated wrapper (an export, a
  * method, a slot, `Py_tp_init`) between entering compiled code and
  * returning to CPython. The bridge watermark below is already the one
- * bracket every such frame takes before compiled code runs and leaves on
- * each of its exits (`src/ext_build_tests/bridge_watermark.rs` pins the
- * pairing), so `pycc_ext_bridge_mark` counts a frame in and
- * `pycc_ext_bridge_release_to` counts it out.
+ * bracket every such frame takes before compiled code runs, so
+ * `pycc_ext_bridge_mark` counts a frame in. The frame is counted out
+ * separately, by `pycc_ext_activation_exit` (or `_status`) wrapped around
+ * each of its returns -- not by `pycc_ext_bridge_release_to`, which runs
+ * earlier (`src/ext_build_tests/bridge_watermark.rs` pins both pairings).
+ * A wrapper stays counted until its return value holds its own host
+ * reference and every cleanup that can run a finalizer (the watermark
+ * release, a `PyBuffer_Release`) has finished: a finalizer may switch the
+ * GIL, and a suspended activation counted out early would let another
+ * thread's rebind release the very object this wrapper is about to return.
  *
  * A file static, so it is per artifact: each artifact compiles its own copy
  * of this shim, exactly as it owns its own module-global slots, and every
@@ -375,16 +381,17 @@ static Py_ssize_t pycc_ext_bridge_mark(void)
  * must not clobber, so it is set aside across the releases and restored
  * afterwards (a NULL round-trips). Each entry leaves the table before its
  * release, so a finalizer that bridges again (and may grow the buffer)
- * never sees a released entry. Called exactly once per mark, it also
- * counts the frame out of `pycc_ext_live_activations`, before any release
- * here can run a finalizer.
+ * never sees a released entry. It only truncates the table: the frame is
+ * still a live activation while these releases run their finalizers, and
+ * is counted out later, by `pycc_ext_activation_exit`. Every entry it drops
+ * is an original the escaping-exception lookup has already passed over, so
+ * nothing after this call -- the pack included -- needs one.
  */
 static void pycc_ext_bridge_release_to(Py_ssize_t mark)
 {
     pycc_ext_bridge_table *table = pycc_ext_bridge_current();
     PyObject *saved;
 
-    pycc_ext_live_activations--;
     if (table == NULL || mark >= table->len) {
         return;
     }
@@ -396,6 +403,28 @@ static void pycc_ext_bridge_release_to(Py_ssize_t mark)
         Py_XDECREF(orig);
     }
     PyErr_SetRaisedException(saved);
+}
+
+/*
+ * Counts a frame out of `pycc_ext_live_activations` and hands back its
+ * return value unchanged. A generated wrapper returns through it on every
+ * exit after its watermark mark, so C evaluates the argument -- the pack
+ * that gives the return value its own host reference -- before the count
+ * drops, and every cleanup before the `return` already ran while counted.
+ * Exactly one call per `pycc_ext_bridge_mark`.
+ */
+static PyObject *pycc_ext_activation_exit(PyObject *result)
+{
+    pycc_ext_live_activations--;
+    return result;
+}
+
+/* The same for a frame whose exit is a status (`Py_tp_init`, the module
+ * exec slot). */
+static int pycc_ext_activation_exit_status(int status)
+{
+    pycc_ext_live_activations--;
+    return status;
 }
 
 /*
@@ -4904,7 +4933,8 @@ static int pycc_ext_exec_module(PyObject *module)
      * is the outermost frame the mark is 0, which empties the table. Taken
      * immediately before the body, after every early return above, so each
      * mark is released exactly once and this exec is counted as a live
-     * activation (`pycc_ext_live_activations`) for exactly the body.
+     * activation (`pycc_ext_live_activations`) from the body through its
+     * watermark release, whose finalizers run while it is still counted.
      */
     mark = pycc_ext_bridge_mark();
     exec_status = pycc_ext_module_exec();
@@ -4936,9 +4966,10 @@ static int pycc_ext_exec_module(PyObject *module)
         /* Only after the lookup above: any entry still here belongs to a
          * bridged exception that was caught, or replaced by another. */
         pycc_ext_bridge_release_to(mark);
-        return -1;
+        return pycc_ext_activation_exit_status(-1);
     }
     pycc_ext_bridge_release_to(mark);
+    (void)pycc_ext_activation_exit_status(0);
     status = pycc_ext_publish_unbound_classes(module, classes);
     Py_DECREF(classes);
     if (status != 0) {
