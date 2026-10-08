@@ -77,6 +77,21 @@ pub const EXT_MODULE_EXEC_SYMBOL: &str = "pycc_ext_module_exec";
 /// already set), which is *not* the per-export wrapper's (`NULL`).
 pub const EXT_MODULE_EXEC_FAILED: i64 = -1;
 
+/// The fixed C shim's per-definition publication entry point (#1199):
+/// `int pycc_ext_publish(const char *name)` binds the export named `name`
+/// on the executing module and returns `0`, or `0` without touching any
+/// state for a name the generated tables do not know, or `-1` with the
+/// CPython exception set. The module body calls it right after a top-level
+/// `def` or class statement has bound its function-pointer slots
+/// (`ext_publish.rs`), so an export becomes visible when its definition
+/// executes, as in CPython.
+///
+/// Kept here, beside [`EXT_MODULE_EXEC_SYMBOL`], so the driver's shim
+/// parity test can assert it: the `--ext` link resolves an undefined symbol
+/// lazily, so a misspelling on either side would be a crash at first call
+/// rather than a link error.
+pub const EXT_PUBLISH_SYMBOL: &str = "pycc_ext_publish";
+
 /// The name the synthetic module-body entry point carries in each mode.
 /// One function so the `add_function` call and the `MirStmt::Return`
 /// invariant that pins the name can never drift apart.

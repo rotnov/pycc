@@ -25,7 +25,9 @@ use super::*;
 /// character that would escape it.
 ///
 /// The export list is **partitioned** on [`ExtExport::class`]. A
-/// module-level function keeps its `pycc_ext_methods[]` row unchanged; a
+/// module-level function keeps its `pycc_ext_methods[]` row unchanged --
+/// a table the shim's `pycc_ext_publish` binds one row at a time, as each
+/// definition executes, rather than `PyModuleDef.m_methods` (#1199); a
 /// method goes into its own class's table instead, because a row in
 /// `pycc_ext_methods[]` would publish exactly the flat `mod."Class.method"`
 /// attribute the type object exists to avoid. A PEP 562 module hook

@@ -57,8 +57,9 @@ fn an_init_only_class_is_published_with_only_the_copy_row_and_a_constructor() {
 
     // The rendered type: a method table holding only the shared `__copy__`
     // (#1455), a real `tp_init`,
-    // the slot descriptors, no `DISALLOW_INSTANTIATION`, and a module
-    // attribute under the class's own name.
+    // the slot descriptors, no `DISALLOW_INSTANTIATION`, and (#1199) a
+    // publication-table entry under the class's own name, which binds the
+    // module attribute once the class statement has run.
     let c = method_types_c(&publications, &ctors, &getsets_of(&hir), &[]);
     for needle in [
         "static PyMethodDef pycc_ext_type_methods_ParseConf[] = {\n    \
@@ -66,7 +67,8 @@ fn an_init_only_class_is_published_with_only_the_copy_row_and_a_constructor() {
          {NULL, NULL, 0, NULL},\n};",
         "{Py_tp_init, pycc_ext_tp_init_ParseConf}",
         "{Py_tp_getset, pycc_ext_type_getset_ParseConf}",
-        "PyModule_AddObjectRef(module, \"ParseConf\", type)",
+        "    if (strcmp(name, \"ParseConf\") == 0) {\n        \
+         return &pycc_ext_type_object_ParseConf;\n    }\n",
         "pycc_ext_carrier_register(\"ParseConf\", type)",
     ] {
         assert!(c.contains(needle), "missing {needle:?} in:\n{c}");
