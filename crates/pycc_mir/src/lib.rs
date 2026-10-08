@@ -1,5 +1,6 @@
 pub use pycc_hir::{
-    EnumMemberValue, FromImport, HirClassDef, InheritedCopy, inherited_copy_origin,
+    EnumMemberValue, FromImport, HirClassDef, InheritedCopy, foreign_binds_root,
+    inherited_copy_origin,
 };
 mod binop;
 use binop::binop_result_ty;

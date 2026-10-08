@@ -245,9 +245,11 @@ fn hir(imports: Vec<ImportBinding>) -> HirModule {
     }
 }
 
+/// The binding of an unaliased `import {path}`, which binds the root of a
+/// dotted path (#1381).
 fn foreign(path: &str, start: u32) -> ImportBinding {
     ImportBinding::Foreign {
-        local_name: path.to_string(),
+        local_name: path.split('.').next().unwrap_or(path).to_string(),
         module_path: path.to_string(),
         from: None,
         site: pycc_hir::ForeignImportSite::Item(0),
@@ -331,9 +333,8 @@ fn allowlist_admits_listed_roots_and_covers_their_submodules() {
         allow: vec!["json".to_string()],
         source: PolicySource::CliFlag,
     };
-    // `json.decoder` cannot reach the HIR as a `Foreign` binding today (a
-    // dotted import is `C0001`), so the root rule is pinned here on a
-    // hand-built binding.
+    // `import json.decoder` binds the root `json` (#1381) and is judged by
+    // that root, pinned here on a hand-built binding.
     let found = gaps(
         &policy,
         vec![
@@ -366,6 +367,7 @@ fn a_rejection_is_reported_at_the_import_span() {
         &EffectivePolicy::Deny {
             source: PolicySource::Pure,
         },
+        "numpy",
         "numpy",
         None,
         Span::new(3, 9),

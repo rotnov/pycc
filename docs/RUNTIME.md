@@ -1361,8 +1361,11 @@ lets the module be dotted (`from json.decoder import JSONDecoder`) when its root
 is neither a project module nor a project package; the submodule is fetched
 with CPython's own `IMPORT_FROM` semantics, including the `sys.modules`
 fallback that binds `from xml.dom import minidom`, while a dotted name under a
-project root, and the plain `import X.Y`
-([#1381](https://github.com/rotnov/pycc/issues/1381)), keep their `C0001`.
+project root keeps its `C0001`. Part 3 of #1138
+([#1381](https://github.com/rotnov/pycc/issues/1381)) admits the plain dotted
+`import X.Y`, which binds the root `X`, and `import X.Y as c`, which binds the
+leaf `X.Y` to `c`, under the same root condition (*The plain dotted form*,
+below).
 Only that shape is admitted, at top level or (since
 [#1383](https://github.com/rotnov/pycc/issues/1383)) inside a module-level
 `if`/`try` block, below. An aliased name
@@ -1553,6 +1556,46 @@ remain:
 - CPython 3.13's "(consider renaming '…' since it has the same name as the
   standard library module …)" variant, for a local file shadowing a
   standard-library module, is not reproduced either.
+
+**The plain dotted form** ([#1381](https://github.com/rotnov/pycc/issues/1381),
+Part 3 of #1138). `import X.Y` and `import X.Y as c`, whose root `X` is neither
+a project module nor a project package, are one call each to
+`pycc_ext_obj_import_dotted(name, bind_root)` with the whole dotted name, at
+the statement's position, at top level or nested in a module-level `if`/`try`
+block, with the same `NULL` edges as the undotted `import` (the direct return
+at top level, the #1293 bridge when nested). An undotted `import X` keeps
+`pycc_ext_obj_import`. The helper mirrors CPython 3.14's bytecode for the two
+statements:
+
+1. It calls `builtins.__import__(X.Y, None, None, None, 0)`, CPython's
+   `IMPORT_NAME` with no fromlist, which loads every package on the path and
+   returns the *root* module. When `__import__` is missing from the builtins it
+   raises CPython's `ImportError("__import__ not found")`.
+2. For `import X.Y` (`bind_root` 1), that root is the result: the statement
+   binds `X`.
+3. For `import X.Y.Z as c` (`bind_root` 0), it walks from the root through
+   each later segment with the from form's steps 2 and 3 above (the attribute,
+   then the `sys.modules` entry `<__name__>.<segment>`, then CPython's
+   `cannot import name` `ImportError`), which is the `IMPORT_FROM` chain
+   CPython 3.14 compiles the aliased statement into. The helper shares that
+   step with `pycc_ext_obj_import_from`.
+
+Every binding is compared by the module it binds: `import X.Y` binds `X`, so
+it is the same binding as `import X` or `import X.Z`. Such statements are
+accepted together and each still runs its own import, so `import xml.dom`
+then `import xml.sax` loads both. `import X.Y as X`, which would bind the
+leaf under its root's own name, is refused with `C0001`, as is an unaliased
+dotted import whose root is a name pycc resolves by its spelling
+(`import typing.x`); [DIAGNOSTICS.md](./DIAGNOSTICS.md) lists both. The
+interop policy, the native-build refusal and the lock classify the statement
+by its root, like the dotted from form. The returned reference is never
+released, like `pycc_ext_obj_import`'s, and an overridden `__import__` sees
+one call per statement, as under CPython.
+`tests/issue_1381_dotted_plain_import.rs` compares the root and leaf
+bindings, two sibling submodule imports, a missing leaf at top level and
+under `except ImportError:`, and an embedded build against the host
+interpreter's own run of the same source; the missing-`__import__` branch is
+not exercised by a test.
 
 **The relative from form** ([#1366](https://github.com/rotnov/pycc/issues/1366)).
 Only `pycc build --ext --foreign-relative-imports` emits it, and only for the
@@ -2840,7 +2883,7 @@ an optional root (#1290) that is not installed, with none.
 | Policy | Behavior |
 |---|---|
 | `auto` | Default. Permit every CPython-backed import root present in the source; an embedded build bundles its pinned dependency closure from `pycc.lock` (#1242). |
-| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. An allowed root's pinned transitive closure is bundled with it without separate entries (#1242); a submodule from-import (`from json.decoder import X`) is classified by its root, and a plain dotted `import` is `C0001` today. |
+| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. An allowed root's pinned transitive closure is bundled with it without separate entries (#1242); a submodule from-import (`from json.decoder import X`) is classified by its root, and so is a plain dotted `import a.b` or `import a.b as c` ([#1381](https://github.com/rotnov/pycc/issues/1381)). |
 | `deny` | Reject every CPython-backed import with `I0402`. Native pycc modules remain available and the artifact has no CPython/libpython dependency. `--pure` is the CLI shorthand. |
 
 - A source-level `import` is sufficient intent under `auto`; pycc does not ask

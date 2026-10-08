@@ -56,6 +56,7 @@
 
 use super::*;
 use crate::ext::EXT_IMPORT_ERROR_BRIDGE_SYMBOL;
+use crate::ext::EXT_OBJ_IMPORT_DOTTED_SYMBOL;
 use crate::ext::EXT_OBJ_IMPORT_FROM_SYMBOL;
 use inkwell::builder::Builder;
 use pycc_mir::FromImport;
@@ -155,6 +156,24 @@ pub(super) fn emit_item<'ctx>(
     }
 }
 
+/// Declares the shim's `PyObject *pycc_ext_obj_import_dotted(const char *,
+/// long long)` once per module (#1381), returning the existing declaration
+/// on every later call.
+fn obj_import_dotted_fn<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = module.get_function(EXT_OBJ_IMPORT_DOTTED_SYMBOL) {
+        return existing;
+    }
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    module.add_function(
+        EXT_OBJ_IMPORT_DOTTED_SYMBOL,
+        ptr.fn_type(&[ptr.into(), context.i64_type().into()], false),
+        None,
+    )
+}
+
 /// Declares the shim's `PyObject *pycc_ext_obj_import_from(const char *,
 /// const char *const *, long long, long long, long long)` once per module
 /// (#1278; the fifth parameter, the relative `level`, is #1366's).
@@ -248,8 +267,9 @@ fn emit_import_from_call<'ctx>(
 /// [`MirItem::ForeignImport`], or one entry of a `MirStmt::ForeignImport`)
 /// and stores the resulting object into `slot`, the binding's module
 /// global. `pycc_ext_obj_import(module_path)` binds the module for `import
-/// X`; `pycc_ext_obj_import_from` binds the named attribute for `from X
-/// import n` (#1278). The local name also names the module-path string
+/// X`; `pycc_ext_obj_import_dotted` binds the root of `import X.Y` or the
+/// leaf of `import X.Y as Z` (#1381); `pycc_ext_obj_import_from` binds the
+/// named attribute for `from X import n` (#1278). The local name also names the module-path string
 /// global; two imports binding the same name get two strings, which LLVM
 /// names apart by emission order.
 ///
@@ -291,6 +311,26 @@ pub(super) fn emit<'ctx>(
         .expect("build_global_string_ptr should not fail")
         .as_pointer_value();
     let imported = match from {
+        None if module_path.contains('.') => {
+            // #1381: `import a.b` binds the root, `import a.b as c` the leaf.
+            let bind_root = pycc_mir::foreign_binds_root(local_name, module_path, None);
+            builder
+                .build_call(
+                    obj_import_dotted_fn(context, module),
+                    &[
+                        name.into(),
+                        context
+                            .i64_type()
+                            .const_int(u64::from(bind_root), false)
+                            .into(),
+                    ],
+                    "foreign_import",
+                )
+                .expect("build_call should not fail for pycc_ext_obj_import_dotted")
+                .try_as_basic_value()
+                .expect_basic("pycc_ext_obj_import_dotted returns PyObject *")
+                .into_pointer_value()
+        }
         None => builder
             .build_call(
                 obj_import_fn(context, module),

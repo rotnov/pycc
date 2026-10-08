@@ -1051,7 +1051,7 @@ edit was made:
 | `C0002` `typing` has no importable `Callable` / `AnyStr` | 1 each | #882. `Generic` resolves since [#1378](https://github.com/rotnov/pycc/issues/1378), so the line-11 import now fails on `AnyStr` instead. The same `pycc build lark/parsers/lalr_parser_state.py -o <out>.abi3.so --ext` command (debug build of the #1378 branch on top of `main` at `6114494b`) reports 14 errors, all in `lark/utils.py`, one more than before: the failed line-5 import no longer masks `List`/`Tuple`, which now resolve by their spelling, so line 365's `List[Tuple[int, int]]` reports its own `T0034` (`list[tuple[int, int]]` is not compiled yet) |
 | `C0001` only a single module per `import` statement (`import sys, re`) | 0 (was 1) | #1280, closed: `import sys, re` is now accepted; the same `pycc build <module> -o <out>.abi3.so --ext` command (release build at the #1280 branch head `54a0fa93`, on the unedited subject module, which fails identically) reports 17 errors, all still in `lark/utils.py` |
 | `C0001` `import` inside a block body (module-level `try`/`if`) | 0 (was 3) | #1282; #1291 (Part 1) admits an undotted foreign import in a module-level `if`/`try` body, so `import regex` (line 120) and `import atomicwrites` (line 303) now compile. Both sit in `try: ... except ImportError:`; that is compile-time only for this workload, since lark still stops at `lark/utils.py`, but since #1293 such a handler runs when the module is absent, as in CPython (`tests/issue_1293_import_bridge.rs`). The same `pycc build <module> -o <out>.abi3.so --ext` command (release build of the #1291 change on top of `main` at `cb2ed87a`, which includes #1292's `ImportError` builtins, on the unedited subject module) reports 15 errors, all still in `lark/utils.py` |
-| `C0001` import of module `re._parser` (`import re._parser as sre_parse`, line 126, in the `if` body) | 1 | [#1381](https://github.com/rotnov/pycc/issues/1381) (Part 3 of #1138, the plain dotted `import`) and #1282, whose third occurrence this is: before #1291 it was the block-body `C0001`, and the dotted name now fails on its own |
+| `C0001` import of module `re._parser` (`import re._parser as sre_parse`, line 126, in the `if` body) | 0 expected (was 1; the whole-module run was not re-measured) | [#1381](https://github.com/rotnov/pycc/issues/1381) (Part 3 of #1138) admits the plain dotted `import`, binding the leaf for the aliased form, at top level and in a module-level `if`/`try` body; `tests/issue_1381_dotted_plain_import.rs` builds `import re._parser as sre_parse` in a module-level `if` body with `--ext` and compares the bound module against CPython. Before #1381 it was the third occurrence of #1282: before #1291 it was the block-body `C0001`, then the dotted name failed on its own |
 | `C0001` attribute-expression annotation (`logging.Logger`) | 1 | #889 (v0.4) |
 | `C0001` keyword call arguments (`TypeVar("_T", bound=...)`) | 1 | #884 (v0.4) |
 | `C0001` `@dataclass` with options | 1 | #887 (v0.4) |
@@ -1710,8 +1710,8 @@ tests that cover it now, or the owner of what is still missing.
   in `tests/diagnostics/`); the closure is bundled from `pycc.lock`
   (`tests/issue_1242_locked_closure.rs`); a submodule from-import is
   classified by its root (`tests/issue_1138_dotted_foreign_from_import.rs`,
-  Part 1 of #1138). *Pending:* the plain dotted `import` of a submodule
-  (`C0001` today, #1381);
+  Part 1 of #1138), and so is a plain dotted `import` of a submodule
+  (`tests/issue_1381_dotted_plain_import.rs`, #1381);
 - CLI policy precedence covers every usable branch: explicit `auto` and
   `deny` each override the other and a configured `allowlist`; explicit
   `allowlist` with its configured roots accepts an allowed root and emits

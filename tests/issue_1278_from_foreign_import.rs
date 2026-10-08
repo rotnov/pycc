@@ -116,14 +116,6 @@ fn the_shapes_outside_this_channel_keep_their_c0001() {
             "`from ... import *` (wildcard import) is not supported yet",
         ),
         (
-            // The from form of a dotted module is a foreign import since
-            // Part 1 of #1138 (`tests/issue_1138_dotted_foreign_from_import.rs`);
-            // the plain dotted `import` keeps its `C0001` (#1381).
-            "from_foreign_plain_dotted",
-            "import os.path\n",
-            "import of module `os.path` is not supported yet",
-        ),
-        (
             // A module-level `if`/`try` body admits it since #1383
             // (`tests/issue_1383_block_from_import.rs`); a function body
             // does not.

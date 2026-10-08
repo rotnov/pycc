@@ -14,6 +14,7 @@ mod annotations_foreign;
 mod block;
 mod block_from;
 mod carrier;
+mod dotted;
 mod fallback;
 mod from_foreign;
 mod multi;
@@ -597,6 +598,21 @@ fn re_exporting_a_dependency_s_foreign_import_is_refused() {
         diagnostic.span,
         Some(Span::new(0, source.trim_end().len() as u32)),
         "the diagnostic points at the importing statement"
+    );
+}
+
+/// #1381: a re-exported `import xml.dom` names the module it binds, `xml`.
+#[test]
+fn re_exporting_a_dependency_s_dotted_import_names_its_root() {
+    let fixture = Fixture {
+        origin: foreign_dependency("import xml.dom\n", "import xml.dom"),
+        class_slots: Vec::new(),
+    };
+    let diagnostic = fixture.first_error("from dep import xml\n", &[]);
+    assert_eq!(
+        diagnostic.message,
+        "`dep.py` binds `xml` to the CPython module object `xml`; re-exporting a \
+         foreign import across project modules is not supported yet"
     );
 }
 

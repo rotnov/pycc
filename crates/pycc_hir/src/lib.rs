@@ -53,8 +53,8 @@ pub(crate) use func::{
 };
 pub use hir_module::{
     ForeignImportSite, FromImport, HirModule, ImportBinding, ProjectBindingKind,
-    foreign_bound_object, foreign_import_statement, killed_names, opens_foreign_statement,
-    top_level_bound_names,
+    foreign_binds_root, foreign_bound_module, foreign_bound_object, foreign_import_statement,
+    killed_names, opens_foreign_statement, top_level_bound_names,
 };
 pub use if_exp::if_exp_result_ty;
 pub use import::{

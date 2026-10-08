@@ -17,7 +17,8 @@ use crate::module::LoweredModule;
 use crate::{
     FIRST_USER_EXCEPTION_TYPE_TAG, FOREIGN_BASE_EXCEPTION_TYPE_TAG, ForeignImportSite, FromImport,
     HirModule, ImportBinding, MAX_USER_EXCEPTION_CLASSES, builtin_exception_class_defs,
-    builtin_exception_init_item, foreign_bound_object, is_builtin_exception_class, unsupported,
+    builtin_exception_init_item, foreign_bound_module, foreign_bound_object,
+    is_builtin_exception_class, unsupported,
 };
 use pycc_diag::{Diagnostic, Span};
 use std::collections::{HashMap, HashSet};
@@ -43,23 +44,29 @@ struct ForeignLocal<'a> {
 }
 
 impl ForeignLocal<'_> {
-    /// The object's identity: the module, its relative level (#1366; `0`
-    /// for `import X` and every absolute from-import) and, for a
-    /// from-import, the attribute name.
+    /// The object's identity: the bound module (#1381: `a` for `import
+    /// a.b`), its relative level (#1366; `0` for `import X` and every
+    /// absolute from-import) and, for a from-import, the attribute name.
     fn key(&self) -> (&str, u32, Option<&str>) {
         (
-            self.module_path,
+            self.bound_module(),
             self.from.map_or(0, |from| from.level),
             self.from.map(|from| from.name.as_str()),
         )
     }
 
-    /// `numpy`, or `itertools.product` / `.sib` for a from-import.
+    /// `numpy` (`a` for `import a.b`, #1381), or `itertools.product` /
+    /// `.sib` for a from-import.
     fn dotted(&self) -> String {
         match self.from {
-            None => self.module_path.to_string(),
+            None => self.bound_module().to_string(),
             Some(from) => from.spelled_object(self.module_path),
         }
+    }
+
+    /// The module this binding binds; see [`foreign_bound_module`].
+    fn bound_module(&self) -> &str {
+        foreign_bound_module(self.name, self.module_path, self.from)
     }
 }
 
@@ -181,7 +188,7 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
                          foreign import across modules is not supported yet",
                         inputs[local.index].display_path,
                         local.name,
-                        foreign_bound_object(local.module_path, local.from),
+                        foreign_bound_object(local.bound_module(), local.from),
                         inputs[owner.index].display_path,
                         owner.dotted()
                     ),

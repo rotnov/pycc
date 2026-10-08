@@ -524,6 +524,36 @@ fn an_identical_foreign_pair_across_modules_links() {
     );
 }
 
+/// #1381: `import os` and `import os.path` bind the one module `os`, so the
+/// pair links across modules; a different module bound to the root's name
+/// is refused, and both directions name the bound root.
+#[test]
+fn dotted_imports_compare_the_bound_root_across_modules() {
+    link_and_finalize(vec![
+        all_foreign_input("dep.py", "import os.path\n"),
+        all_foreign_input("main.py", "import os\n"),
+    ])
+    .expect("`import os` and `import os.path` bind the same module");
+    let (_, diagnostic) = first_error(vec![
+        all_foreign_input("dep.py", "import xml.dom\n"),
+        all_foreign_input("main.py", "import colorsys as xml\n"),
+    ]);
+    assert_eq!(
+        diagnostic.message,
+        "module `main.py` binds `xml` to the CPython module `colorsys`, which `dep.py` binds \
+         to `xml`; shadowing a foreign import across modules is not supported yet"
+    );
+    let (_, reversed) = first_error(vec![
+        all_foreign_input("dep.py", "import colorsys as xml\n"),
+        all_foreign_input("main.py", "import xml.dom\n"),
+    ]);
+    assert_eq!(
+        reversed.message,
+        "module `main.py` binds `xml` to the CPython module `xml`, which `dep.py` binds \
+         to `colorsys`; shadowing a foreign import across modules is not supported yet"
+    );
+}
+
 /// #1278: a foreign from-import's identity is the module *and* the name, so
 /// the same local name taken from two modules is refused across modules.
 #[test]

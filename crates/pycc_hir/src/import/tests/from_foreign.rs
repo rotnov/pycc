@@ -200,11 +200,23 @@ fn re_exporting_a_dependency_s_foreign_from_import_is_refused() {
 fn the_statement_and_object_renderings_cover_both_forms() {
     let from = from_import("chain", &["product", "chain"], 1);
     assert_eq!(
-        foreign_import_statement("itertools", None),
+        foreign_import_statement("itertools", "itertools", None),
         "import itertools"
     );
     assert_eq!(
-        foreign_import_statement("itertools", Some(&from)),
+        foreign_import_statement("it", "itertools", None),
+        "import itertools as it"
+    );
+    assert_eq!(
+        foreign_import_statement("xml", "xml.dom", None),
+        "import xml.dom"
+    );
+    assert_eq!(
+        foreign_import_statement("d", "xml.dom", None),
+        "import xml.dom as d"
+    );
+    assert_eq!(
+        foreign_import_statement("chain", "itertools", Some(&from)),
         "from itertools import product, chain"
     );
     assert_eq!(
@@ -374,11 +386,11 @@ fn the_relative_renderings_spell_the_dots() {
     assert_eq!(dotted.spelled_module("a.b"), "..a.b");
     assert_eq!(dotted.spelled_object("a.b"), "..a.b.c");
     assert_eq!(
-        foreign_import_statement("", Some(&bare)),
+        foreign_import_statement("sib", "", Some(&bare)),
         "from . import sib, other"
     );
     assert_eq!(
-        foreign_import_statement("a.b", Some(&dotted)),
+        foreign_import_statement("c", "a.b", Some(&dotted)),
         "from ..a.b import c"
     );
     assert_eq!(

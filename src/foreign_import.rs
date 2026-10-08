@@ -71,19 +71,20 @@ pub(crate) enum I0403Reason {
     ExcludedStdlibRoot,
 }
 
-/// The `I0403` message for `import {module_path}` -- or, when `from` is
-/// `Some`, for `from {module_path} import a, b` (#1278) -- refused for
-/// `reason`.
+/// The `I0403` message for `import {module_path}` (`as {local_name}` when
+/// aliased, #1381) -- or, when `from` is `Some`, for `from {module_path}
+/// import a, b` (#1278) -- refused for `reason`.
 ///
 /// Every reason names `pycc build --ext` as the working alternative: the
 /// code keeps its meaning ("this build cannot give the import a CPython
 /// interpreter; `--ext` can"), only the set of cases reaching it narrowed.
 pub(crate) fn i0403_message(
+    local_name: &str,
     module_path: &str,
     from: Option<&FromImport>,
     reason: I0403Reason,
 ) -> String {
-    let statement = foreign_import_statement(module_path, from);
+    let statement = foreign_import_statement(local_name, module_path, from);
     match reason {
         I0403Reason::CrossTarget => format!(
             "`{statement}` imports a CPython module, which requires \
@@ -148,6 +149,7 @@ pub(crate) fn classify_for_native_build(
         .enumerate()
         .filter_map(|(position, binding)| match binding {
             ImportBinding::Foreign {
+                local_name,
                 module_path,
                 from,
                 span,
@@ -160,7 +162,7 @@ pub(crate) fn classify_for_native_build(
                     return None;
                 }
                 if let Some(rejected) =
-                    interop_policy::rejection(policy, module_path, from.as_ref(), *span)
+                    interop_policy::rejection(policy, local_name, module_path, from.as_ref(), *span)
                 {
                     return Some((position, rejected));
                 }
@@ -169,7 +171,7 @@ pub(crate) fn classify_for_native_build(
                         position,
                         Diagnostic::error(
                             "I0403",
-                            i0403_message(module_path, from.as_ref(), reason),
+                            i0403_message(local_name, module_path, from.as_ref(), reason),
                             // The import statement's own range, carried on
                             // the binding. Before it was, every `I0403` was
                             // built with `Span::new(0, 0)`, so a foreign
@@ -208,9 +210,11 @@ mod tests {
         }
     }
 
+    /// The binding of an unaliased `import {name}`, which binds the root
+    /// of a dotted name (#1381).
     fn foreign(name: &str) -> ImportBinding {
         ImportBinding::Foreign {
-            local_name: name.to_string(),
+            local_name: name.split('.').next().unwrap_or(name).to_string(),
             module_path: name.to_string(),
             from: None,
             site: pycc_hir::ForeignImportSite::Item(0),
@@ -290,8 +294,8 @@ mod tests {
         assert_eq!(
             gaps,
             vec![
-                (0, i0403_message("json", None, reason)),
-                (2, i0403_message("numpy", None, reason)),
+                (0, i0403_message("json", "json", None, reason)),
+                (2, i0403_message("numpy", "numpy", None, reason)),
             ]
         );
     }
@@ -336,7 +340,7 @@ mod tests {
             gaps,
             vec![(
                 3,
-                i0403_message("tkinter", None, I0403Reason::ExcludedStdlibRoot)
+                i0403_message("tkinter", "tkinter", None, I0403Reason::ExcludedStdlibRoot)
             ),]
         );
         assert_eq!(
@@ -359,7 +363,12 @@ mod tests {
             messages(EmbedHost::Available, vec![foreign("tkinter.ttk")]),
             vec![(
                 0,
-                i0403_message("tkinter.ttk", None, I0403Reason::ExcludedStdlibRoot)
+                i0403_message(
+                    "tkinter",
+                    "tkinter.ttk",
+                    None,
+                    I0403Reason::ExcludedStdlibRoot
+                )
             )]
         );
     }
@@ -370,7 +379,7 @@ mod tests {
             (I0403Reason::CrossTarget, "`--target` build"),
             (I0403Reason::ExcludedStdlibRoot, "Tcl/Tk"),
         ] {
-            let message = i0403_message("numpy", None, reason);
+            let message = i0403_message("numpy", "numpy", None, reason);
             assert!(message.starts_with("`import numpy` imports a"), "{message}");
             assert!(message.contains("requires `pycc build --ext`"), "{message}");
             assert!(message.contains(detail), "{message}");
@@ -444,6 +453,7 @@ mod tests {
             vec![(
                 0,
                 i0403_message(
+                    "Tk",
                     "tkinter",
                     Some(&FromImport {
                         name: "Tk".to_string(),
