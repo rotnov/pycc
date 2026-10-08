@@ -14,10 +14,12 @@
 //! decides: since Part 1 of #1092 an *unbound temporary* -- the operand of
 //! another object operation, a condition, a conversion, a discarded
 //! statement value, the iterable of a `for` or a comprehension -- is
-//! released by its consumer (`object_release.rs`), while a result bound to
-//! a name or slot, passed to a user function, returned, or boxed is still
-//! leaked: this boundary's leak-only
-//! rule, which later parts of #1092 narrow further. Such a leak inside a
+//! released by its consumer (`object_release.rs`), and since Part 1 of
+//! #1499 a module global owns a result bound to it and releases it on
+//! rebind (`object_slot.rs`), while a result bound to a function-local name
+//! or an instance slot, passed to a user function, returned, or boxed is
+//! still leaked: this boundary's leak-only rule, which later parts of #1499
+//! narrow further. Such a leak inside a
 //! loop is trip-count-linear rather than once per process.
 
 use super::*;

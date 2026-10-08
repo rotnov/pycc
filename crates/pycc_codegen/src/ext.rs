@@ -694,9 +694,9 @@ pub const EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL: &str = "pycc_ext_obj_unpack_float_t
 /// reference to a `tuple` of exactly `n` items taken from the object by
 /// CPython's own unpack protocol, or `NULL` with CPython's own exception
 /// set -- `TypeError` for a non-iterable, `ValueError` for too many or too
-/// few values. The tuple is bound to the unpacking temporary and leaked on
-/// the #1092 rule for a bound value; Part 1 of #1092 releases only unbound
-/// temporaries.
+/// few values. The tuple is bound to the unpacking temporary: leaked on the
+/// #1092 rule for a bound value in a function body, owned and released on
+/// rebind by a module-global temporary (Part 1 of #1499).
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_UNPACK_SYMBOL: &str = "pycc_ext_obj_unpack";

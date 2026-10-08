@@ -1277,9 +1277,10 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
  * declares and calls it by this name (`EXT_OBJ_IMPORT_SYMBOL` in
  * `crates/pycc_codegen/src/ext.rs`).
  *
- * The returned reference is deliberately never released. The generated
- * module body stores it in a module-level global that lives for the
- * artifact's lifetime, and the artifact has no teardown hook to release it
+ * The generated module body stores the returned reference in a
+ * module-level global, which owns it: since Part 1 of #1499 a re-import or
+ * rebind of that global releases the previous value, and the last value is
+ * never released, because the artifact has no teardown hook to release it
  * from; the module object is in the interpreter's `sys.modules` for that
  * whole lifetime anyway. `docs/RUNTIME.md` records the rule.
  */
@@ -2668,9 +2669,10 @@ PyObject *pycc_ext_obj_get_iter(PyObject *o)
  * a foreign failure, and fusing the two would have made every `for` loop
  * over a foreign object terminate the module body.
  *
- * Each item written through `*out` is a new reference that is never
- * released, which is what makes the leak trip-count-linear for a `for` loop
- * rather than a fixed cost per statement (#1092).
+ * Each item written through `*out` is a new reference. A module-global
+ * `for` target owns it and releases it on the next trip (Part 1 of #1499);
+ * a target that does not own it leaks it, which makes the leak
+ * trip-count-linear rather than a fixed cost per statement (#1092).
  *
  * `it` and `out` are NULL-guarded as defence in depth, exactly like
  * `pycc_ext_obj_len`'s own operand: returning -1 without setting an
@@ -3282,8 +3284,9 @@ static PyObject *pycc_ext_obj_unpack_type_name(PyTypeObject *type)
  * fetched so far are released on each failing exit; on success the
  * iterator is released and the items are owned by the returned tuple. The
  * extra item fetched to detect "too many" is released at once. The
- * returned reference is bound to the unpacking temporary and leaked, on
- * the #1092 rule for a bound object value. `PyTuple_New` plus `PyTuple_SetItem` (which steals) build the
+ * returned reference is bound to the unpacking temporary: leaked in a
+ * function body on the #1092 rule for a bound object value, owned and
+ * released on rebind by a module-global temporary (Part 1 of #1499). `PyTuple_New` plus `PyTuple_SetItem` (which steals) build the
  * fresh tuple, both in the Limited API.
  *
  * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents;

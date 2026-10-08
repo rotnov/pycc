@@ -2380,7 +2380,9 @@ result routes to the operation's failure edge -- the module-exec `-1` in a
 module body outside every `try`, so the remaining module-body statements never
 run, and otherwise the bridged pycc exception, which a compiled `try`/`except`
 catches -- before any target is bound. The returned tuple binds the unpacking
-temporary and is never released, and each target then reads it with
+temporary, which in a function body is never released (at module level the
+temporary is a module global and so is released on rebind, "A module global owns its reference"
+below), and each target then reads it with
 `pycc_ext_obj_getitem`, whose new reference leaks on the same terms as any
 subscript load. `tests/issue_891_tuple_unpack.rs` pins the result inside a
 function on two distinct mortal elements over `N = 100` unpacks, where
@@ -2508,10 +2510,11 @@ value with the matching `pycc_ext_obj_pack_*` packer, the same ones the
 export boundary uses; a `None` value is the borrowed `Py_None` from
 `pycc_ext_obj_none`, with no packer. A packer's `NULL` routes through the
 function's ordinary error path (the IR label `object_box_failed`), so its
-CPython exception propagates from the seam. The packed reference is new and,
-like every other producer's, is leaked until
-[#1092](https://github.com/rotnov/pycc/issues/1092): the boxing emits no
-decrement. The int packer's inline-range `OverflowError` applies here too
+CPython exception propagates from the seam. The packed reference is new and the
+boxing emits no decrement: bound to a module global, the global owns it
+(Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499), "A module global owns its reference"
+below); anywhere else it is leaked, like every other producer's, until
+[#1092](https://github.com/rotnov/pycc/issues/1092). The int packer's inline-range `OverflowError` applies here too
 ([#1040](https://github.com/rotnov/pycc/issues/1040)). An instance packs to
 its live carrier when it has one, so the same instance boxed twice is the
 same CPython object, as `is` sees it in CPython.
@@ -2561,14 +2564,16 @@ packed anew. A `str` subclass is therefore flattened there: D-258's
 documented deviation, described in TYPE_SYSTEM.md under "What a narrowed
 read is".
 
-**`and`/`or` boxes a selected native operand and leaks it.** Part 6 of
+**`and`/`or` boxes a selected native operand and, outside a module global, leaks it.** Part 6 of
 [#1371](https://github.com/rotnov/pycc/issues/1371) types `n or o` and
 `o and n` (`n` an `int`, `float`, `bool` or `str`) as `object`
 (`docs/TYPE_SYSTEM.md`, "`and` and `or`"). An object operand passes through
 borrowed, with no reference-count traffic, and its truth test is
 `pycc_ext_obj_truthy`. The native operand is packed by the same packers as an
 argument, on the arm that selects it only; the packer's new reference is the
-node's result and is leaked once per evaluation, as every producer's is. A
+node's result and is leaked once per evaluation, as every producer's is,
+unless a module global binds it (Part 1 of #1499: the global owns it and
+releases it on rebind). A
 packer `NULL` -- the `OverflowError` for an `int` outside the inline range,
 until [#1040](https://github.com/rotnov/pycc/issues/1040) -- takes the node's
 foreign failure edge. The hosted test runs the object-operand shapes 200 times
@@ -2674,8 +2679,9 @@ nothing to guard here.
 
 That extension is a deliberate, bounded regression and is recorded as one. A
 module object leaks at most once per process; an attribute load sits inside
-ordinary control flow, so `numpy.pi` written in a loop and bound or passed on leaks one
-reference per iteration — the leak is trip-count-linear rather than bounded by process exit.
+ordinary control flow, so `numpy.pi` written in a loop and bound in a function body or passed on
+leaks one reference per iteration (a module global releases the previous value
+on rebind since Part 1 of #1499) — the leak is trip-count-linear rather than bounded by process exit.
 Since #1316 the same holds per *call* of a compiled function that performs a
 foreign attribute load, method call, direct call or subscript load: a host
 calling such an exported function N times leaks N references per operation
@@ -2753,13 +2759,13 @@ linked project modules may each write `import numpy`; each contributes its
 own `MirItem::ForeignImport`, while `pycc_codegen` keys the foreign-import
 globals by local name and so gives both the same single slot. Both calls
 run, in linked-program order (the concatenation `link` produces, not either
-module's own source order), and the second overwrites the slot with its own
-new reference. That is correct by the rule above rather than in spite of it:
-the slot ends up holding a valid, correctly typed module object, and the
-first reference is simply never released — exactly what every foreign
-import does. Collapsing the duplicate to one call, or releasing the
-overwritten reference, would be an optimization of an already-correct
-program, and belongs with the release protocol described above.
+module's own source order), and the second stores its own new reference into
+the slot. Since Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499)
+that store goes through the module-global owned store ("A module global owns its reference"
+below): it releases the first reference, so the slot holds one valid,
+correctly typed module object and only the last value per slot is left
+unreleased at the end of the exec. Collapsing the duplicate to one call would
+be an optimization of an already-correct program.
 
 **A foreign `staticmethod` class attribute adds no runtime entry point.**
 `exists = staticmethod(os.path.exists)` in a class body

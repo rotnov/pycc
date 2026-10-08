@@ -186,9 +186,10 @@ pub(super) struct ForeignIterLoop<'ctx> {
     pub header_bb: inkwell::basic_block::BasicBlock<'ctx>,
     /// Where control resumes after clean exhaustion.
     pub after_bb: inkwell::basic_block::BasicBlock<'ctx>,
-    /// A *new* reference to this iteration's item, still never released:
-    /// the loop variable's slot holds it without a reference of its own,
-    /// and releasing it needs the bound-value model (#1499).
+    /// A *new* reference to this iteration's item. A module-global loop
+    /// target owns it and releases it on the next trip (Part 1 of #1499,
+    /// `object_slot::store_new_reference`); a function-local target would
+    /// still leak it until Part 2 (#1502).
     pub item: PointerValue<'ctx>,
 }
 
