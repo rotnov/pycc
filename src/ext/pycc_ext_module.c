@@ -4623,7 +4623,8 @@ static int pycc_ext_exec_module(PyObject *module)
      * created here but not yet added to the module (#1199): it is kept in
      * its `pycc_ext_type_object_<Class>` static, and `pycc_ext_publish`
      * binds it under the bare class name once the body has run the class
-     * statement. PEP 489 puts the module in `sys.modules` before this slot
+     * statement (this exec snapshots it just below, and `pycc_ext_publish`
+     * binds from the snapshot). PEP 489 puts the module in `sys.modules` before this slot
      * runs, so a foreign module the body imports can import this one back
      * and read its attributes mid-body; a class bound here would be visible
      * there before CPython would bind it. Created before the body anyway,
@@ -4691,22 +4692,22 @@ static int pycc_ext_exec_module(PyObject *module)
      */
     mark = pycc_ext_bridge_mark();
     /*
+     * #1199: this exec's classes, taken now, before the body can run a
+     * nested exec that replaces the type statics; installed and restored
+     * on both exits alongside the #1366 target below, and released only
+     * after the safety net has read them.
+     */
+    classes = pycc_ext_snapshot_classes();
+    if (classes == NULL) {
+        return -1;
+    }
+    /*
      * #1366: this module is the one a relative import in its body resolves
      * against, for exactly the duration of the body. The previous value is
      * restored on both exits, so an exec running beneath another one on
      * this thread (see `pycc_ext_exec_target_key`) hands the outer one's
      * target back.
      */
-    /*
-     * #1199: this exec's classes, taken now, before the body can run a
-     * nested exec that replaces the type statics; restored on both exits
-     * like the target, and released only after the safety net below has
-     * read them.
-     */
-    classes = pycc_ext_snapshot_classes();
-    if (classes == NULL) {
-        return -1;
-    }
     saved_target = PyThread_tss_get(pycc_ext_exec_target_key);
     saved_classes = PyThread_tss_get(pycc_ext_exec_classes_key);
     if (PyThread_tss_set(pycc_ext_exec_target_key, module) != 0

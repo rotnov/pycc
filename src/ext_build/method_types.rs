@@ -42,10 +42,11 @@ pub(crate) const COMPILED_CLASS_ISINSTANCE_DECL: &str =
     "static int pycc_ext_compiled_class_isinstance(PyObject *o, const char *name)";
 
 /// The exact C declaration of the generated published-class lookup the
-/// shim's `pycc_ext_publish` and its post-body safety net call (#1199). The
-/// `.inc` is included above both callers, so neither needs a forward
-/// declaration; the shim test and the generated-text test assert this one
-/// constant.
+/// shim's `pycc_ext_publish` (to test that a name is a published class) and
+/// `pycc_ext_snapshot_classes` (to copy each class's type object into the
+/// exec's snapshot) call (#1199). The `.inc` is included above both callers,
+/// so neither needs a forward declaration; the shim test and the
+/// generated-text test assert this one constant.
 pub(crate) const PUBLISH_CLASS_SLOT_DECL: &str =
     "static PyObject **pycc_ext_publish_class_slot(const char *name)";
 
@@ -270,8 +271,10 @@ pub(crate) fn method_types_c(
         // registration from leaking the type. On success the local
         // reference moves into the class's file static (Part 7 of #1371),
         // releasing the one a previous exec stored there. The type is not
-        // added to the module here (#1199): `pycc_ext_publish` binds it
-        // from that static once its class statement has run.
+        // added to the module here (#1199): `pycc_ext_snapshot_classes`
+        // copies it into this exec's snapshot before the body, and
+        // `pycc_ext_publish` binds it from that snapshot once its class
+        // statement has run.
         if let Some(entry) = slots.iter().find(|entry| entry.class == *class) {
             let array = format!("pycc_ext_type_slots_{class}");
             out.push_str(&richcompare::unhashable_fixup(entry, &array));
@@ -297,8 +300,10 @@ pub(crate) fn method_types_c(
 ///
 /// Emitted unconditionally -- an empty array and a function answering
 /// `NULL` when nothing is published -- so every artifact links. The type
-/// statics are filled by `pycc_ext_register_method_types` before the body
-/// runs; the module attribute is bound from them only when codegen's
+/// statics are filled by `pycc_ext_register_method_types` at registration
+/// and copied into the exec's own snapshot by `pycc_ext_snapshot_classes`
+/// before the body runs; the module attribute is bound from that snapshot,
+/// never from the statics a nested exec may replace, when codegen's
 /// publication call for the class's name runs (`pycc_codegen`'s
 /// `ext_publish`), or by the safety net after the body for a class whose
 /// call never ran.
