@@ -94,7 +94,7 @@ pub(crate) struct ExtExport {
     /// a module-level export keeps the exact arity check (#1194).
     pub(crate) defaults: Vec<Option<pycc_hir::HirExpr>>,
     /// The declared return type, which picks the cast's return type and the
-    /// egress: a `pycc_ext_pack_*` call, or `Py_RETURN_NONE` for `-> None`.
+    /// egress: a `pycc_ext_pack_*` call, or a new reference to `None` for `-> None`.
     pub(crate) return_ty: Ty,
     /// The source names of the carried parameters, parallel to
     /// [`ExtExport::params`], when a host call may pass them as keywords

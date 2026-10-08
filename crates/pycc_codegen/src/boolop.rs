@@ -348,7 +348,8 @@ fn needs_boxing(operand: &MirExpr, ty: &Ty) -> bool {
 /// range (#1040) -- takes the foreign failure edge at once, since no
 /// consuming shim helper follows to tolerate it. The new reference is the
 /// node's value: released by the node's consumer when every arm is owned
-/// (Part 3 of #1092, `object_release::is_produced`), and leaked otherwise.
+/// (Part 3 of #1092, `object_release::is_produced`), owned by a module
+/// global that binds it (Part 1 of #1499), and leaked otherwise.
 fn boxed_value<'ctx>(
     emitter: &Emitter<'_, 'ctx>,
     source: &MirExpr,

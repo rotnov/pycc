@@ -1060,11 +1060,13 @@ fn check_assignment_of(
     // `if` leaves it possibly unbound.
     //
     // At module scope the name is an ordinary module global
-    // (`pycc_codegen`'s `collect_module_bindings`); in a function body it is
-    // a function-local slot. Either way the binding owns the reference its
-    // producer returned and never releases it; a rebinding leaks the old
-    // one (#1092), because `y = x` aliases the pointer with no incref and a
-    // release would free an object `y` still points at (`docs/RUNTIME.md`).
+    // (`pycc_codegen`'s `collect_module_bindings`). Since Part 1 of #1499
+    // that global owns its reference: a borrowed value (`y = x`) is retained
+    // on bind and a rebinding releases the old one (`pycc_codegen`'s
+    // `object_slot.rs`). In a function body the name is a function-local
+    // slot, which still never releases: a rebinding leaks the old value
+    // (#1092) until Part 2 of #1499 (#1502), because a parameter or alias
+    // there is stored with no incref (`docs/RUNTIME.md`).
     // Part 2a of #1142 (#1165): assigning to a name bound to a buffer
     // *parameter* is refused. See `buffer::buffer_parameter_rebinding` for
     // the two independent grounds; the one that matters most here is that

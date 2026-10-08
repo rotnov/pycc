@@ -23,8 +23,9 @@
 //! Everything else that evaluates to a `Scalar::Object` is a *borrow* --
 //! a `Name` read of a module global or a slot, a function parameter, a
 //! `for` target, a boxed value, a user function's `object` result -- and is
-//! never released here: named slots and function locals carry borrowed or
-//! moved pointers with no reference-count traffic of their own, so
+//! never released here: a function local carries a borrowed or moved
+//! pointer with no reference-count traffic of its own, and a module
+//! global's reference belongs to the global (`object_slot.rs`), so
 //! releasing one would underflow a reference the slot still uses. An
 //! unlisted node therefore defaults to the old leak, never to a
 //! use-after-free.
@@ -82,13 +83,20 @@
 //! object or a boxed native value), and a conditional expression only when
 //! both of its arms are produced objects.
 //!
-//! **Not yet released** (#1499): a produced value bound to a name or slot,
-//! passed to a user function, returned, or boxed; the per-trip item of
-//! `for x in <object>:` and of a comprehension over one, which the loop
-//! variable's slot holds without a reference of its own -- a body can hand
-//! it to a user function that stores it, so releasing it at the trip's end
-//! needs the bound-value model; and the result of an `and`/`or` or a
-//! conditional expression whose arms mix produced and borrowed objects.
+//! **Bound values** are not temporaries and are never released here. Since
+//! Part 1 of #1499 a module-global `object` slot owns the reference it holds
+//! and releases its previous value on rebind -- including a module-level
+//! `for x in <object>:` target's per-trip item -- in `object_slot.rs`, not
+//! through this stack. **Not yet released** (the later parts of #1499): a
+//! produced value bound to a function local or a compiled-instance
+//! attribute, passed to a user function, returned, or boxed; the per-trip
+//! item of a comprehension over an object (an object `for` is admitted only
+//! in a module body, whose target owns its item), which the loop variable's
+//! frame slot holds without a reference
+//! of its own -- a body can hand it to a user function that stores it, so
+//! releasing it at the trip's end needs the frame-slot model (Part 2,
+//! #1502); and the result of an `and`/`or` or a conditional expression
+//! whose arms mix produced and borrowed objects.
 //! `hash(<object>)` is not admitted yet (C0001), so it has no site. The
 //! read of a narrowed `object` name (`MirExpr::ObjectUnbox`) needs no
 //! release: its operand is always a borrowed slot.
@@ -173,7 +181,7 @@ fn is_produced_object(operand: &MirExpr) -> bool {
 /// `object_unbox::emit_pack_operand` evaluates the object inside an
 /// `ObjectUnbox` rather than the unboxed read, so a held operand must be
 /// classified the same way.
-fn operand_source(expr: &MirExpr) -> &MirExpr {
+pub(super) fn operand_source(expr: &MirExpr) -> &MirExpr {
     match expr {
         MirExpr::ObjectUnbox(object, _) => object,
         other => other,

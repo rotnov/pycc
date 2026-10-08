@@ -275,7 +275,7 @@ pub(crate) fn carries_param(ty: &Ty) -> bool {
 ///
 /// Two types answer `void`, for different reasons. Codegen emits a `None`
 /// return as LLVM `void`, so there is nothing to receive at all and the
-/// wrapper's egress becomes `Py_RETURN_NONE`. A `tuple` return does carry
+/// wrapper's egress returns `None`. A `tuple` return does carry
 /// values, but they leave through `pycc_ext_thunk_<name>`'s trailing
 /// out-pointers rather than as a return value (#1050), so the call itself
 /// is still `void` and the elements are read out of the wrapper's own

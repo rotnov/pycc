@@ -30,11 +30,13 @@
 //! from the entry point. A top-level import has nothing to enclose it and
 //! keeps the direct return.
 //!
-//! **Ownership** (`docs/RUNTIME.md`). The module object is imported exactly
-//! once, during `pycc_ext_module_exec`, into a module-level global, and is
-//! never released: a CPython module object lives in `sys.modules` for the
-//! interpreter's lifetime anyway, and the generated artifact has no
-//! teardown hook to release it from. Contrast the `Ty::Str` exit-time decref
+//! **Ownership** (`docs/RUNTIME.md`). The import yields a new reference,
+//! stored during `pycc_ext_module_exec` into a module-level global that
+//! owns it (Part 1 of #1499, `object_slot.rs`): importing the same name a
+//! second time, or rebinding it, releases the previous value. The last
+//! value bound is never released: a CPython module object lives in
+//! `sys.modules` for the interpreter's lifetime anyway, and the generated
+//! artifact has no teardown hook to release it from. Contrast the `Ty::Str` exit-time decref
 //! loop in `compile_to_object`, which is `!options.ext`-guarded for the
 //! same reason -- there is no "program exit" in a hosted extension module.
 //!
@@ -134,10 +136,12 @@ pub(super) struct ForeignBinding<'a> {
 /// build without `ext` (see the module doc's **Native mode**). `def_iter`
 /// in that loop is deliberately not advanced: it pairs with
 /// `MirItem::Function` items only.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_item<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     entry_fn: FunctionValue<'ctx>,
     ext: bool,
     module_globals: &BTreeMap<String, StorageSlot<'ctx>>,
@@ -148,6 +152,7 @@ pub(super) fn emit_item<'ctx>(
             context,
             builder,
             module,
+            rt,
             entry_fn,
             &module_globals[binding.local_name],
             binding,
@@ -292,10 +297,12 @@ fn emit_import_from_call<'ctx>(
 /// one nested in a module-level block (#1383) takes
 /// [`FailureEdge::Bridge`], whose shim maps CPython's "cannot import name"
 /// `ImportError` like any other.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn emit<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     entry_fn: FunctionValue<'ctx>,
     slot: &StorageSlot<'ctx>,
     binding: ForeignBinding<'_>,
@@ -403,17 +410,13 @@ pub(super) fn emit<'ctx>(
         }
     }
     builder.position_at_end(cont_bb);
-    builder
-        .build_store(slot.ptr, imported)
-        .expect("build_store should not fail for a foreign module global");
-    // Every module global carries a separate definite-assignment flag; the
-    // import is the binding's assignment, so raise it exactly as an
-    // ordinary top-level `Assign` does.
-    if let Some(initialized) = slot.initialized {
-        builder
-            .build_store(initialized, context.i8_type().const_int(1, false))
-            .expect("build_store should not fail for a foreign module init flag");
-    }
+    // `imported` is a new reference (`PyImport_ImportModule`,
+    // `PyImport_GetModule`, `PyObject_GetOptionalAttr`). Part 1 of #1499:
+    // the module global owns it, so importing the same name twice -- or
+    // rebinding it later -- releases the previous value, and the store
+    // raises the definite-assignment flag exactly as an ordinary
+    // top-level `Assign` does (`object_slot::store_new_reference`).
+    crate::object_slot::store_new_reference(context, builder, module, rt, slot, imported);
 }
 
 /// Emits a [`pycc_mir::MirStmt::ForeignImport`]: one import per binding,
@@ -439,6 +442,7 @@ pub(super) fn emit_stmt<'ctx>(
             context,
             builder,
             module,
+            rt,
             entry_fn,
             &locals[local_name],
             ForeignBinding {

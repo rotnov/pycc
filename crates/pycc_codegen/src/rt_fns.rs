@@ -291,6 +291,9 @@ pub(super) struct RtFns<'ctx> {
     /// nested handler must not overwrite the exception saved by its outer
     /// handler.
     pub(super) exceptions: ExceptionCodegenState<'ctx>,
+    /// The owned bit of every module-global `object` slot (Part 1 of
+    /// #1499); `object_slot.rs` owns it.
+    pub(super) object_slots: crate::object_slot::ModuleObjectSlots<'ctx>,
 }
 
 pub(super) fn declare_rt_functions<'ctx>(
@@ -704,5 +707,6 @@ pub(super) fn declare_rt_functions<'ctx>(
             ),
         ),
         exceptions: ExceptionCodegenState::new(),
+        object_slots: crate::object_slot::ModuleObjectSlots::default(),
     }
 }

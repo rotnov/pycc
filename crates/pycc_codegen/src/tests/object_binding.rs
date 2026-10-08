@@ -1,12 +1,16 @@
-//! #1325: binding a CPython object value to a module-level name.
+//! #1325: binding a CPython object value to a name.
 //!
 //! `emit_assign`'s `Scalar::Object` arm stores the `PyObject *` into the
-//! name's pointer slot with no refcount traffic in either direction: the
-//! producer's new reference moves into the slot, and a rebinding leaks the
-//! previous value rather than releasing it, because `y = x` aliases the same
-//! object without an incref (#1092's leak-only rule). These tests pin both
-//! halves -- the store happens, and no release is emitted -- plus the whole
-//! module-level shape through real MIR.
+//! name's pointer slot with no refcount traffic in either direction. Since
+//! Part 1 of #1499 that pass-through is the frame-slot rule only: a
+//! module-global object store goes through `object_slot::assign` first,
+//! which retains a borrowed value and releases the rebound one
+//! (`object_slot_tests.rs` pins that). The fixtures below call
+//! `emit_assign` directly with an empty `rt.object_slots` table, so they
+//! pin the pass-through every non-module-global slot still takes: the store
+//! happens and no release is emitted (#1092's leak-only rule, until Part 2,
+//! #1502). The last test compiles the whole module-level shape through real
+//! MIR.
 
 use super::*;
 
@@ -58,7 +62,7 @@ fn assigning_a_cpython_object_stores_the_pointer_and_sets_the_flag() {
 }
 
 #[test]
-fn rebinding_a_cpython_object_leaks_the_previous_value_rather_than_releasing_it() {
+fn emit_assign_rebinding_a_cpython_object_emits_no_release() {
     let ir = assign_object_global_ir(2);
     assert_eq!(
         ir.matches("store ptr null, ptr @pyglobal_x").count(),
