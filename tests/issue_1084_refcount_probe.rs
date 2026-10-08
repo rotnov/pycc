@@ -1,20 +1,19 @@
 //! Part 5 of #1026: what the foreign-object loop shape costs in references.
 //!
 //! `tests/issue_1084_loop_shape.rs` shows the shape computes the right
-//! answer. This file measures the price, and states it as a *differential*
-//! invariant rather than an absolute: across a loop of `N` trips, the
-//! `sys.getrefcount` of a foreign module attribute grows by exactly
-//! `producing_operations * N`, where a producing operation is one that reads
-//! the attribute out of the foreign module. The consuming conversion applied
-//! to the produced value -- `float`, `bool`, `int`, `str`, `len`, or the
-//! fixed-arity tuple unpack -- contributes nothing. Part 4's conversions are
-//! therefore clean; what leaks is the attribute load that feeds them.
+//! answer. This file measures the price: across a loop of `N` trips, the
+//! `sys.getrefcount` of a foreign module attribute must not move at all,
+//! however many times a trip reads the attribute out of the foreign module
+//! (`PRODUCING_OPERATIONS`) and feeds it to a consuming conversion --
+//! `float`, `bool`, `int`, `str`, `len`, or the fixed-arity tuple unpack.
 //!
-//! That leak is #1092 (the release protocol for foreign object temporaries),
-//! which is open. **When #1092 lands, every absolute below becomes `0`, and
-//! the pull request that closes it is expected to edit this test** -- the
-//! numbers here are a pin on today's behavior, not a statement that the
-//! behavior is correct.
+//! Until Part 1 of #1092 (the release protocol for CPython object
+//! temporaries, `crates/pycc_codegen/src/object_release.rs`) the attribute
+//! load feeding each conversion leaked one reference, so these deltas were
+//! pinned at `producing_operations * N`. Each conversion now releases the
+//! temporary it consumed, and the pin is `0` at both trip counts: a leak
+//! that came back would show up as a slope, and an over-release as a
+//! negative delta (or a crash once the attribute's count reaches zero).
 //!
 //! **PEP 683 is why the subject looks the way it does.** From CPython 3.12,
 //! small integers, `None`, `True`/`False` and interned strings are immortal:
@@ -204,16 +203,14 @@ fn refcount_deltas(category: &str, module: &str, trips: u32) -> Vec<(String, i64
         .collect()
 }
 
-/// The invariant, at two trip counts: the delta is exactly the number of
-/// producing operations times the trip count.
+/// The invariant, at two trip counts: every attribute's delta is exactly
+/// `0`, whatever its number of producing operations.
 ///
 /// Two trip counts rather than one because a single count cannot distinguish
-/// a per-trip leak from a constant one: `1000` alone is consistent with both
-/// "one reference per attribute load" and "a fixed 1000-reference cost at
-/// import". The pair pins the slope.
+/// a per-trip error from a constant one. The pair pins the slope at zero.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn each_producing_operation_leaks_exactly_one_reference_per_trip() {
+fn no_producing_operation_leaks_a_reference() {
     for (category, module, trips) in [
         ("p5_refcount_n1000", "probe_n1000", 1000_u32),
         ("p5_refcount_n2000", "probe_n2000", 2000_u32),
@@ -221,26 +218,24 @@ fn each_producing_operation_leaks_exactly_one_reference_per_trip() {
         let measured = refcount_deltas(category, module, trips);
         let expected: Vec<(String, i64)> = PRODUCING_OPERATIONS
             .iter()
-            .map(|(name, count)| ((*name).to_string(), i64::from(*count) * i64::from(trips)))
+            .map(|(name, count)| {
+                assert!(*count > 0, "{name} is read at least once per trip");
+                ((*name).to_string(), 0)
+            })
             .collect();
         assert_eq!(
             measured, expected,
-            "the {trips}-trip probe does not match `producing operations * trips`"
+            "the {trips}-trip probe moved a foreign attribute's reference count"
         );
     }
 }
 
-/// The consuming side contributes nothing: a loop that only calls
-/// `len(MESH)` leaks the same one reference per trip as `len` did inside the
-/// full probe, even though the full probe also ran four conversions and a
-/// tuple unpack against other attributes.
-///
-/// This is what makes the invariant differential rather than a re-measurement
-/// of #1092's total: the count follows the number of attribute loads, not the
-/// number or kind of operations applied to what they produce.
+/// A lone producing operation balances on its own too: a loop that only
+/// calls `len(MESH)` leaves `MESH`'s reference count where it found it, and
+/// still computes the right total.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn a_lone_producing_operation_leaks_at_the_same_rate() {
+fn a_lone_producing_operation_leaks_nothing() {
     const TRIPS: u32 = 1000;
     let source = format!(
         "import pycc_p5_probe\n\
@@ -267,7 +262,7 @@ fn a_lone_producing_operation_leaks_at_the_same_rate() {
          print(sys.getrefcount(stub.MESH) - before, probe_lone.total())\n",
     );
     assert!(run.status.success(), "{}", stderr_of(&run));
-    assert_eq!(stdout_of(&run), format!("{TRIPS} {}\n", TRIPS * 3));
+    assert_eq!(stdout_of(&run), format!("0 {}\n", TRIPS * 3));
 }
 
 /// The pycc-side instrument. The refcount arm above sees only CPython's

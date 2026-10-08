@@ -22,12 +22,18 @@
 //!
 //! # Ownership
 //!
-//! The iterator, each item and the result are new references this boundary
-//! deliberately leaks (#1092, `docs/RUNTIME.md`): the result is the
+//! A produced source (`[e for e in s.items]`) is released right after
+//! `iter()` has taken its own reference (Part 1 of #1092). The iterator,
+//! each item and the result are new references this boundary still leaks
+//! (#1092, `docs/RUNTIME.md`): the result is the
 //! comprehension's value, and the loop variable's slot holds the borrowed
 //! item without refcount traffic, exactly as `MirStmt::ForObject`'s target.
 //! A pycc `int` temporary built by the condition or the element is released
-//! once it has been tested or packed, since the packers borrow their operand.
+//! once it has been tested or packed, since the packers borrow their operand,
+//! and so is a produced CPython object condition or element (`if x.ok()`,
+//! `x.a for ...`, Part 1 of #1092): the condition is held across its truth
+//! test, and the element is released once the packer has taken a reference
+//! of its own.
 
 use super::bigint_rc::release_scalar_if_int_temporary;
 use super::comprehension::{CompCx, CompElts};
@@ -74,7 +80,9 @@ pub(super) fn emit_object_comprehension<'ctx>(
     let i64_ty = context.i64_type();
 
     let source = emit(iterable);
+    let held_source = crate::object_release::hold(context, module, rt, iterable, &source);
     let iterator = foreign_call::emit_get_iter(context, builder, module, rt, source);
+    held_source.release(builder, rt);
 
     let edge = ForeignFailEdge::for_current(builder);
     let new_collection = shim_fn(
@@ -106,7 +114,9 @@ pub(super) fn emit_object_comprehension<'ctx>(
 
     if let Some(cond) = cond {
         let scalar = emit(cond);
+        let held = crate::object_release::hold(context, module, rt, cond, &scalar);
         let test = truthy(context, builder, module, rt, scalar);
+        held.release(builder, rt);
         release_scalar_if_int_temporary(context, builder, rt, cond, &scalar);
         let function = edge.function();
         let keep_bb = context.append_basic_block(function, "objcomp_keep");
@@ -127,6 +137,7 @@ pub(super) fn emit_object_comprehension<'ctx>(
     );
     let item = emit_pack(context, builder, module, scalar, "objcomp_item");
     release_scalar_if_int_temporary(context, builder, rt, elt, &scalar);
+    crate::object_release::release_if_produced(context, builder, module, elt, &scalar);
     let collect = shim_fn(
         module,
         EXT_OBJ_COLLECT_SYMBOL,

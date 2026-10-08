@@ -206,8 +206,9 @@ fn a_raising_element_propagates_from_the_display() {
 /// *mortal* `object()` held by the module across 100 calls of each
 /// function:
 ///
-/// - `keep` builds `[probe, probe]` and drops it: the list is leaked on the
-///   leak-only rule (#1092), so each call adds exactly the two references
+/// - `keep` binds `[probe, probe]` and drops it: a bound list is still
+///   leaked under #1092 (Part 1 releases only unbound temporaries), so each
+///   call adds exactly the two references
 ///   the list holds -- one more would be a packed element leaked twice, one
 ///   fewer a stolen reference released.
 /// - `fail` packs `probe`, then an `int` outside the packer's range, then

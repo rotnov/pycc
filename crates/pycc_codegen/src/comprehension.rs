@@ -168,7 +168,12 @@ pub(super) fn emit_comprehension<'ctx>(
                 cx.locals,
                 cond_expr,
             );
+            // A produced CPython-object filter (`if o.ready()`) is held across
+            // its truth test and released after it (Part 1 of #1092).
+            let held =
+                crate::object_release::hold(cx.context, cx.module, cx.rt, cond_expr, &cond_scalar);
             let cond_i1 = truthy(cx.context, cx.builder, cx.module, cx.rt, cond_scalar);
+            held.release(cx.builder, cx.rt);
             // #146 Part 2 (D-181): released after `truthy`, which reads a
             // bigint operand's limbs.
             release_scalar_if_int_temporary(cx.context, cx.builder, cx.rt, cond_expr, &cond_scalar);

@@ -3762,7 +3762,9 @@ fn reading_a_list_typed_local_back_out_of_its_alloca_produces_a_list_scalar() {
 /// any IR -- every one panics inside its function's own `match` before
 /// reaching a `build_*` call -- so unlike the hand-built-`StorageSlot`
 /// tests above, none needs a function or a positioned basic block.
-fn list_scalar_panic_fixture(context: &Context) -> (inkwell::module::Module<'_>, RtFns<'_>) {
+pub(crate) fn list_scalar_panic_fixture(
+    context: &Context,
+) -> (inkwell::module::Module<'_>, RtFns<'_>) {
     let module = context.create_module("test");
     let rt = declare_rt_functions(context, &module);
     (module, rt)

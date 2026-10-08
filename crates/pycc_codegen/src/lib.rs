@@ -69,6 +69,7 @@ mod frozenset;
 mod hash;
 mod object_box;
 mod object_comprehension;
+mod object_release;
 mod object_return;
 mod object_unbox;
 mod sequence;
@@ -2680,7 +2681,9 @@ fn emit_expr_unchecked<'ctx>(
                 locals,
                 operand,
             );
+            let held = object_release::hold(context, module, rt, operand, &operand_scalar);
             let truthy_cond = truthy(context, builder, module, rt, operand_scalar);
+            held.release(builder, rt);
             release_scalar_if_int_temporary(context, builder, rt, operand, &operand_scalar);
             let inverted = builder
                 .build_not(truthy_cond, "not_truthy")
@@ -2829,7 +2832,10 @@ fn emit_expr_unchecked<'ctx>(
                 // destination type, not the implicit thunk-seam crossing D-244
                 // rule 7 closes (see `foreign_len::emit_to_float`).
                 if matches!(scalar, Scalar::Object(_)) {
-                    return foreign_len::emit_to_float(context, builder, module, rt, scalar);
+                    let held = object_release::hold(context, module, rt, arg, &scalar);
+                    let result = foreign_len::emit_to_float(context, builder, module, rt, scalar);
+                    held.release(builder, rt);
+                    return result;
                 }
                 return Scalar::Float(to_float(context, builder, rt, scalar));
             }
@@ -2868,7 +2874,9 @@ fn emit_expr_unchecked<'ctx>(
                          -- pycc_types::check (C0001) should have rejected this before codegen"
                     )
                 };
+                let held = object_release::hold(context, module, rt, arg, &scalar);
                 let bit = foreign_len::emit_truthy(context, builder, module, rt, ptr);
+                held.release(builder, rt);
                 return Scalar::Bool(
                     builder
                         .build_int_z_extend(bit, context.i8_type(), "bool_from_object")
@@ -2907,7 +2915,10 @@ fn emit_expr_unchecked<'ctx>(
                          -- pycc_types::check (C0001) should have rejected this before codegen"
                     )
                 }
-                return emit(context, builder, module, rt, scalar);
+                let held = object_release::hold(context, module, rt, arg, &scalar);
+                let result = emit(context, builder, module, rt, scalar);
+                held.release(builder, rt);
+                return result;
             }
             // Unlike `emit_stmt`'s void-call arm below, there is no
             // `Result` here to propagate a clean, user-facing error
@@ -3772,7 +3783,10 @@ fn emit_expr_unchecked<'ctx>(
         // side owns the "CPython raised" transition.
         MirExpr::ObjAttrGet { base, attr, .. } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
-            foreign_attr::emit(context, builder, module, rt, base_scalar, attr)
+            let held = object_release::hold(context, module, rt, base, &base_scalar);
+            let result = foreign_attr::emit(context, builder, module, rt, base_scalar, attr);
+            held.release(builder, rt);
+            result
         }
         // Part 2 of #1026 (PR 2b of #1081): the call counterpart of
         // `ObjAttrGet` directly above. The order below is CPython's own --
@@ -3786,21 +3800,17 @@ fn emit_expr_unchecked<'ctx>(
         // foreign failure edge (`foreign_fail.rs`).
         MirExpr::ObjMethodCall {
             base, method, args, ..
-        } => {
-            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
-            let bound =
-                foreign_call::emit_lookup(context, builder, module, rt, base_scalar, method);
-            let arg_scalars = foreign_call_emit::emit_object_args(
-                context,
-                builder,
-                module,
-                rt,
-                user_functions,
-                locals,
-                args,
-            );
-            foreign_call::emit_call(context, builder, module, rt, bound, &arg_scalars)
-        }
+        } => foreign_call_emit::emit_method_call(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            base,
+            method,
+            args,
+        ),
         // #1313: `callee(args)` on an `object`-typed name (a foreign
         // binding or a `for` loop target), or since Part 2a of #1371 on an
         // object subscript result (`table[k](args)`). CPython's order -- the
@@ -3808,28 +3818,16 @@ fn emit_expr_unchecked<'ctx>(
         // `foreign_call::emit_object_call` decides from the callee's MIR
         // shape whether it is a borrow (a name read; the shim helper takes
         // its own reference) or a produced new reference the call consumes.
-        MirExpr::ObjCall { callee, args } => {
-            let callee_scalar =
-                emit_expr(context, builder, module, rt, user_functions, locals, callee);
-            let arg_scalars = foreign_call_emit::emit_object_args(
-                context,
-                builder,
-                module,
-                rt,
-                user_functions,
-                locals,
-                args,
-            );
-            foreign_call::emit_object_call(
-                context,
-                builder,
-                module,
-                rt,
-                callee,
-                callee_scalar,
-                &arg_scalars,
-            )
-        }
+        MirExpr::ObjCall { callee, args } => foreign_call_emit::emit_direct_call(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            callee,
+            args,
+        ),
         // Part 8 of #1371: either call above with keyword arguments.
         // `foreign_call_emit` carries the order and the ownership split.
         MirExpr::ObjKeywordCall(call) => foreign_call_emit::emit_keyword_call(
@@ -3847,12 +3845,18 @@ fn emit_expr_unchecked<'ctx>(
         // why the out-parameter's `alloca` is hoisted to the entry block.
         MirExpr::ObjLen { base } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
-            foreign_len::emit_len(context, builder, module, rt, base_scalar)
+            let held = object_release::hold(context, module, rt, base, &base_scalar);
+            let result = foreign_len::emit_len(context, builder, module, rt, base_scalar);
+            held.release(builder, rt);
+            result
         }
         // Part 11 of #1371: `type(o)`. `foreign_type` carries the contract.
         MirExpr::ObjType { base } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
-            foreign_type::emit_type(context, builder, module, rt, base_scalar)
+            let held = object_release::hold(context, module, rt, base, &base_scalar);
+            let result = foreign_type::emit_type(context, builder, module, rt, base_scalar);
+            held.release(builder, rt);
+            result
         }
         // Part 3 of #1026 (PR 3b of #1082): `o[k]`. The evaluation order
         // below is CPython's own -- base, then key -- and
@@ -3861,6 +3865,7 @@ fn emit_expr_unchecked<'ctx>(
         // why that leaves exactly one foreign failure edge.
         MirExpr::ObjSubscript { base, index } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let held_base = object_release::hold(context, module, rt, base, &base_scalar);
             let index_scalar = object_unbox::emit_pack_operand(
                 context,
                 builder,
@@ -3870,7 +3875,18 @@ fn emit_expr_unchecked<'ctx>(
                 locals,
                 index,
             );
-            foreign_call::emit_subscript(context, builder, module, rt, base_scalar, index_scalar)
+            let held_index = object_release::hold(context, module, rt, index, &index_scalar);
+            let result = foreign_call::emit_subscript(
+                context,
+                builder,
+                module,
+                rt,
+                base_scalar,
+                index_scalar,
+            );
+            held_index.release(builder, rt);
+            held_base.release(builder, rt);
+            result
         }
         // Part 1 of #1371: a comparison or identity test with a CPython
         // object operand. Left, then right -- CPython's own order -- with
@@ -3892,12 +3908,20 @@ fn emit_expr_unchecked<'ctx>(
                     )
                 })
             };
+            let hold = |expr: &MirExpr, scalar: Option<Scalar<'ctx>>| {
+                scalar.map(|scalar| object_release::hold(context, module, rt, expr, &scalar))
+            };
             let l = operand(left);
+            let held_l = hold(left, l);
             let pending_l =
                 l.and_then(|l| push_pending_int_release_if_scalar_temporary(rt, left, &l));
             let r = operand(right);
+            let held_r = hold(right, r);
             pop_pending_int_release(rt, pending_l);
             let result = foreign_compare::emit_compare(context, builder, module, rt, *op, l, r);
+            for held in [held_r, held_l].into_iter().flatten() {
+                held.release(builder, rt);
+            }
             for (expr, scalar) in [(left, l), (right, r)] {
                 if let Some(scalar) = scalar {
                     release_scalar_if_int_temporary(context, builder, rt, expr, &scalar);
@@ -3923,6 +3947,7 @@ fn emit_expr_unchecked<'ctx>(
                 locals,
                 item,
             );
+            let held_item = object_release::hold(context, module, rt, item, &item_scalar);
             let pending = push_pending_int_release_if_scalar_temporary(rt, item, &item_scalar);
             let container_scalar = emit_expr(
                 context,
@@ -3933,6 +3958,8 @@ fn emit_expr_unchecked<'ctx>(
                 locals,
                 container,
             );
+            let held_container =
+                object_release::hold(context, module, rt, container, &container_scalar);
             pop_pending_int_release(rt, pending);
             let result = foreign_compare::emit_contains(
                 context,
@@ -3943,6 +3970,8 @@ fn emit_expr_unchecked<'ctx>(
                 item_scalar,
                 container_scalar,
             );
+            held_container.release(builder, rt);
+            held_item.release(builder, rt);
             release_scalar_if_int_temporary(context, builder, rt, item, &item_scalar);
             result
         }
@@ -3972,6 +4001,7 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::ObjList { elements } => {
             let mut pendings = Vec::with_capacity(elements.len());
             let mut scalars = Vec::with_capacity(elements.len());
+            let mut holds = Vec::with_capacity(elements.len());
             for element in elements {
                 let scalar = object_unbox::emit_pack_operand(
                     context,
@@ -3982,6 +4012,7 @@ fn emit_expr_unchecked<'ctx>(
                     locals,
                     element,
                 );
+                holds.push(object_release::hold(context, module, rt, element, &scalar));
                 pendings.push(push_pending_int_release_if_scalar_temporary(
                     rt, element, &scalar,
                 ));
@@ -3991,6 +4022,9 @@ fn emit_expr_unchecked<'ctx>(
                 pop_pending_int_release(rt, pending);
             }
             let result = foreign_call::emit_list(context, builder, module, rt, &scalars);
+            for held in holds.into_iter().rev() {
+                held.release(builder, rt);
+            }
             for (element, scalar) in elements.iter().zip(&scalars) {
                 release_scalar_if_int_temporary(context, builder, rt, element, scalar);
             }
@@ -3999,17 +4033,14 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::ObjIsInstance { value, class } => {
             let value_scalar =
                 emit_expr(context, builder, module, rt, user_functions, locals, value);
+            let held_value = object_release::hold(context, module, rt, value, &value_scalar);
+            let mut held_class = None;
             let class = match class {
                 pycc_mir::ObjIsInstanceClass::Object(class) => {
-                    foreign_compare::IsInstanceClass::Object(emit_expr(
-                        context,
-                        builder,
-                        module,
-                        rt,
-                        user_functions,
-                        locals,
-                        class,
-                    ))
+                    let scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, class);
+                    held_class = Some(object_release::hold(context, module, rt, class, &scalar));
+                    foreign_compare::IsInstanceClass::Object(scalar)
                 }
                 pycc_mir::ObjIsInstanceClass::Builtin(builtin) => {
                     foreign_compare::IsInstanceClass::Builtin(builtin.shim_code())
@@ -4018,7 +4049,13 @@ fn emit_expr_unchecked<'ctx>(
                     foreign_compare::IsInstanceClass::Compiled(name.clone())
                 }
             };
-            foreign_compare::emit_isinstance(context, builder, module, rt, value_scalar, class)
+            let result =
+                foreign_compare::emit_isinstance(context, builder, module, rt, value_scalar, class);
+            if let Some(held) = held_class {
+                held.release(builder, rt);
+            }
+            held_value.release(builder, rt);
+            result
         }
         // Part 2 of #1027: `b[i]` on a `pycc build --ext` export's
         // `memoryview` parameter. Base then index, CPython's own order and
@@ -4219,12 +4256,26 @@ fn emit_expr_unchecked<'ctx>(
         // why the arity travels as a call argument.
         MirExpr::ObjUnpackFloatTuple { base, arity } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
-            foreign_len::emit_unpack_float_tuple(context, builder, module, rt, base_scalar, *arity)
+            let held = object_release::hold(context, module, rt, base, &base_scalar);
+            let result = foreign_len::emit_unpack_float_tuple(
+                context,
+                builder,
+                module,
+                rt,
+                base_scalar,
+                *arity,
+            );
+            held.release(builder, rt);
+            result
         }
         MirExpr::ObjUnpack { value, arity } => {
             let value_scalar =
                 emit_expr(context, builder, module, rt, user_functions, locals, value);
-            foreign_unpack::emit_unpack(context, builder, module, rt, value_scalar, *arity)
+            let held = object_release::hold(context, module, rt, value, &value_scalar);
+            let result =
+                foreign_unpack::emit_unpack(context, builder, module, rt, value_scalar, *arity);
+            held.release(builder, rt);
+            result
         }
         MirExpr::NullInstance { .. } => {
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
@@ -7074,6 +7125,9 @@ fn emit_stmt<'ctx>(
             // is discarded outright, so nothing else will ever retire the
             // reference it was born with.
             release_scalar_if_int_temporary(context, builder, rt, expr, &scalar);
+            // Part 1 of #1092: the same for a produced CPython object
+            // (`o.update()`), whose reference nothing else will retire.
+            object_release::release_if_produced(context, builder, module, expr, &scalar);
             Ok(())
         }
         MirStmt::Assign { target, value } => {
@@ -7115,7 +7169,9 @@ fn emit_stmt<'ctx>(
             let function = builder.get_insert_block().unwrap().get_parent().unwrap();
             let cond = {
                 let scalar = emit_expr(context, builder, module, rt, user_functions, locals, test);
+                let held = object_release::hold(context, module, rt, test, &scalar);
                 let cond = truthy(context, builder, module, rt, scalar);
+                held.release(builder, rt);
                 // #146 Part 2 (D-181): released *after* `truthy`, which
                 // reads a bigint operand's limbs -- releasing first could
                 // free the very word being tested.
@@ -7185,7 +7241,9 @@ fn emit_stmt<'ctx>(
             builder.position_at_end(test_bb);
             let cond = {
                 let scalar = emit_expr(context, builder, module, rt, user_functions, locals, test);
+                let held = object_release::hold(context, module, rt, test, &scalar);
                 let cond = truthy(context, builder, module, rt, scalar);
+                held.release(builder, rt);
                 // #146 Part 2 (D-181): released *after* `truthy`, which
                 // reads a bigint operand's limbs -- releasing first could
                 // free the very word being tested.
@@ -7523,7 +7581,9 @@ fn emit_stmt<'ctx>(
         // store, the body and the back-edge are emitted here.
         MirStmt::ForObject { var, iter, body } => {
             let iterable = emit_expr(context, builder, module, rt, user_functions, locals, iter);
-            let loop_blocks = foreign_call::emit_iter_loop(context, builder, module, rt, iterable);
+            let held = object_release::hold(context, module, rt, iter, &iterable);
+            let loop_blocks =
+                foreign_call::emit_iter_loop(context, builder, module, rt, iterable, held);
             // Stored directly rather than through `emit_assign`, which also
             // stores a `Scalar::Object` since #1325 but predates this arm's
             // own store and is kept separate: a `for` target is this
@@ -8236,8 +8296,10 @@ fn emit_stmt<'ctx>(
             Ok(())
         }
         MirStmt::ObjDelAttr { base, attr } => {
-            let base = emit_expr(context, builder, module, rt, user_functions, locals, base);
-            foreign_store::emit_del_attr(context, builder, module, rt, base, attr);
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let held = object_release::hold(context, module, rt, base, &base_scalar);
+            foreign_store::emit_del_attr(context, builder, module, rt, base_scalar, attr);
+            held.release(builder, rt);
             Ok(())
         }
         // `base.attr = value` (D-154, Part 1 of #375): writes the raw slot

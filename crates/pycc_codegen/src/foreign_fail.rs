@@ -19,8 +19,10 @@
 //!   which turns CPython's exception into a pending pycc exception (keeping
 //!   the original for the host, `docs/RUNTIME.md`), and then branches
 //!   **immediately** to the innermost exception target through
-//!   [`jump_to_exception_target`], releasing any live bigint temporaries on
-//!   the way exactly as `guard_statement_effects` does. In the module body
+//!   [`jump_to_exception_target`], releasing any live bigint and CPython
+//!   object temporaries on the way exactly as `guard_statement_effects`
+//!   does (#638; Part 1 of #1092). The direct return releases the held
+//!   object temporaries too. In the module body
 //!   that is how an enclosing `except`/`finally` runs, as in CPython.
 //!
 //! Which module-exec case applies is read from the exception-target stack,
@@ -99,7 +101,8 @@ fn obj_error_bridge_fn<'ctx>(
 /// while the innermost exception target is the entry's recorded
 /// `module_exec_exit` -- no module-level `try` encloses the operation, so a
 /// handler could not run anyway, and the import fails with CPython's
-/// exception untouched. Outside the window in which that exit is recorded
+/// exception set, after the held object temporaries are released (Part 1
+/// of #1092). Outside the window in which that exit is recorded
 /// both sides of the comparison are `None`, so the direct return holds
 /// there too. Every other case bridges and branches, as
 /// [`ForeignFailEdge::Function`] always does (Part 1 of #1096).
@@ -118,6 +121,10 @@ pub(super) fn emit_failure<'ctx>(
     if let ForeignFailEdge::ModuleExec(_) = edge
         && rt.exceptions.targets.borrow().last().copied() == rt.exceptions.module_exec_exit.get()
     {
+        // Part 1 of #1092: the import fails here, but the object
+        // temporaries the statement holds are still released, as on the
+        // bridged edge below.
+        crate::object_release::release_pending(builder, rt);
         builder
             .build_return(Some(
                 &context
