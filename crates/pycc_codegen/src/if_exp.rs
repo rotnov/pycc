@@ -23,6 +23,14 @@
 //! Neither arm holds a word across the other, and the condition's `int`
 //! temporary is released before either branch runs, so the node pushes
 //! nothing onto `pending_int_releases`.
+//!
+//! A produced CPython-object condition (`a if o.ready() else b`) is held
+//! across its truth test, which can raise, and released before either
+//! branch runs (Part 3 of #1092). An `object` arm passes through
+//! [`owned_value`] unchanged, so the node's result is owned only when both
+//! arms are produced objects; `object_release::is_produced` lists it as a
+//! producer exactly then. A result that mixes a produced and a borrowed
+//! arm is still leaked on the produced arm (#1499).
 
 use super::boolop::{Emitter, basic_value, owned_value};
 use super::{Scalar, release_scalar_if_int_temporary, ty_to_basic_type};
@@ -38,7 +46,9 @@ pub(super) fn emit_if_exp<'ctx>(
     ty: &Ty,
 ) -> Scalar<'ctx> {
     let test_scalar = emitter.emit(test);
+    let held = emitter.hold(test, &test_scalar);
     let truth = emitter.truth(test_scalar);
+    held.release(emitter.builder, emitter.rt);
     release_scalar_if_int_temporary(
         emitter.context,
         emitter.builder,

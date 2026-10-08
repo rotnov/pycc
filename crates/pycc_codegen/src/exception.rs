@@ -25,9 +25,18 @@ pub(super) struct ExceptionCodegenState<'ctx> {
     /// unwinds release a snapshot of it, and it is empty at every statement
     /// boundary; `object_release.rs` owns the push/pop discipline.
     pub(super) pending_object_releases: RefCell<Vec<crate::object_release::PendingObject<'ctx>>>,
+    /// The iterator of every enclosing `for x in <object>:` loop, paired
+    /// with the cleanup block it pushed onto `targets` (Part 3 of #1092).
+    /// Unlike `pending_object_releases` it lives across whole statements:
+    /// the cleanup block releases the iterator on every exception edge out
+    /// of the loop, and `foreign_fail::emit_failure` reads this stack to
+    /// look through those blocks for its direct module-exec return.
+    /// `object_release::LoopIterator` owns the push/pop discipline.
+    pub(super) loop_iterators: RefCell<Vec<crate::object_release::LoopCleanup<'ctx>>>,
     /// The `ext` module entry's own `top_exception_exit` while its body is
     /// emitted, and `None` otherwise (Part 1 of #1096). When it is also the
-    /// innermost entry of `targets`, no module-level `try` encloses the
+    /// innermost entry of `targets` -- looking through `loop_iterators`'
+    /// cleanup blocks (Part 3 of #1092) -- no module-level `try` encloses the
     /// statement being emitted, and that target means "fail the import
     /// directly": `foreign_fail::emit_failure` then keeps the direct
     /// `EXT_MODULE_EXEC_FAILED` return instead of bridging a foreign failure.
@@ -41,6 +50,7 @@ impl ExceptionCodegenState<'_> {
             targets: RefCell::new(Vec::new()),
             pending_int_releases: RefCell::new(Vec::new()),
             pending_object_releases: RefCell::new(Vec::new()),
+            loop_iterators: RefCell::new(Vec::new()),
             module_exec_exit: Cell::new(None),
         }
     }

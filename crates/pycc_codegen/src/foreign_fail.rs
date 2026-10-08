@@ -28,7 +28,10 @@
 //! Which module-exec case applies is read from the exception-target stack,
 //! not threaded through the emitters: the direct return is kept exactly
 //! when the innermost target is the entry's own `top_exception_exit`,
-//! recorded as `ExceptionCodegenState::module_exec_exit`.
+//! recorded as `ExceptionCodegenState::module_exec_exit`, once the cleanup
+//! blocks of enclosing `for x in <object>:` loops are looked through
+//! (Part 3 of #1092): such a loop is not a handler, so a failure inside it
+//! still fails the import directly, releasing the loops' iterators first.
 //!
 //! The branch is immediate rather than left to `emit_expr`'s post-node
 //! guard for two reasons: a method call evaluates its arguments *between*
@@ -118,13 +121,17 @@ pub(super) fn emit_failure<'ctx>(
     rt: &RtFns<'ctx>,
     edge: ForeignFailEdge<'ctx>,
 ) {
+    let (handler, loop_iterators) = crate::object_release::loop_iterators_above_handler(rt);
     if let ForeignFailEdge::ModuleExec(_) = edge
-        && rt.exceptions.targets.borrow().last().copied() == rt.exceptions.module_exec_exit.get()
+        && handler == rt.exceptions.module_exec_exit.get()
     {
         // Part 1 of #1092: the import fails here, but the object
         // temporaries the statement holds are still released, as on the
-        // bridged edge below.
+        // bridged edge below -- and, Part 3, so is the iterator of every
+        // enclosing `for x in <object>:` loop, whose cleanup target this
+        // return skips.
         crate::object_release::release_pending(builder, rt);
+        crate::object_release::release_all(builder, &loop_iterators);
         builder
             .build_return(Some(
                 &context

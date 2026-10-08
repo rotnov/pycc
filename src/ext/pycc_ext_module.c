@@ -2609,9 +2609,10 @@ void pycc_ext_obj_raise(PyObject *o)
  * Part 3 of #1026 (PR 3c of #1082): `iter(o)` for a `for x in <object>:`
  * loop (`EXT_OBJ_GET_ITER_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *
- * `o` is borrowed. The result is a *new* reference that is deliberately
- * never released -- one leaked iterator per `for` statement, on the same
- * leak-only rule `docs/RUNTIME.md` records for the rest of this boundary.
+ * `o` is borrowed. The result is a *new* reference the caller owns: since
+ * Part 3 of #1092 the compiled `for` loop or comprehension releases it on
+ * its normal exit and on every failure edge that leaves it, as
+ * `docs/RUNTIME.md` records.
  *
  * A non-iterable operand makes `PyObject_GetIter` set `TypeError` and
  * return NULL, which the caller routes to the foreign failure edge, so
@@ -2681,9 +2682,10 @@ long long pycc_ext_obj_iter_next(PyObject *it, PyObject **out)
  * there: `0` builds a `list`, `1` a `set`; any other code is a code
  * generator defect and raises `SystemError` rather than guessing.
  *
- * The result is a *new* reference -- the comprehension's value -- that is
- * still never released (a later part of #1092), or `NULL` with the
- * exception set.
+ * The result is a *new* reference -- the comprehension's value -- released
+ * by its consumer when unbound and on the comprehension's failure edges
+ * (Part 3 of #1092) and still leaked when bound (#1499), or `NULL` with
+ * the exception set.
  */
 PyObject *pycc_ext_obj_new_collection(long long kind)
 {

@@ -336,8 +336,8 @@ fn a_raising_comprehension_propagates_from_the_module_body() {
 /// item plus the leaked list's own reference), and a set comprehension of
 /// `n` identical items `n + 1` (each leaked loop item plus the one the set
 /// holds); the source list itself is unchanged, since the only thing that
-/// referenced it is the leaked list iterator, which CPython makes drop its
-/// sequence once exhausted. The deltas scale exactly with `n`, so a helper that
+/// referenced it is the list iterator, released since Part 3 of #1092 (and
+/// CPython makes an exhausted one drop its sequence regardless). The deltas scale exactly with `n`, so a helper that
 /// consumed a packed element twice, or not at all, moves them. CPython
 /// frees everything (`n 1 0` per line), so this report is compiled-only.
 #[test]

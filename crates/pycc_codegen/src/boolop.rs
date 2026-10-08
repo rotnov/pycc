@@ -38,9 +38,17 @@
 //! boxes `n`, exactly as CPython never converts it. The packer's `NULL` (a
 //! bigint outside D-141's inline range raises `OverflowError`, #1040) takes
 //! the foreign failure edge immediately. An `object` operand passes through
-//! as the same pointer, with no reference-count traffic (`docs/RUNTIME.md`,
-//! #1092's leak-only rule); a boxed operand's new reference is leaked once
-//! per evaluation of its arm, like every other object producer's.
+//! as the same pointer, with no reference-count traffic of its own.
+//!
+//! Object temporaries (Part 3 of #1092, `object_release.rs`): every
+//! operand of a truth-only node, and the left operand of a value node, is
+//! held across its truth test when it is a produced object. A truth-only
+//! operand is released right after its test; a discarded left operand is
+//! released in `eval_right` beside its `int` release. The node's own value
+//! is a producer (`object_release::is_produced`) only when every arm it
+//! can select is owned -- a produced object or a boxed native value -- and
+//! its consumer then releases it. When the arms mix a produced and a
+//! borrowed object, the selected produced arm is still leaked (#1499).
 //!
 //! The discarded left operand is released in `eval_right` *before* `right`
 //! is emitted, so the node never holds an arm-local word while `right` can
@@ -97,6 +105,16 @@ impl<'ctx> Emitter<'_, 'ctx> {
             self.locals,
             expr,
         )
+    }
+
+    /// Holds `scalar`, the value of `operand`, across a truth test that can
+    /// raise, when it is a produced CPython object (Part 3 of #1092).
+    pub(super) fn hold(
+        &self,
+        operand: &MirExpr,
+        scalar: &Scalar<'ctx>,
+    ) -> crate::object_release::Held<'ctx> {
+        crate::object_release::hold(self.context, self.module, self.rt, operand, scalar)
     }
 
     pub(super) fn truth(&self, scalar: Scalar<'ctx>) -> IntValue<'ctx> {
@@ -196,7 +214,9 @@ fn emit_truth_only<'ctx>(
 /// Emits `operand`, tests its truth and releases its int temporary.
 fn operand_truth<'ctx>(emitter: &Emitter<'_, 'ctx>, operand: &MirExpr) -> IntValue<'ctx> {
     let scalar = emitter.emit(operand);
+    let held = emitter.hold(operand, &scalar);
     let truth = emitter.truth(scalar);
+    held.release(emitter.builder, emitter.rt);
     release_scalar_if_int_temporary(
         emitter.context,
         emitter.builder,
@@ -223,7 +243,12 @@ fn emit_value<'ctx>(
         }
     };
     let left_scalar = emit_operand(left);
+    // Part 3 of #1092: a produced `object` left operand is held across its
+    // truth test, then owned by whichever arm runs: `take_left` selects it
+    // as the node's value, and `eval_right` releases it.
+    let held_left = emitter.hold(left, &left_scalar);
     let left_truth = emitter.truth(left_scalar);
+    held_left.consumed(emitter.rt);
     let take_left = emitter.new_block("boolop_take_left");
     let eval_right = emitter.new_block("boolop_eval_right");
     let join = emitter.new_block("boolop_join");
@@ -239,6 +264,13 @@ fn emit_value<'ctx>(
         emitter.context,
         emitter.builder,
         emitter.rt,
+        left,
+        &left_scalar,
+    );
+    crate::object_release::release_if_produced(
+        emitter.context,
+        emitter.builder,
+        emitter.module,
         left,
         &left_scalar,
     );
@@ -314,8 +346,9 @@ fn needs_boxing(operand: &MirExpr, ty: &Ty) -> bool {
 /// right after it, on both outcomes, and nothing is retained. A `NULL`
 /// from the packer -- `OverflowError` for a bigint outside D-141's inline
 /// range (#1040) -- takes the foreign failure edge at once, since no
-/// consuming shim helper follows to tolerate it. The new reference is
-/// never released (#1092's leak-only rule).
+/// consuming shim helper follows to tolerate it. The new reference is the
+/// node's value: released by the node's consumer when every arm is owned
+/// (Part 3 of #1092, `object_release::is_produced`), and leaked otherwise.
 fn boxed_value<'ctx>(
     emitter: &Emitter<'_, 'ctx>,
     source: &MirExpr,

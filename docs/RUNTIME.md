@@ -1656,12 +1656,14 @@ module-level `try`. Four consequences follow the function-body terms rather
 than CPython's. A failure inside a handler does not set `__context__` on the
 new exception, as for every pycc raise. The bridge calls `str(exc)`, and so a
 user `__str__`, as it does in a function body (#1316). A reference #1092
-still leaks on a failing operation (an iterator, an item, a bound or boxed
-value) now leaks once per *caught* failure rather than at most once per
+still leaks on a failing operation (an item, a bound or boxed value) now
+leaks once per *caught* failure rather than at most once per
 import. And the D-208 pending `int` temporaries a failing statement holds are
 released on the bridged edge before it branches, as in a function body, while
 the direct edge still leaves them to the failed import. A held, unbound
-CPython-object operand (Part 1 of #1092, below) is released on *both* edges.
+CPython-object operand (Part 1 of #1092, below) is released on *both* edges,
+and so is the iterator of every enclosing foreign `for` loop (Part 3 of
+#1092, below).
 
 **Inside a function body a failure is bridged into a pycc exception.** Only the
 module-body entry point may return `-1`, so
@@ -1929,7 +1931,7 @@ for a direct call. So is a subscript load's:
 `PyObject_GetItem` hands back a new reference and `pycc_ext_obj_getitem`
 returns it unreleased. Iteration adds two producers on the same terms:
 `PyObject_GetIter` hands back a new reference to the iterator, leaked once per
-loop, and `PyIter_Next` hands back a new reference to each item, which
+loop until Part 3 of #1092 released it (below), and `PyIter_Next` hands back a new reference to each item, which
 `pycc_ext_obj_iter_next` writes through `*out` unreleased — so **`for` makes
 the leak trip-count-linear by construction**, where an attribute load in a loop
 body merely happens to be written inside one.
@@ -1955,14 +1957,51 @@ failure while it is held (a later sibling operand, or the consuming
 operation itself) releases it on the failure edge -- both the error bridge to
 an enclosing handler and the direct module-exec failure return -- and the
 fallthrough releases it after the operation. A result that is bound to a name
-or slot, passed to a user function, returned, or boxed is still leaked, as are
-the iterator, each item and a comprehension's result, and an operand of
-`print`, an f-string, `hash`, `raise`, a conditional expression or a boolean
-operator; later parts of #1092 narrow those.
+or slot, passed to a user function, returned, or boxed is still leaked, as is
+each item of a `for` loop or a comprehension; Part 3 below releases the
+iterator and the remaining unbound operands, and
+[#1499](https://github.com/rotnov/pycc/issues/1499) owns bound values and items.
 `tests/issue_1092_object_temp_release.rs` pins a zero `sys.getrefcount` delta
 for every consumer and every held-operand failure, at module level (one
 200-trip loop at import, and a failed import retried 50 times) and in a
 function body (at two trip counts).
+
+**The iterator, a comprehension's result and the remaining unbound operands
+are released (Part 3 of #1092, [#1498](https://github.com/rotnov/pycc/issues/1498)).**
+Part 3 reuses Part 1's hold-and-release protocol
+(`crates/pycc_codegen/src/object_release.rs`). A foreign `for` loop's
+iterator is released at the loop's normal exit. While the loop runs, the
+iterator is the loop's own cleanup target: a failure in `next()` or in the
+body that leaves the loop for an enclosing handler first passes through a
+block that releases the iterator, a nested loop's block chaining to the
+enclosing loop's, while a handler inside the body catches before any of
+them; the direct module-exec failure return releases every open loop's
+iterator before it returns `-1`. (`break` is refused with `C0001` in every
+loop for now, so a loop has no other exit.) A comprehension over an object holds its
+iterator and its result for its own extent: each failure edge releases what
+exists, the normal exit releases the iterator, and the result is then a
+producer like any other, so an unbound one (`len([...])`, a discarded
+comprehension) is released by its consumer. `print` holds each produced
+argument until its text is written, so a later argument's failure releases
+the earlier ones; an f-string releases an interpolated object once it is
+formatted; `raise o.e` releases its operand once `PyErr_SetObject` has taken
+its own reference; a conditional expression's test and a truth-only boolean
+operator's operands are released after their truth test; and a value
+boolean operator releases its left operand when the right one is selected.
+An object-typed conditional expression is itself a producer only when both
+arms are produced objects, and a value boolean operator only when every arm
+is owned (a produced object, or a scalar it boxes into a new reference) --
+the rule `object_release::is_produced` implements; one with a borrowed arm is neither released nor incremented,
+so its produced arm still leaks when selected (#1499). `hash` has no object
+operand to release: `hash(o)` is refused with `C0001`. What stays leaked is bound
+values, every per-trip item and those mixed-arm results, all #1499's.
+`tests/issue_1498_iteration_temp_release.rs` pins a zero `sys.getrefcount`
+delta for loops (nested, with a raising iterator, with a raising body, in a
+module-level `try` and uncaught out of the module body), comprehensions and
+every operand shape, at two trip counts. Its iterables hand out iterators
+that reference them, so an unreleased iterator moves its iterable's count, a
+host-held positive control shows the probe sees exactly that, and the same
+test run against the Part 1 compiler reports every one of these leaks.
 
 **Binding moves the reference into the global and rebinding leaks it.** Since
 [#1325](https://github.com/rotnov/pycc/issues/1325) a producer's result may be
@@ -2344,18 +2383,18 @@ every path**, including the one where its packer already failed with `NULL`
 -- the key slot's rule once more. Every `NULL` or `-1` routes to the
 operation's failure edge, so an iterable that is not one, a raising
 `__iter__` or `__next__`, a raising filter or element, and `set.add` of an
-unhashable item each surface CPython's own exception. The iterator, each loop
-item and the result are new references still leaked under the
-[#1092](https://github.com/rotnov/pycc/issues/1092) rule (Part 1 releases only a
-produced *source*, right after `iter()`), and the
-loop variable reads the item borrowed. `tests/issue_1255_object_comprehension.rs`
-pins it against a mortal item at two trip counts `n`: a list comprehension of
+unhashable item each surface CPython's own exception. Under the
+[#1092](https://github.com/rotnov/pycc/issues/1092) rule Part 1 releases a
+produced *source* right after `iter()`, and Part 3 releases the iterator and
+an unbound result (above); each loop item and a bound result are new
+references still leaked (#1499), and the loop variable reads the item
+borrowed. `tests/issue_1255_object_comprehension.rs` pins it against a mortal
+item at two trip counts `n`, with each result bound: a list comprehension of
 `n` items raises the item's count by `2n` (the leaked loop item plus the
 leaked list's own reference), a set comprehension of `n` identical items by
 `n + 1`, and the iterated list's count by `0`, since its only new referrer is
-the leaked list iterator, which CPython makes drop its sequence once
-exhausted. When a later part of #1092 releases the iterator, the items and the
-result, the deltas become CPython's.
+the list iterator, which is released. When #1499 releases the items and the
+bound result, the deltas become CPython's.
 
 **A list display bound to an object slot is one more producer.** Part 2d of
 [#1371](https://github.com/rotnov/pycc/issues/1371) builds `x: object = [a,
