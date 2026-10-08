@@ -1955,7 +1955,10 @@ returns it unreleased. Iteration adds two producers on the same terms:
 loop until Part 3 of #1092 released it (below), and `PyIter_Next` hands back a new reference to each item, which
 `pycc_ext_obj_iter_next` writes through `*out` unreleased — so **`for` makes
 the leak trip-count-linear by construction**, where an attribute load in a loop
-body merely happens to be written inside one.
+body merely happens to be written inside one. This paragraph records the
+original leak-only rule; since Part 1 of #1499 a module global owns its value
+and a rebind, a re-import or the next `for` item releases the previous one
+("A module global owns its reference" below).
 
 **An unbound temporary is released by its consumer (Part 1 of
 [#1092](https://github.com/rotnov/pycc/issues/1092)).** Every rule above

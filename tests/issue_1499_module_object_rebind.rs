@@ -85,6 +85,10 @@ def peeker():
     return Peeker()
 
 
+def make_things(n):
+    return [Thing() for _ in range(n)]
+
+
 T = Thing()
 PAIR = (Thing(), Thing())
 ";
@@ -93,7 +97,9 @@ PAIR = (Thing(), Thing())
 /// module global: a rebind loop of produced values, a produced attribute
 /// load, an alias of a borrowed global, `x = x`, a borrowed global stored
 /// into a compiled-instance attribute and then rebound, a compiled
-/// instance rebound, a tuple unpack and a `for` target. The first rebind
+/// instance rebound, a tuple unpack, a `for` target over the fixed
+/// `PAIR`, and an empty-body `for` over `{N}` fresh items, whose target
+/// keeps only the last one alive. The first rebind
 /// releases a `Peeker`, whose finalizer reads the global back through
 /// `peek()` and must see the new value.
 const MODULE: &str = "\
@@ -154,6 +160,8 @@ for i in range({N}):
     p, q = s.PAIR
 for w in s.PAIR:
     p = w
+for e in s.make_things({N}):
+    pass
 ";
 
 /// Writes the stub into the scratch root, every `(module, source)` as
@@ -241,13 +249,14 @@ fn bindings_script() -> String {
     )
 }
 
-/// What CPython reports for `MODULE` at `trips`: `x`, `same` and the
-/// object `box.a` keeps are alive, and every other `Thing` the body made --
-/// the `Peeker` and each rebound value -- is dead.
+/// What CPython reports for `MODULE` at `trips`: `x`, `same`, the
+/// object `box.a` keeps and the `for` target `e`'s last item are alive, and
+/// every other `Thing` the body made -- the `Peeker`, each rebound value
+/// and every earlier `for` item -- is dead.
 fn expected_bindings(trips: usize) -> String {
     format!(
-        "live 3 dead {}\nseen Thing\nT 1\nPAIR 1 4\nkept Thing False\nsame 2\ninst Box 2\n",
-        2 * trips + 1
+        "live 4 dead {}\nseen Thing\nT 1\nPAIR 1 4\nkept Thing False\nsame 2\ninst Box 2\n",
+        3 * trips
     )
 }
 

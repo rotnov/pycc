@@ -2321,10 +2321,12 @@ fn emit_expr_unchecked<'ctx>(
                 // before reaching `foreign_attr::emit`.
                 //
                 // No reference-count traffic accompanies the read: the
-                // global owns the one reference the import created and
-                // never releases it (`docs/RUNTIME.md`), so a read is a
-                // borrow with nothing to balance. A `x = <object>` global
-                // owns its reference the same way (#1325).
+                // global owns the reference the import created
+                // (`docs/RUNTIME.md`), so a read is a borrow with nothing to
+                // balance. A `x = <object>` global owns its reference the
+                // same way (#1325). Since Part 1 of #1499 a rebind or
+                // re-import releases the previous value
+                // (`object_slot.rs`).
                 Ty::Object => {
                     let loaded = builder
                         .build_load(
