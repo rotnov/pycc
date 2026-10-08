@@ -1125,7 +1125,7 @@ rather than CPython's `multiple values for argument 'self'`.
 | `int` | carried; accepts `int` and `bool` (the `docs/TYPE_SYSTEM.md` type table's subtype rule), `OverflowError` outside the inline range | carried |
 | `float` | carried; accepts `float` **only** — an `int`, a `bool` or any `__float__` duck type raises `TypeError` | carried |
 | `bool` | carried; accepts `bool` **only** — an `int` or any other truthy object raises `TypeError` | carried, and identity survives: `PyBool_FromLong` returns the interned singleton |
-| `None` | **not carried**: `C0003`, gated on [#1047](https://github.com/rotnov/pycc/issues/1047)'s call-argument ICE | carried, as `Py_RETURN_NONE` |
+| `None` | **not carried**: `C0003`, gated on [#1047](https://github.com/rotnov/pycc/issues/1047)'s call-argument ICE | carried, returning a new reference to `None` |
 | `str` | carried; accepts `str` **only** — no `__str__`, `os.PathLike` or buffer duck type. A lone surrogate raises CPython's own `UnicodeEncodeError`, propagated verbatim | carried |
 | `tuple[...]` of `int`/`bool`/`float` | carried; accepts a `tuple` or a `tuple` subclass of exactly the declared arity, each element admitted by its own `int`/`float`/`bool` row above -- `str` is carried at a top-level position but not as an element. Every other object -- `list`, `str`, an iterator, a different arity -- raises `TypeError` | carried, always as an exact `tuple` |
 | `tuple[...]` carrying anything else, any other container (`frozenset[int]` included), `T \| None` -- except, in an `--ext` module, a container with an object argument and the four bare spellings, which *are* the object (next row) | **not carried**: `C0003` | **not carried**: `C0003` |
