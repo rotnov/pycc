@@ -352,7 +352,10 @@ fn the_entry_spelling_is_resolved_before_the_climb() {
     let entry = scratch.join("top/pkg/../pkg/./m.py");
     let canonical = entry.canonicalize().expect("canonical");
     let spelled = spelled_path(&entry, &canonical);
-    assert_eq!(spelled, canonical);
+    // Compared canonicalized, since Windows' `absolute` folds `..` lexically
+    // and `canonicalize` adds a verbatim prefix there.
+    assert!(!spelled.components().any(|c| c == Component::ParentDir));
+    assert_eq!(spelled.canonicalize().expect("spelled exists"), canonical);
     assert_eq!(top_level_package(&spelled), Some("top".to_string()));
     let program = must_load_foreign(&entry);
     assert_eq!(file_names(&program), vec!["m.py".to_string()]);
@@ -388,7 +391,10 @@ fn a_parent_component_after_a_symlink_follows_the_link() {
 }
 
 /// When the prefix through the last `..` does not resolve, the canonical
-/// entry path stands in for the spelling.
+/// entry path stands in for the spelling. Unix only: on Windows
+/// `std::path::absolute` already folds `..` lexically, as Windows itself
+/// resolves it, so no `..` reaches the prefix.
+#[cfg(unix)]
 #[test]
 fn an_unresolvable_parent_prefix_falls_back_to_the_canonical_path() {
     let scratch = ScratchDir::new("modules_tests").expect("scratch");
