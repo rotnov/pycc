@@ -2708,7 +2708,10 @@ binds it inside a compiled function, and must not measure a comprehension over
 an object**, since that one leaks an item per trip whatever its body contains.
 Since Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499) a module
 global owns what it binds and a module-level foreign `for` loop releases each
-previous item, so neither leaks per trip any more. Since Part 1 of #1092
+previous item, so neither leaks per trip any more -- except a conditional
+expression or value boolean operator with a borrowed arm, whose produced arm
+still leaks when selected (above), so a hot loop binding one is not measured
+either. Since Part 1 of #1092
 an *unbound* producer result -- `len(o.items)`, `o.a < o.b`, `float(o.x)`, a
 discarded `o.m()` -- is released by its consumer, so a hot loop of only those
 is a legitimate measurement. **The caveat
