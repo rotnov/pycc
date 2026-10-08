@@ -4434,9 +4434,10 @@ static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const 
  * `pycc_ext_register_method_types` filled before the body, read afresh here.
  * The static is one per process, like the carrier cache and every `fnptr_`
  * slot: a nested `Py_mod_exec` of this artifact mid-body replaces it, and
- * the outer module then binds the inner exec's type -- the one compiled
- * code constructs and tests against -- where CPython gives each module its
- * own class (`docs/RUNTIME.md`'s #1199 residuals).
+ * an outer module that has not bound the class yet then binds the inner
+ * exec's type -- the one compiled code constructs and tests against --
+ * while one that already bound it keeps the earlier type; CPython gives
+ * each module its own class (`docs/RUNTIME.md`'s #1199 residuals).
  *
  * Returns 0, or -1 with an exception set. Not `static`: LLVM-generated code
  * declares and calls it by this name (`EXT_PUBLISH_SYMBOL` in
