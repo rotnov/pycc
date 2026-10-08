@@ -2260,8 +2260,9 @@ element on every path**: when a packer already failed with `NULL` it builds
 no list and releases the rest; when `PyList_New` fails it releases them all;
 otherwise each reference moves into the list through `PyList_SetItem` (the
 limited API has no `PyList_SET_ITEM`). The list is a new reference, leaked on
-the same terms as every other producer, so each successful display leaks the
-list and the one reference it holds per element. An element that raises
+the same terms as every other producer, so each successful display that is
+bound or passed on leaks the list and the one reference it holds per element
+(an unbound display is released, Part 1 of #1092 above). An element that raises
 before packing (`[o, 1 // z]`) leaves nothing to release. The hosted test
 `tests/issue_1371_object_list_display.rs` pins `sys.getrefcount` of a mortal
 element across 100 calls: `+2` per call for a `[probe, probe]` bound and dropped,
@@ -2456,11 +2457,13 @@ nothing to guard here.
 
 That extension is a deliberate, bounded regression and is recorded as one. A
 module object leaks at most once per process; an attribute load sits inside
-ordinary control flow, so `numpy.pi` written in a loop leaks one reference per
-iteration — the leak is trip-count-linear rather than bounded by process exit.
+ordinary control flow, so `numpy.pi` written in a loop and bound or passed on leaks one
+reference per iteration — the leak is trip-count-linear rather than bounded by process exit.
 Since #1316 the same holds per *call* of a compiled function that performs a
 foreign attribute load, method call, direct call or subscript load: a host
-calling such an exported function N times leaks N references per operation.
+calling such an exported function N times leaks N references per operation
+whose result is bound or passed on (an unbound result is released since Part 1
+of #1092, below).
 Part 2 accepts it because releasing correctly requires a release protocol that
 is not yet built, and because nothing in Part 2 can hand such a value to a host:
 every consuming operation other than a further attribute load, a method call,
@@ -2469,7 +2472,7 @@ a subscript load, `for` iteration, `len`, a truth test, a module-level binding
 interpolation (#1340, which hand CPython's text back as a pycc `str`) is refused with `I0404`. Since [#1397](https://github.com/rotnov/pycc/issues/1397) the `ext` export boundary carries an `object`
 parameter or return (D-258 rule 5); the parameter's reference is likewise
 never released, and the returned object is handed to the host as a fresh
-reference. A method call's result leaks on exactly the same
+reference. A method call's bound or passed-on result leaks on exactly the same
 terms and is trip-count-linear in exactly the same way. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
 rule 6's 5× kill criterion must not measure a hot loop that *binds*, passes,
