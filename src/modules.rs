@@ -471,13 +471,6 @@ impl Loader {
         })
     }
 
-    /// Whether `request` is an absolute import whose first segment is the
-    /// entry module's own top-level package (#1382). Such an import names
-    /// the package the artifact is installed in, which the host interpreter
-    /// imports by that same absolute name, so under
-    /// [`RelativeImports::ForeignFromEntry`] it binds CPython's module and
-    /// is never linked natively, exactly as an absolute import of a
-    /// non-project root (Part 1 of #1026, Part 1 of #1138).
     /// The `C0001` refusal for an entry whose own top-level package (#1382)
     /// has the name of a module `pycc_std` compiles natively (`math`,
     /// `typing`, ...), or `None` when there is no such collision.
@@ -502,6 +495,13 @@ impl Loader {
         ))
     }
 
+    /// Whether `request` is an absolute import whose first segment is the
+    /// entry module's own top-level package (#1382). Such an import names
+    /// the package the artifact is installed in, which the host interpreter
+    /// imports by that same absolute name, so under
+    /// [`RelativeImports::ForeignFromEntry`] it binds CPython's module and
+    /// is never linked natively, exactly as an absolute import of a
+    /// non-project root (Part 1 of #1026, Part 1 of #1138).
     fn names_entry_package(&self, request: &ProjectImportRequest) -> bool {
         let root = request
             .module
