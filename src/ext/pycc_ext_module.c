@@ -4431,7 +4431,12 @@ static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const 
  * (`crates/pycc_codegen/src/ext_publish.rs`); a second publish of one name
  * would still just replace the binding.
  * A class is bound from its `pycc_ext_type_object_<Class>` static, which
- * `pycc_ext_register_method_types` filled before the body.
+ * `pycc_ext_register_method_types` filled before the body, read afresh here.
+ * The static is one per process, like the carrier cache and every `fnptr_`
+ * slot: a nested `Py_mod_exec` of this artifact mid-body replaces it, and
+ * the outer module then binds the inner exec's type -- the one compiled
+ * code constructs and tests against -- where CPython gives each module its
+ * own class (`docs/RUNTIME.md`'s #1199 residuals).
  *
  * Returns 0, or -1 with an exception set. Not `static`: LLVM-generated code
  * declares and calls it by this name (`EXT_PUBLISH_SYMBOL` in

@@ -584,7 +584,7 @@ definition runs therefore fails exactly as in CPython: `getattr` and
 `hasattr` see a partially initialized module's `AttributeError`, and
 `from my import late` a circular-import `ImportError`; a completed import,
 and a re-import after `del sys.modules[...]` (which re-runs the body on a
-fresh module object), expose every export. Four residuals remain: a
+fresh module object), expose every export. Five residuals remain: a
 redefined function reads as absent between its first and last definitions,
 where CPython would show the earlier one (over-hiding, for the wrapper
 reason above; pinned by
@@ -595,7 +595,15 @@ as soon as its bases' methods are bound, possibly before its own class
 statement (over-visibility, never a crash); the synthesized exception
 classes are still created and added in `Py_mod_exec` before the body runs
 (they carry no `fnptr_` slot, so an early read is safe); and a class the body never published is bound after it,
-before the hooks, by a safety net that no ordinary program reaches. Every
+before the hooks, by a safety net that no ordinary program reaches; and a
+nested `Py_mod_exec` of the same artifact (the body's cycle drops the module
+from `sys.modules` and imports it again) shares every compiled static -- each
+class's type object, the carrier cache, every `fnptr_` slot and global -- so
+the inner exec replaces the outer one's class and both modules bind that one
+type, which compiled code constructs and tests against, where CPython gives
+each module its own class (the exception classes are created once per
+process, so they were already shared; pinned by
+`a_nested_exec_of_the_same_artifact_binds_the_latest_exec_type_in_both_modules`). Every
 generated wrapper and `tp_init` now opens with a null guard on its
 `fnptr_` slot, so a call that still reaches an unbound slot raises a
 catchable `NameError: name '<item>' is not defined` instead of calling

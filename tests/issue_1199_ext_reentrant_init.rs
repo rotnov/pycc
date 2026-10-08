@@ -15,7 +15,7 @@
 //! directory that is on neither side's `PYTHONPATH` (a cwd holding the
 //! module changes CPython's circular-import wording).
 //!
-//! Two cases are not compared with CPython, each pinning a residual
+//! Three cases are not compared with CPython, each pinning a residual
 //! `docs/RUNTIME.md` records.
 //! [`an_instance_escaping_before_its_class_statement_raises_name_error`]:
 //! the null guard every generated wrapper now opens with turns what
@@ -24,6 +24,9 @@
 //! [`a_name_redefined_after_the_cycle_is_hidden_until_its_last_definition`]:
 //! a redefined function stays absent until its last definition runs,
 //! where CPython would show the earlier one.
+//! [`a_nested_exec_of_the_same_artifact_binds_the_latest_exec_type_in_both_modules`]:
+//! a nested exec of the same artifact shares every compiled static, so
+//! both modules bind one class where CPython gives each its own.
 //!
 //! Every test here is `#[ignore]`d for the reason every `ext` and embedded
 //! test is: it builds against and runs an installed CPython with
@@ -285,6 +288,53 @@ except AttributeError as e:
         "has False\nAttributeError partially initialized module 'my' from '<file>' \
          has no attribute 'f' (most likely due to a circular import)\n0.0 6.0\n"
     );
+}
+
+/// A nested `Py_mod_exec` of the same artifact, not a CPython comparison
+/// for one line: the helper drops `my` from `sys.modules` while the outer
+/// body is at `import cb`, before its class statement, and imports it
+/// again, so the inner exec registers `C` afresh. Every compiled static --
+/// the class's type object, the carrier cache, each `fnptr_` slot -- is
+/// one per process, and the inner exec replaces the outer one's, so the
+/// outer module binds the same type the inner one did and compiled code
+/// constructs and tests against. CPython gives each module its own class.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_nested_exec_of_the_same_artifact_binds_the_latest_exec_type_in_both_modules() {
+    let fixture = Fixture::new(
+        "1199_nested_exec",
+        r#"def make() -> object:
+    return C()
+
+
+import cb
+
+
+class C:
+    def __init__(self) -> None:
+        self.v = 5
+
+    def get(self) -> int:
+        return self.v
+"#,
+        r#"import sys
+
+outer = sys.modules["my"]
+del sys.modules["my"]
+import my as inner
+"#,
+    );
+    let driver = "import my\nimport cb\n\
+                  outer, inner = cb.outer, cb.inner\n\
+                  print(outer is inner, my is inner, outer.C is inner.C)\n\
+                  print(isinstance(outer.make(), outer.C), isinstance(inner.make(), inner.C), \
+                  outer.C().get(), inner.C().get(), outer.make().get())\n";
+    let compiled = fixture.run(&fixture.ext, driver);
+    let oracle = fixture.run(&fixture.src, driver);
+    assert_ok(&compiled);
+    assert_ok(&oracle);
+    assert_eq!(stdout_of(&compiled), "False True True\nTrue True 5 5 5\n");
+    assert_eq!(stdout_of(&oracle), "False True False\nTrue True 5 5 5\n");
 }
 
 /// The guard, not a CPython comparison: `make` builds a `D` before the
