@@ -281,6 +281,15 @@ pub const EXT_OBJ_TRUTHY_SYMBOL: &str = "pycc_ext_obj_truthy";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_TYPE_SYMBOL: &str = "pycc_ext_obj_type";
 
+/// The fixed C shim's object-temporary release (Part 1 of #1092): `void
+/// pycc_ext_obj_release(PyObject *o)` is `Py_XDECREF`. Generated code calls
+/// it for a shim producer's new reference once the borrowing operation that
+/// consumed it is done, or on the failure edge that leaves that operation
+/// (`object_release.rs`).
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_RELEASE_SYMBOL: &str = "pycc_ext_obj_release";
+
 /// The fixed C shim's subscript-load helper (Part 3 of #1026, PR 3b of
 /// #1082): it takes a borrowed `PyObject *` and an *owned* key reference
 /// produced by one of the `pycc_ext_obj_pack_*` helpers above, and returns a
@@ -426,8 +435,9 @@ pub const EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL: &str = "pycc_ext_obj_isinstance_co
 /// surface).
 ///
 /// The iterator is read once, in the loop preheader, and is never
-/// released: one leaked reference per `for` statement, on the same
-/// leak-only rule the rest of this boundary follows (#1092).
+/// released: one leaked reference per `for` statement (#1092). The iterable
+/// it was taken from is released right after this call when it is a produced
+/// temporary (Part 1 of #1092, `object_release.rs`).
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_GET_ITER_SYMBOL: &str = "pycc_ext_obj_get_iter";
@@ -650,7 +660,8 @@ pub const EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL: &str = "pycc_ext_obj_unpack_float_t
 /// CPython's own unpack protocol, or `NULL` with CPython's own exception
 /// set -- `TypeError` for a non-iterable, `ValueError` for too many or too
 /// few values. The tuple is bound to the unpacking temporary and leaked on
-/// the #1092 leak-only rule, like every other object result.
+/// the #1092 rule for a bound value; Part 1 of #1092 releases only unbound
+/// temporaries.
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_UNPACK_SYMBOL: &str = "pycc_ext_obj_unpack";

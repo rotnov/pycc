@@ -1334,7 +1334,8 @@ and bounded: a discarded `str` temporary (as in an `if` test today), the
 always-retained `Optional[int]` payload when the left operand is an owned
 temporary, and a discarded owned `Optional[int]` left operand. An
 `Optional[int]` result copies its arm exactly as `z = y` does. An `object`
-result follows the #1092 leak-only rule (`docs/RUNTIME.md`): an object operand
+result follows the #1092 rule (`docs/RUNTIME.md`; Part 1 releases no boolean
+operator operand): an object operand
 passes through borrowed with no reference-count traffic, and a boxed native
 operand's new reference is leaked once per evaluation.
 
@@ -1395,7 +1396,8 @@ described under "Narrowing & flow typing" above.
 its own reference (a retain, an incref) in its own arm, so a selected name or
 attribute read stays valid after its source is rebound. An `int` temporary
 produced only for the condition's truth is released at once. A CPython-object
-result follows #1092's leak-only rule unchanged: the selected value aliases
+result follows #1092's rule unchanged (Part 1 releases no conditional
+expression operand): the selected value aliases
 its source with no refcount traffic, exactly as `y = x` does.
 
 End-to-end tests are in `tests/issue_1395_if_exp.rs`, and the byte-exact

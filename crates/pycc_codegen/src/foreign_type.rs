@@ -5,8 +5,9 @@
 //! `PyObject_Type`. The operand is borrowed.
 //!
 //! **Ownership** (`docs/RUNTIME.md`). The result is a new reference to the
-//! operand's class, leaked on the #1092 leak-only rule `foreign_attr.rs`
-//! documents, exactly as an attribute load's result is.
+//! operand's class, owned exactly as an attribute load's result is: its
+//! consumer releases it when it is an unbound temporary (Part 1 of #1092,
+//! `object_release.rs`), and it is otherwise leaked.
 //!
 //! **Failure.** `PyObject_Type` cannot fail for a live object. The helper
 //! answers `NULL` only for a `NULL` operand, as the defence in depth

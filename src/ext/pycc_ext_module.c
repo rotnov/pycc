@@ -1671,11 +1671,11 @@ void pycc_ext_name_error(const unsigned char *name, long long len)
  * (`EXT_OBJ_GETATTR_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *
  * `obj` is borrowed -- the caller holds the reference for at least the
- * duration of this call, because in Part 2 the only object a load can be
- * rooted at is a module global that is never released. The returned
- * reference is deliberately never released either, on the same leak-only
- * rule `pycc_ext_obj_import` documents; `docs/RUNTIME.md` records it and
- * names the deferral.
+ * duration of this call: a module global or slot, or a produced temporary
+ * the caller releases only after this call (Part 1 of #1092). The returned
+ * reference is released by compiled code through `pycc_ext_obj_release`
+ * when it is consumed unbound, and is otherwise leaked until a later part
+ * of #1092; `docs/RUNTIME.md` records both.
  *
  * Deliberately *not* translated into `pycc_rt`'s pending-exception state
  * here. The two failure protocols are kept apart; the caller's own contract
@@ -1787,8 +1787,8 @@ PyObject *pycc_ext_obj_pack_str(void *value)
  * Part 2a of #1371: the packer for an argument (or subscript key) whose
  * static type is itself the opaque `object`, as in `copy.deepcopy(o)` or
  * `table[k]` with an object `k`. Borrowing like its scalar neighbours: the
- * operand stays owned by whatever produced it (a pycc local, or a result
- * the leak-only rule never releases), and the consuming helper that
+ * operand stays owned by whatever produced it (a pycc local, or a produced
+ * temporary its consumer releases after the call), and the consuming helper that
  * receives the packed value -- `pycc_ext_obj_call` or `pycc_ext_obj_getitem`
  * -- releases exactly the one new reference taken here, so the operand's
  * net refcount is unchanged. `Py_INCREF` rather than `Py_NewRef` keeps the
@@ -1834,10 +1834,11 @@ PyObject *pycc_ext_obj_pack_object(PyObject *value)
  * returned -- and this function releases it on every path. `args` points at
  * `nargs` slots of owned references produced by the `pycc_ext_obj_pack_*`
  * helpers above; this function consumes every one of them on every path, so
- * the generated code never has to. The returned reference is deliberately
- * never released, on the leak-only rule `docs/RUNTIME.md` records for this
- * boundary -- the *result* is the only thing that leaks, because it is the
- * only thing that escapes into compiled code as an `object` value.
+ * the generated code never has to. The returned reference is the only
+ * thing that escapes into compiled code as an `object` value; compiled code
+ * releases it through `pycc_ext_obj_release` when it is an unbound
+ * temporary (Part 1 of #1092) and otherwise leaks it, on the rule
+ * `docs/RUNTIME.md` records for this boundary.
  *
  * A packer that failed stored NULL in its slot with a CPython exception
  * already set. Scanning for that here rather than testing each packer's
@@ -1885,7 +1886,7 @@ PyObject *pycc_ext_obj_call(PyObject *bound, PyObject **args, long long nargs)
  * single implementation of the packed-argument scan and the vectorcall.
  *
  * Every `args[i]` is CONSUMED on every path, exactly as for
- * `pycc_ext_obj_call`. Returns a new reference (never released, #1092) or
+ * `pycc_ext_obj_call`. Returns a new reference (owned as #1092 records) or
  * NULL with a Python exception set; the caller routes NULL to the
  * foreign failure edge (`crates/pycc_codegen/src/foreign_fail.rs`).
  */
@@ -1914,7 +1915,7 @@ PyObject *pycc_ext_obj_call_borrowed(PyObject *callee, PyObject **args,
  * Ownership is exactly `pycc_ext_obj_call`'s: `callable` and every
  * `args[i]` are CONSUMED on every path, including a failed packer (a NULL
  * slot, whose exception is propagated unchanged) and a failure to build
- * `kwnames`. Returns a new reference (never released, #1092) or NULL with
+ * `kwnames`. Returns a new reference (owned as #1092 records) or NULL with
  * a Python exception set.
  */
 PyObject *pycc_ext_obj_call_kw(PyObject *callable, PyObject **args,
@@ -2032,8 +2033,9 @@ int pycc_ext_obj_truthy(PyObject *o)
  * Part 11 of #1371: `type(o)` on a CPython object value
  * (`EXT_OBJ_TYPE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *
- * Returns a new reference to `o`'s class (`PyObject_Type`), which compiled
- * code leaks under the #1092 leak-only rule like every other producer.
+ * Returns a new reference to `o`'s class (`PyObject_Type`), owned like every
+ * other producer's: released when consumed unbound (Part 1 of #1092),
+ * leaked otherwise.
  * `o` is borrowed. `PyObject_Type` cannot fail for a live object; a NULL
  * `o` is the defence in depth `pycc_ext_obj_getattr` and `pycc_ext_obj_len`
  * document: a NULL operand comes only from a producer whose own NULL check
@@ -2049,6 +2051,23 @@ PyObject *pycc_ext_obj_type(PyObject *o)
 }
 
 /*
+ * Part 1 of #1092: release one CPython object temporary
+ * (`EXT_OBJ_RELEASE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * Generated code calls this exactly once for every new reference a shim
+ * producer handed it that is consumed by a borrowing operation and bound
+ * nowhere -- the operand of an attribute load, a call argument, a
+ * discarded statement value, a condition -- after that operation, or on
+ * the failure edge that leaves it (`crates/pycc_codegen/src/object_release.rs`
+ * owns the classification). `Py_XDECREF` rather than `Py_DECREF` because a
+ * producer that failed left NULL in the value the failure edge releases.
+ */
+void pycc_ext_obj_release(PyObject *o)
+{
+    Py_XDECREF(o);
+}
+
+/*
  * Part 3 of #1026 (PR 3b of #1082): `o[k]` on a CPython object value
  * (`EXT_OBJ_GETITEM_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *
@@ -2060,8 +2079,8 @@ PyObject *pycc_ext_obj_type(PyObject *o)
  * code creates a packed reference and hands it to a shim helper, and the
  * shim helper is what releases it, so codegen never has to.
  *
- * The result is a *new* reference that is deliberately never released, on
- * the leak-only rule `docs/RUNTIME.md` records for this boundary --
+ * The result is a *new* reference, owned as `pycc_ext_obj_call`'s result
+ * is (released when an unbound temporary, Part 1 of #1092) --
  * `PyObject_GetItem` hands back a new reference exactly as
  * `PyObject_GetAttrString` does, and the result is the only thing that
  * escapes into compiled code as an `object` value.
@@ -2100,9 +2119,9 @@ PyObject *pycc_ext_obj_getitem(PyObject *o, PyObject *k)
  * helper (bit 0 the left, bit 1 the right): those are consumed on every
  * path, including a `NULL` one, exactly as `pycc_ext_obj_getitem` consumes
  * its packed key, so a failed packer needs no failure edge of its own.
- * Every other operand is borrowed. The result is a *new* reference that is
- * deliberately never released, on the leak-only rule `docs/RUNTIME.md`
- * records for the rest of this boundary, or `NULL` with the exception set.
+ * Every other operand is borrowed. The result is a *new* reference, owned
+ * as `pycc_ext_obj_call`'s result is (released when an unbound temporary,
+ * Part 1 of #1092), or `NULL` with the exception set.
  */
 PyObject *pycc_ext_obj_richcompare(PyObject *l, PyObject *r, int op, int owned)
 {
@@ -2284,8 +2303,8 @@ static PyObject *pycc_ext_obj_slice_of(PyObject *o, PyObject *start, PyObject *s
  *
  * The bounds follow `pycc_ext_obj_slice_of`'s contract, and the base is
  * borrowed. The `slice` object is released after the load. The result is a
- * *new* reference that is deliberately never released, on the leak-only
- * rule `docs/RUNTIME.md` records, or `NULL` with the exception set.
+ * *new* reference, owned as `pycc_ext_obj_call`'s result is (released when
+ * an unbound temporary, Part 1 of #1092), or `NULL` with the exception set.
  */
 PyObject *pycc_ext_obj_getslice(PyObject *o, PyObject *start, PyObject *stop, PyObject *step,
                                 int present)
@@ -2314,9 +2333,9 @@ PyObject *pycc_ext_obj_getslice(PyObject *o, PyObject *start, PyObject *stop, Py
  * `PyList_SetItem`, which steals it -- the limited API (abi3) has no
  * `PyList_SET_ITEM`. The index is always in range of a list just built
  * with `n` slots, so it cannot fail; the check is defence in depth and
- * releases what has not moved yet. The result is a *new* reference that
- * is deliberately never released, on the leak-only rule `docs/RUNTIME.md`
- * records, or `NULL` with the exception set.
+ * releases what has not moved yet. The result is a *new* reference, owned
+ * as `pycc_ext_obj_call`'s result is (released when an unbound temporary,
+ * Part 1 of #1092), or `NULL` with the exception set.
  */
 PyObject *pycc_ext_obj_build_list(PyObject **items, long long n)
 {
@@ -2553,8 +2572,8 @@ long long pycc_ext_obj_iter_next(PyObject *it, PyObject **out)
  * generator defect and raises `SystemError` rather than guessing.
  *
  * The result is a *new* reference -- the comprehension's value -- that is
- * deliberately never released, on the leak-only rule `docs/RUNTIME.md`
- * records, or `NULL` with the exception set.
+ * still never released (a later part of #1092), or `NULL` with the
+ * exception set.
  */
 PyObject *pycc_ext_obj_new_collection(long long kind)
 {
@@ -3131,8 +3150,8 @@ static PyObject *pycc_ext_obj_unpack_type_name(PyTypeObject *type)
  * fetched so far are released on each failing exit; on success the
  * iterator is released and the items are owned by the returned tuple. The
  * extra item fetched to detect "too many" is released at once. The
- * returned reference joins the #1092 leak-only set like every other object
- * result. `PyTuple_New` plus `PyTuple_SetItem` (which steals) build the
+ * returned reference is bound to the unpacking temporary and leaked, on
+ * the #1092 rule for a bound object value. `PyTuple_New` plus `PyTuple_SetItem` (which steals) build the
  * fresh tuple, both in the Limited API.
  *
  * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents;

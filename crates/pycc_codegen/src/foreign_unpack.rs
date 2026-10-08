@@ -13,8 +13,9 @@
 //! call succeeds, a raising unpack binds none of them -- CPython's own
 //! order.
 //!
-//! The tuple is a new reference leaked on the #1092 leak-only rule
-//! (`docs/RUNTIME.md`), exactly as an attribute or subscript load's result.
+//! The tuple is a new reference bound to the unpacking temporary and leaked
+//! on the #1092 rule for a bound value (`docs/RUNTIME.md`); Part 1 of #1092
+//! releases only unbound temporaries.
 
 use super::*;
 use crate::ext::EXT_OBJ_UNPACK_SYMBOL;
