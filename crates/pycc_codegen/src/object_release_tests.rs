@@ -862,6 +862,36 @@ fn a_native_raise_in_an_argument_releases_the_bound_method() {
     }
 }
 
+/// The direct-call form of #1486: `copy.a(copy.b, 1 // z)` holds its
+/// produced callee and its produced earlier argument across the native
+/// raise, and the last unwind releases both before its branch.
+#[test]
+fn a_native_raise_in_an_argument_releases_a_produced_callee() {
+    let ir = functions_ir(
+        "release_native_callee",
+        vec![MirItem::Function {
+            name: "f".to_string(),
+            params: vec![("z".to_string(), Ty::Int)],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::ExprStmt(MirExpr::ObjCall {
+                    callee: boxed(attr("a")),
+                    args: vec![attr("b"), native_raise(z())],
+                }),
+                MirStmt::Return(None),
+            ],
+        }],
+        &["pyfn_f"],
+    )
+    .remove(0);
+    let unwind = blocks(&ir, "effect_exc_unwind");
+    let native = unwind.last().unwrap_or_else(|| panic!("{ir}"));
+    assert_eq!(releases(native), 2, "{ir}");
+    let release = native.find(RELEASE).unwrap_or_else(|| panic!("{ir}"));
+    let branch = native.rfind("br label %").unwrap_or_else(|| panic!("{ir}"));
+    assert!(release < branch, "{ir}");
+}
+
 /// #1486 at module level: outside every `try`, the native raise's unwind
 /// branches to the module's top exception exit, and still releases the
 /// held bound method first.
