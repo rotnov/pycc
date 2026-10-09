@@ -1991,10 +1991,11 @@ any produced argument evaluated before it, on the way to the exception target
 temporary: since Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499) a
 module global owns it and releases it on rebind (below). A result bound to a
 function local or an instance slot, passed to a user function, returned, or
-boxed is still leaked, as is each per-trip item of a comprehension (an object
-`for` is admitted only in a module body, so its target is always a module
-global); Part 3 below releases the iterator and the remaining unbound
-operands, and the later parts of #1499 own the rest.
+boxed is still leaked (an object `for` is admitted only in a module body, so
+its target is always a module global, and since Part 3 of #1499 a
+comprehension releases each per-trip item itself); Part 3 below releases the
+iterator and the remaining unbound operands, and the later parts of #1499 own
+the rest.
 `tests/issue_1092_object_temp_release.rs` pins a zero `sys.getrefcount` delta
 for every consumer and every held-operand failure, foreign or native, at
 module level (one 200-trip loop at import, and a failed import retried 50
@@ -2022,14 +2023,28 @@ formatted; `raise o.e` releases its operand once `PyErr_SetObject` has taken
 its own reference; a conditional expression's test and a truth-only boolean
 operator's operands are released after their truth test; and a value
 boolean operator releases its left operand when the right one is selected.
-An object-typed conditional expression is itself a producer only when both
-arms are produced objects, and a value boolean operator only when every arm
-is owned (a produced object, or a scalar it boxes into a new reference) --
-the rule `object_release::is_produced` implements; one with a borrowed arm is neither released nor incremented,
-so its produced arm still leaks when selected (#1499). `hash` has no object
-operand to release: `hash(o)` is refused with `C0001`. What stays leaked is
-values bound outside a module global, the per-trip item of a comprehension,
-and those mixed-arm results, all #1499's.
+An object-typed conditional expression or value boolean operator with at
+least one owned arm -- a produced object, or a native value the operator
+boxes into a new reference -- is a producer (`object_release::is_produced`):
+since Part 3 of #1499 ([#1503](https://github.com/rotnov/pycc/issues/1503))
+its borrowed arm (a name, a compiled-instance attribute read, a compiled
+call's result, a boxed `None`) is retained in its own arm
+(`object_slot::retain_if_borrowed`), so the result is owned whichever arm was
+selected and its consumer releases it exactly once. One whose arms are all
+borrowed stays a borrow with no reference-count traffic, exactly as `y = x`,
+so it adds nothing at a consumer that does not release yet (a function
+local, an argument to or the return of a compiled function). A mixed node at
+such a consumer leaks whichever arm it selected, the retained borrowed arm as
+well as the produced one, as any producer leaks there until #1502. Both rules
+share one predicate, `object_release::selects_an_owned_arm`.
+`tests/issue_1503_object_select_release.rs` pins a zero delta against
+CPython for produced/borrowed and boxed/borrowed mixes passed to a foreign
+call and rebound to a module global, and for all-borrowed selections bound
+to a function local or passed through a compiled function, at two trip
+counts.
+`hash` has no object operand to release: `hash(o)` is refused with `C0001`.
+What stays leaked is values bound outside a module global, #1499's later
+parts.
 `tests/issue_1498_iteration_temp_release.rs` pins a zero `sys.getrefcount`
 delta for loops (nested, with a raising iterator, with a raising body, in a
 module-level `try` and uncaught out of the module body), comprehensions and
@@ -2501,15 +2516,25 @@ unhashable item each surface CPython's own exception. Under the
 [#1092](https://github.com/rotnov/pycc/issues/1092) rule Part 1 releases a
 produced *source* right after `iter()`, and Part 3 releases the iterator and
 an unbound result (above); a result bound to a module global is owned by it
-(Part 1 of #1499), while each loop item and a result bound anywhere else are new
-references still leaked (#1499), and the loop variable reads the item
-borrowed. `tests/issue_1255_object_comprehension.rs` pins it against a mortal
-item at two trip counts `n`, with each result bound inside a function: a list comprehension of
-`n` items raises the item's count by `2n` (the leaked loop item plus the
-leaked list's own reference), a set comprehension of `n` identical items by
-`n + 1`, and the iterated list's count by `0`, since its only new referrer is
-the list iterator, which is released. When a later part of #1499 releases the
-items and the function-local result, the deltas become CPython's.
+(Part 1 of #1499), while a result bound anywhere else is a new reference
+still leaked (#1499). Since Part 3 of #1499
+([#1503](https://github.com/rotnov/pycc/issues/1503)) each loop item is held
+for its own trip: the loop variable reads it borrowed, every failure edge
+inside the trip releases it, and the trip's end (`objcomp_trip_end`, which a
+rejected filter also reaches) releases it before the next `next()`, so no
+item is held while `next()` runs. Nothing in a trip can keep the item
+borrowed past it: a packer or a foreign operation takes its own reference, a
+store into an instance attribute retains, and the comprehension's scope ends
+with the trip's loop variable (a walrus inside a comprehension, which could
+bind it to a longer-lived name, is refused). `tests/issue_1255_object_comprehension.rs`
+pins it against a mortal item at two trip counts `n`, with each result bound
+inside a function, and compares with CPython's own run: a list comprehension
+of `n` items raises the item's count by `n` (the references the list holds),
+a set comprehension of `n` identical items by `1`, and the iterated list's
+count by `0`, since its only new referrer is the list iterator, which is
+released. These are CPython's deltas, since the probe reads while the
+function-local results are still alive; that they then outlive the function
+is #1502's leak, not this probe's.
 
 **A list display bound to an object slot is one more producer.** Part 2d of
 [#1371](https://github.com/rotnov/pycc/issues/1371) builds `x: object = [a,

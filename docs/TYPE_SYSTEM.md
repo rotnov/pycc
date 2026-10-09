@@ -1340,8 +1340,11 @@ passes through borrowed with no reference-count traffic. Since Part 3 of
 context, or, for a value, when the right operand is selected instead; and
 when every arm is owned (a produced object, or a native operand the join
 boxes) the result is itself a producer, released by its consumer when
-unbound. A result with a borrowed arm is neither, so its produced or boxed
-arm is still leaked when selected (#1499).
+unbound. Since Part 3 of #1499 ([#1503](https://github.com/rotnov/pycc/issues/1503))
+a borrowed object operand beside an owned arm is retained when selected, so
+every arm is owned and the result is a producer, released exactly once
+whichever arm was selected; with every arm borrowed the result is a borrow
+with no reference-count traffic.
 
 End-to-end tests are in `tests/issue_1211_bool_ops.rs`, and the byte-exact
 oracle fixture is `tests/fixtures/bool_ops.py`. The CPython-object operand's
@@ -1403,10 +1406,12 @@ produced only for the condition's truth is released at once. A CPython-object
 result follows #1092's rule: the selected value aliases
 its source with no refcount traffic, exactly as `y = x` does. Since Part 3
 of #1092 a produced test is released after its truth test, and a result
-whose arms are both produced objects is a producer (unlike a value
-`and`/`or`, a conditional expression never boxes a native arm), released by its consumer when unbound; with a
-borrowed arm it is neither, and the other arm still leaks when selected
-(#1499).
+with a produced arm is a producer (unlike a value `and`/`or`, a conditional
+expression never boxes a native arm), released by its consumer when unbound:
+since Part 3 of #1499 ([#1503](https://github.com/rotnov/pycc/issues/1503))
+its other, borrowed, arm is retained in its own arm, so the result is owned
+whichever arm was selected. With both arms borrowed it is a borrow with no
+reference-count traffic.
 
 End-to-end tests are in `tests/issue_1395_if_exp.rs`, and the byte-exact
 oracle fixture is `tests/fixtures/if_exp.py`.

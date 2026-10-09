@@ -9,6 +9,22 @@
 use super::*;
 use pycc_mir::{BoolOpKind, MirFStringPart};
 
+/// A call to the shim's `pycc_ext_obj_retain` (Part 1 of #1499).
+const RETAIN: &str = "call void @pycc_ext_obj_retain(";
+
+fn retains(text: &str) -> usize {
+    text.matches(RETAIN).count()
+}
+
+/// The header line (`label: ; preds = ...`) of every block that retains,
+/// so a test can tell which arm's branch the retain sits on.
+fn retaining_headers(ir: &str) -> Vec<&str> {
+    ir.split("\n\n")
+        .filter(|block| block.contains(RETAIN))
+        .map(|block| block.lines().next().unwrap_or_default())
+        .collect()
+}
+
 fn print(args: Vec<MirExpr>) -> MirStmt {
     MirStmt::ExprStmt(MirExpr::Call {
         callee: "print".to_string(),
@@ -120,21 +136,39 @@ fn a_conditional_expression_releases_its_produced_test() {
     assert_eq!(releases(&borrowed), 0, "{borrowed}");
 }
 
-/// A conditional expression whose arms are both produced objects is itself
-/// produced, so its discarded result is released; with one borrowed arm it
-/// is not, and nothing else is incremented to make it so (#1499).
+/// An `object`-typed conditional expression with an owned arm is produced
+/// (Part 3 of #1499): its borrowed arm is retained on its own branch, a
+/// produced one is not, and the discarded result is released once either
+/// way. With both arms borrowed it stays a borrow: no retain, no release.
 #[test]
-fn a_conditional_object_result_is_produced_only_when_every_arm_is() {
+fn a_conditional_object_result_retains_a_borrowed_arm() {
     let ir = discard_ir(
         "release_if_exp_result",
         if_exp(copy_name(), attr("a"), attr("b"), Ty::Object),
     );
-    assert_eq!(releases(&ir), 1, "{ir}");
+    assert_eq!((retains(&ir), releases(&ir)), (0, 1), "{ir}");
     let mixed = discard_ir(
         "release_if_exp_mixed",
         if_exp(copy_name(), attr("a"), copy_name(), Ty::Object),
     );
-    assert_eq!(releases(&mixed), 0, "{mixed}");
+    assert_eq!((retains(&mixed), releases(&mixed)), (1, 1), "{mixed}");
+    // The borrowed arm's `copy` read is a guarded global load, so its
+    // retain sits in the block the `orelse` branch falls into.
+    let headers = retaining_headers(&mixed);
+    assert_eq!(headers.len(), 1, "{mixed}");
+    assert!(
+        headers[0].ends_with("preds = %ifexp_orelse"),
+        "the borrowed arm retains on its own branch\n{mixed}"
+    );
+    let borrowed = discard_ir(
+        "release_if_exp_borrowed",
+        if_exp(copy_name(), copy_name(), copy_name(), Ty::Object),
+    );
+    assert_eq!(
+        (retains(&borrowed), releases(&borrowed)),
+        (0, 0),
+        "{borrowed}"
+    );
 }
 
 /// `if copy.a and copy.b:` tests each operand's truth and releases each
@@ -158,28 +192,72 @@ fn a_truth_only_boolean_operator_releases_each_produced_operand() {
 /// `copy.a or copy.b` (an object result): the left operand is held across
 /// its truth test, released when the right is evaluated instead, and
 /// otherwise becomes the result, which the discarding statement releases.
+/// Since Part 3 of #1499 a borrowed arm beside an owned one is retained
+/// where it is selected, so the result is released whichever arm produced
+/// it; with every arm borrowed the node is a borrow with no traffic.
 #[test]
 fn a_value_boolean_operator_releases_an_unselected_left_operand() {
     let ir = discard_ir(
         "release_boolop_value",
         bool_op(BoolOpKind::Or, attr("a"), attr("b"), Ty::Object, false),
     );
-    assert_eq!(releases(&ir), 3, "{ir}");
+    assert_eq!((retains(&ir), releases(&ir)), (0, 3), "{ir}");
     let mixed = discard_ir(
         "release_boolop_value_mixed",
         bool_op(BoolOpKind::Or, attr("a"), copy_name(), Ty::Object, false),
     );
-    assert_eq!(releases(&mixed), 2, "{mixed}");
+    assert_eq!((retains(&mixed), releases(&mixed)), (1, 3), "{mixed}");
+    let headers = retaining_headers(&mixed);
+    assert_eq!(headers.len(), 1, "{mixed}");
+    assert!(
+        headers[0].ends_with("preds = %boolop_eval_right"),
+        "{mixed}"
+    );
+    let left_borrowed = discard_ir(
+        "release_boolop_value_left_borrowed",
+        bool_op(BoolOpKind::And, copy_name(), attr("b"), Ty::Object, false),
+    );
+    assert_eq!(
+        (retains(&left_borrowed), releases(&left_borrowed)),
+        (1, 1),
+        "{left_borrowed}"
+    );
+    let take_left = blocks(&left_borrowed, "boolop_take_left");
+    assert_eq!(take_left.len(), 1, "{left_borrowed}");
+    assert_eq!(retains(take_left[0]), 1, "{left_borrowed}");
     let borrowed = discard_ir(
         "release_boolop_value_borrowed",
         bool_op(BoolOpKind::Or, copy_name(), copy_name(), Ty::Object, false),
     );
-    assert_eq!(releases(&borrowed), 0, "{borrowed}");
+    assert_eq!(
+        (retains(&borrowed), releases(&borrowed)),
+        (0, 0),
+        "{borrowed}"
+    );
+    // A boxed native arm is a new reference already: only the borrowed
+    // `copy` beside it is retained.
+    let boxed_native = discard_ir(
+        "release_boolop_value_boxed",
+        bool_op(
+            BoolOpKind::Or,
+            copy_name(),
+            MirExpr::IntLiteral(1),
+            Ty::Object,
+            false,
+        ),
+    );
+    assert_eq!(
+        (retains(&boxed_native), releases(&boxed_native)),
+        (1, 1),
+        "{boxed_native}"
+    );
 }
 
 /// The classifier's Part 3 arms: a comprehension over an object, and an
-/// object-typed `BoolOp`/`IfExp` whose every arm is owned -- a produced
-/// object or a converted scalar.
+/// object-typed value `BoolOp`/`IfExp` with at least one owned arm -- a
+/// produced object or a converted scalar -- whose borrowed arm (Part 3 of
+/// #1499) is then retained. An all-borrowed node and a truth-only `BoolOp`
+/// are never produced.
 #[test]
 fn the_part_3_producers_are_classified() {
     let comprehension = |source| {
@@ -197,7 +275,17 @@ fn the_part_3_producers_are_classified() {
     let value = |left, right| bool_op(BoolOpKind::Or, left, right, Ty::Object, false);
     assert!(is_produced(&value(attr("a"), attr("b"))));
     assert!(is_produced(&value(attr("a"), MirExpr::IntLiteral(1))));
-    assert!(!is_produced(&value(attr("a"), copy_name())));
+    assert!(is_produced(&value(attr("a"), copy_name())));
+    assert!(!is_produced(&value(copy_name(), copy_name())));
+    let boxed = |inner| MirExpr::ObjectBox(Box::new(inner));
+    // A boxed object arm, `None` or not, is never inserted inside an
+    // operator today; it is not produced, so it is not an owned arm.
+    assert!(!is_produced(&value(
+        copy_name(),
+        boxed(MirExpr::IntLiteral(7))
+    )));
+    // An arm of any other type is never treated as owned.
+    assert!(!is_produced(&value(copy_name(), MirExpr::NoneLiteral)));
     assert!(!is_produced(&bool_op(
         BoolOpKind::Or,
         attr("a"),
@@ -207,5 +295,16 @@ fn the_part_3_producers_are_classified() {
     )));
     let choose = |body, orelse| if_exp(copy_name(), body, orelse, Ty::Object);
     assert!(is_produced(&choose(attr("a"), attr("b"))));
-    assert!(!is_produced(&choose(copy_name(), attr("b"))));
+    assert!(is_produced(&choose(copy_name(), attr("b"))));
+    assert!(!is_produced(&choose(copy_name(), copy_name())));
+    assert!(!is_produced(&choose(
+        boxed(MirExpr::IntLiteral(7)),
+        copy_name()
+    )));
+    assert!(!is_produced(&if_exp(
+        copy_name(),
+        MirExpr::IntLiteral(1),
+        MirExpr::IntLiteral(2),
+        Ty::Int
+    )));
 }

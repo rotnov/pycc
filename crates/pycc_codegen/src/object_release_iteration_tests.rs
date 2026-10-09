@@ -8,6 +8,10 @@ use super::*;
 /// The iterator `iter()` returns, as the IR names it (Part 3 of #1092).
 const ITERATOR: &str = "foreign_iter_get";
 
+/// A comprehension's per-trip item, `next()`'s new reference, as the IR
+/// names it (Part 3 of #1499).
+const ITEM: &str = "foreign_iter_item";
+
 /// A comprehension's result collection, as the IR names it.
 const RESULT: &str = "objcomp_result";
 
@@ -23,7 +27,10 @@ fn releases_of(text: &str, name: &str) -> usize {
 /// every failure edge after `iter()` releases the iterator, every one
 /// after the result exists releases the result too, the normal exit
 /// releases the iterator, and the discarded result is released by its
-/// statement. Each per-trip item stays unreleased (#1499).
+/// statement. Since Part 3 of #1499 each per-trip item is held for its
+/// trip: every failure edge after `next()` releases it, and the one
+/// `objcomp_trip_end` block both continuing paths share releases it once
+/// before the next `next()`.
 #[test]
 fn a_comprehension_releases_its_produced_filter_and_element() {
     let var = || MirExpr::Name {
@@ -69,8 +76,26 @@ fn a_comprehension_releases_its_produced_filter_and_element() {
         assert_eq!(releases_of(fail, ITERATOR), 1, "{fail}\n{ir}");
         assert_eq!(releases_of(fail, RESULT), 1, "{fail}\n{ir}");
     }
-    // The truth test's failure releases the filter as well.
-    assert_eq!(releases(blocks(&ir, "foreign_truthy_fail")[0]), 3, "{ir}");
+    // `next()` itself runs with no item held: the previous trip released
+    // its own. Every edge inside the trip releases the item.
+    let next_fail = blocks(&ir, "foreign_iter_next_fail")[0];
+    assert_eq!(releases_of(next_fail, ITEM), 0, "{ir}");
+    for fail in later.iter().filter(|fail| **fail != next_fail) {
+        assert_eq!(releases_of(fail, ITEM), 1, "{fail}\n{ir}");
+    }
+    let trip_end = blocks(&ir, "objcomp_trip_end");
+    assert_eq!(trip_end.len(), 1, "{ir}");
+    assert_eq!(releases(trip_end[0]), 1, "{ir}");
+    assert_eq!(releases_of(trip_end[0], ITEM), 1, "{ir}");
+    // The filter's truth test and its failure-free `false` edge both reach
+    // the trip's end rather than the header.
+    assert_eq!(
+        ir.matches("label %objcomp_trip_end").count(),
+        2,
+        "the false filter and the collected element both continue through the trip's end\n{ir}"
+    );
+    // The truth test's failure releases the filter and the item as well.
+    assert_eq!(releases(blocks(&ir, "foreign_truthy_fail")[0]), 4, "{ir}");
     let packed = ir
         .find("@pycc_ext_obj_pack_object(")
         .expect("the element is packed");
@@ -86,6 +111,8 @@ fn a_comprehension_releases_its_produced_filter_and_element() {
     // it once more on the normal path: nothing else is released.
     assert_eq!(releases_of(&ir, ITERATOR), 9, "{ir}");
     assert_eq!(releases_of(&ir, RESULT), 8, "{ir}");
+    // Six edges inside the trip plus its end.
+    assert_eq!(releases_of(&ir, ITEM), 7, "{ir}");
 }
 
 /// A comprehension's result bound to a name is the binding's, not a
@@ -271,7 +298,7 @@ fn a_comprehension_failure_releases_an_outer_held_operand() {
     for (label, held) in [
         ("objcomp_result_fail", 2),
         ("foreign_iter_next_fail", 3),
-        ("objcomp_collect_fail", 3),
+        ("objcomp_collect_fail", 4),
     ] {
         let found = blocks(&ir, label);
         assert_eq!(found.len(), 1, "{label}\n{ir}");

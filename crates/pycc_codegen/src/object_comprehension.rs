@@ -29,10 +29,26 @@
 //! releases both; the normal exit releases the iterator and hands the
 //! result on as the node's value, which `object_release::is_produced`
 //! lists as a producer, so an unbound result is released by its consumer.
-//! Each item is a new reference this boundary still leaks (#1499,
-//! `docs/RUNTIME.md`): the loop variable's slot holds it without refcount
-//! traffic, exactly as `MirStmt::ForObject`'s target, and the element or
-//! condition can hand it to a user function that stores it.
+//! Each item is `pycc_ext_obj_iter_next`'s new reference, owned by its own
+//! trip (Part 3 of #1499): it is held on `pending_object_releases` from the
+//! moment it is stored into the loop variable's scoped slot, so a failure
+//! in the condition, the element, packing or the insertion releases it, and
+//! both ways a trip continues -- a false condition and a collected element
+//! -- branch through one `objcomp_trip_end` block that releases it before
+//! the next `next()`. No item is held when `next()` itself runs, so its
+//! failure edge and the loop's exit release none. The slot keeps the
+//! released pointer only until the next trip's store overwrites it: the
+//! variable is visible in the comprehension alone (`comprehension.rs`), and
+//! nothing reads it outside a trip. Releasing at the trip's end is sound
+//! because nothing the trip runs can keep the item borrowed past it: the
+//! packer and every foreign operation take references of their own, a
+//! compiled-instance `object` attribute store retains a borrowed value
+//! (Part 1 of #1499), a compiled function cannot rebind a module global
+//! (`global` is refused with `C0001`), a walrus inside a comprehension --
+//! which would bind the item to a name outliving the trip -- is refused by
+//! `pycc_hir`, and a user function's frame -- the only other place a
+//! borrowed copy can live -- has returned before the trip ends. Admitting
+//! either refused form must revisit this release.
 //! A pycc `int` temporary built by the condition or the element is released
 //! once it has been tested or packed, since the packers borrow their operand,
 //! and so is a produced CPython object condition or element (`if x.ok()`,
@@ -123,6 +139,10 @@ pub(super) fn emit_object_comprehension<'ctx>(
     builder
         .build_store(var_ptr, lp.item)
         .expect("build_store should not fail for the loop variable's own slot");
+    // Part 3 of #1499: the item belongs to this trip, released on every
+    // failure edge below and once at `objcomp_trip_end`.
+    let held_item = crate::object_release::hold_new_reference(context, module, rt, lp.item);
+    let trip_end = context.append_basic_block(edge.function(), "objcomp_trip_end");
 
     if let Some(cond) = cond {
         let scalar = emit(cond);
@@ -133,7 +153,7 @@ pub(super) fn emit_object_comprehension<'ctx>(
         let function = edge.function();
         let keep_bb = context.append_basic_block(function, "objcomp_keep");
         builder
-            .build_conditional_branch(test, keep_bb, lp.header_bb)
+            .build_conditional_branch(test, keep_bb, trip_end)
             .expect("build_conditional_branch should not fail for an i1 condition");
         builder.position_at_end(keep_bb);
     }
@@ -177,8 +197,13 @@ pub(super) fn emit_object_comprehension<'ctx>(
         "objcomp_collect",
     );
     builder
-        .build_unconditional_branch(lp.header_bb)
+        .build_unconditional_branch(trip_end)
         .expect("build_unconditional_branch should not fail closing the loop body");
+    builder.position_at_end(trip_end);
+    held_item.release(builder, rt);
+    builder
+        .build_unconditional_branch(lp.header_bb)
+        .expect("build_unconditional_branch should not fail closing the trip");
 
     builder.position_at_end(lp.after_bb);
     held_iterator.release(builder, rt);

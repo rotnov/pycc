@@ -37,18 +37,22 @@
 //! is never packed: `n and o` over a truthy `n` evaluates to `o` and never
 //! boxes `n`, exactly as CPython never converts it. The packer's `NULL` (a
 //! bigint outside D-141's inline range raises `OverflowError`, #1040) takes
-//! the foreign failure edge immediately. An `object` operand passes through
-//! as the same pointer, with no reference-count traffic of its own.
+//! the foreign failure edge immediately. A selected `object` operand that
+//! is borrowed (a name, a boxed `None`, a compiled call's result) is
+//! retained on its arm when the other arm is owned ([`owned_value`], Part 3
+//! of #1499), and otherwise passes through borrowed; a produced one always
+//! passes through as the same pointer.
 //!
 //! Object temporaries (Part 3 of #1092, `object_release.rs`): every
 //! operand of a truth-only node, and the left operand of a value node, is
 //! held across its truth test when it is a produced object. A truth-only
 //! operand is released right after its test; a discarded left operand is
-//! released in `eval_right` beside its `int` release. The node's own value
-//! is a producer (`object_release::is_produced`) only when every arm it
-//! can select is owned -- a produced object or a boxed native value -- and
-//! its consumer then releases it. When the arms mix a produced and a
-//! borrowed object, the selected produced arm is still leaked (#1499).
+//! released in `eval_right` beside its `int` release. An `object`-typed
+//! node with at least one owned arm -- a produced object or a boxed native
+//! value (`object_release::selects_an_owned_arm`) -- retains its borrowed
+//! arm (Part 3 of #1499), so every arm it can select is owned, it is a
+//! producer (`object_release::is_produced`), and its consumer releases it.
+//! A node whose arms are all borrowed stays a borrow with no traffic.
 //!
 //! The discarded left operand is released in `eval_right` *before* `right`
 //! is emitted, so the node never holds an arm-local word while `right` can
@@ -246,6 +250,7 @@ fn emit_value<'ctx>(
     // Part 3 of #1092: a produced `object` left operand is held across its
     // truth test, then owned by whichever arm runs: `take_left` selects it
     // as the node's value, and `eval_right` releases it.
+    let owns = *ty == Ty::Object && crate::object_release::selects_an_owned_arm(left, right);
     let held_left = emitter.hold(left, &left_scalar);
     let left_truth = emitter.truth(left_scalar);
     held_left.consumed(emitter.rt);
@@ -255,7 +260,7 @@ fn emit_value<'ctx>(
     emitter.branch_on_left(op, left_truth, take_left, eval_right);
 
     emitter.builder.position_at_end(take_left);
-    let left_value = arm_value(emitter, op, left, left_scalar, ty);
+    let left_value = arm_value(emitter, op, left, left_scalar, ty, owns);
     let left_end = emitter.current_block();
     emitter.branch_to(join);
 
@@ -278,7 +283,7 @@ fn emit_value<'ctx>(
     let right_value = if needs_boxing(right, ty) {
         boxed_value(emitter, right, right_scalar)
     } else {
-        owned_value(emitter, right, right_scalar, ty)
+        owned_value(emitter, right, right_scalar, ty, owns)
     };
     let right_end = emitter.current_block();
     emitter.branch_to(join);
@@ -305,6 +310,7 @@ fn arm_value<'ctx>(
     left: &MirExpr,
     scalar: Scalar<'ctx>,
     ty: &Ty,
+    owns: bool,
 ) -> Scalar<'ctx> {
     match (op, left.ty(), scalar) {
         (BoolOpKind::Or, Ty::Optional(inner), Scalar::Optional(value))
@@ -327,7 +333,7 @@ fn arm_value<'ctx>(
             coerce_scalar_to_type(emitter.context, emitter.builder, payload, ty.clone())
         }
         _ if needs_boxing(left, ty) => boxed_value(emitter, left, scalar),
-        _ => owned_value(emitter, left, scalar, ty),
+        _ => owned_value(emitter, left, scalar, ty, owns),
     }
 }
 
@@ -347,8 +353,8 @@ fn needs_boxing(operand: &MirExpr, ty: &Ty) -> bool {
 /// from the packer -- `OverflowError` for a bigint outside D-141's inline
 /// range (#1040) -- takes the foreign failure edge at once, since no
 /// consuming shim helper follows to tolerate it. The new reference is the
-/// node's value: released by the node's consumer when every arm is owned
-/// (Part 3 of #1092, `object_release::is_produced`), owned by a module
+/// node's value: released by the node's consumer when unbound (Part 3 of
+/// #1092 and of #1499, `object_release::is_produced`), owned by a module
 /// global that binds it (Part 1 of #1499), and leaked otherwise.
 fn boxed_value<'ctx>(
     emitter: &Emitter<'_, 'ctx>,
@@ -384,12 +390,32 @@ fn boxed_value<'ctx>(
 /// `scalar` (the value of `source`) retained or incref'd when `source` is a
 /// borrowed read, then converted to `ty`. The retain is decided before the
 /// conversion, on `source`'s own shape.
+///
+/// When `owns` -- the node is `object`-typed and
+/// `object_release::selects_an_owned_arm` holds for its arms (Part 3 of
+/// #1499) -- a CPython-object arm is retained through the shim's
+/// `pycc_ext_obj_retain` unless `object_slot::is_owned` says it is already
+/// a new reference, so every arm the node selects is owned and the node is
+/// a producer (`object_release::is_produced`). Otherwise an object arm
+/// passes through borrowed. The retain is the arm's last operation, so no
+/// failure edge can orphan it before the join.
 pub(super) fn owned_value<'ctx>(
     emitter: &Emitter<'_, 'ctx>,
     source: &MirExpr,
     scalar: Scalar<'ctx>,
     ty: &Ty,
+    owns: bool,
 ) -> Scalar<'ctx> {
+    let scalar = match scalar {
+        Scalar::Object(pointer) if owns => Scalar::Object(crate::object_slot::retain_if_borrowed(
+            emitter.context,
+            emitter.builder,
+            emitter.module,
+            source,
+            pointer,
+        )),
+        other => other,
+    };
     let scalar =
         retain_if_int_duplicate(emitter.context, emitter.builder, emitter.rt, source, scalar);
     let scalar = incref_if_str_duplicate(emitter.builder, emitter.rt, source, scalar);
