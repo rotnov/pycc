@@ -190,3 +190,26 @@ fn a_native_attribute_emits_no_object_traffic() {
         assert!(!ir.contains("object_attr_old"), "{ir}");
     }
 }
+
+/// A fully native module -- a generic class's `T`-typed field -- links no
+/// retain or release shim: an `object` store is a plain slot write, and a
+/// bound or discarded read is a plain borrow.
+#[test]
+fn a_native_object_attribute_links_no_shim() {
+    let ir = function_ir(
+        "object_attr_native_object",
+        vec![
+            set(0, name("v", Ty::Object)),
+            MirStmt::Assign {
+                target: "x".to_string(),
+                value: get(0, Ty::Object),
+            },
+            MirStmt::ExprStmt(get(0, Ty::Object)),
+        ],
+        false,
+    );
+    assert!(!ir.contains("@pycc_ext_obj_retain"), "{ir}");
+    assert!(!ir.contains("@pycc_ext_obj_release"), "{ir}");
+    assert!(!ir.contains("object_attr_old"), "{ir}");
+    assert!(ir.contains("@pycc_rt_instance_set_slot("), "{ir}");
+}

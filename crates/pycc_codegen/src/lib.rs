@@ -3784,7 +3784,7 @@ fn emit_expr_unchecked<'ctx>(
             // reference, because a nested rebind now releases the old word
             // (`object_attr.rs`).
             let scalar = slot_word_to_scalar(context, builder, raw, ty);
-            object_attr::retain_read(context, builder, module, scalar)
+            object_attr::retain_read(context, builder, module, rt, scalar)
         }
         // Part 2 of #1026: the string-keyed runtime sibling of the
         // compile-time-slot `AttrGet` directly above. `foreign_attr::emit`

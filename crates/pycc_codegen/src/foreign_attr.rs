@@ -18,11 +18,10 @@
 //! #1499 a module global owns a result bound to it and releases it on
 //! rebind (`object_slot.rs`); since Part 2 (#1502) so does a function-frame
 //! slot, a user function's parameter (the result moves into it) and a
-//! compiled caller of a function returning it (`object_frame.rs`). A result
-//! stored into an instance slot or boxed into a container is still leaked:
-//! this boundary's leak-only rule, which later parts of #1499 narrow
-//! further. Such a leak inside a loop is trip-count-linear rather than once
-//! per process.
+//! compiled caller of a function returning it (`object_frame.rs`); since
+//! Part 4 (#1504) a compiled instance attribute releases the result it
+//! replaces (`object_attr.rs`). What remains is the D-107 instance lifetime:
+//! a dropped compiled instance keeps each attribute's last value.
 
 use super::*;
 use crate::foreign_fail::{ForeignFailEdge, route_null};

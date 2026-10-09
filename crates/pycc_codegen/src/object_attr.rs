@@ -31,10 +31,16 @@
 //!   `object` word the same way: `pycc_rt` keeps no CPython dependency
 //!   (D-244 rule 2).
 //!
-//! Both helpers are unconditional on the `object` type, like Part 1's
-//! store-side retain: an `object` value exists only in a module compiled
-//! for the CPython host -- an `--ext` module or an embedded executable --
-//! and both link the shim. A native build has no `object` value at all.
+//! **Native builds.** Both helpers act only in a module compiled for the
+//! CPython host -- an `--ext` module or an embedded executable, both of
+//! which link the shim (`object_frame::enabled`). A fully native executable
+//! still has `object`-typed attributes -- a generic class's `T`-typed field
+//! -- but links no retain or release shim and owns no `object` reference,
+//! so there the store is a plain slot write and the read a plain borrow,
+//! and `object_frame::is_unowned_discard` keeps a discarded read
+//! unreleased. (Part 1's store-side retain was unconditional and so broke
+//! the native link of `self.v = v` in a generic class; gating it here fixes
+//! that too.)
 //!
 //! A `PyInstanceObj` is never freed (D-107, D-154), so an unreachable
 //! instance keeps its slots' references: that is the instance-lifetime
@@ -51,8 +57,12 @@ pub(super) fn retain_read<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     scalar: Scalar<'ctx>,
 ) -> Scalar<'ctx> {
+    if !crate::object_frame::enabled(rt) {
+        return scalar;
+    }
     if let Scalar::Object(pointer) = scalar {
         crate::object_slot::retain(context, builder, module, pointer);
     }
@@ -73,6 +83,19 @@ pub(super) fn store<'ctx>(
     value: &MirExpr,
     pointer: PointerValue<'ctx>,
 ) {
+    if !crate::object_frame::enabled(rt) {
+        let word = builder
+            .build_ptr_to_int(pointer, context.i64_type(), "object_attr_word")
+            .expect("build_ptr_to_int should not fail reinterpreting a pointer as i64");
+        builder
+            .build_call(
+                rt.instance_set_slot,
+                &[base_ptr.into(), slot_index.into(), word.into()],
+                "instance_set_slot",
+            )
+            .expect("build_call should not fail for a well-formed attribute write");
+        return;
+    }
     let new = crate::object_slot::retain_if_borrowed(context, builder, module, value, pointer);
     let old = builder
         .build_call(

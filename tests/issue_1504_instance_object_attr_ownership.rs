@@ -87,6 +87,9 @@ class Thing:
     def __iter__(self):
         return iter((1, 2))
 
+    def __getitem__(self, i):
+        return i
+
 
 def fresh():
     return Thing()
@@ -211,6 +214,8 @@ def read_len(b: Box) -> int:
 def read_comp(b: Box) -> list[object]:
     return [x for x in b.a]
 
+def read_item(b: Box) -> None:
+    x = b.a[0]
 
 def both_if(b: Box, c: bool) -> None:
     x = b.a if c else b.b
@@ -289,6 +294,7 @@ run('read_format', m.read_format, b)
 run('read_discard', m.read_discard, b)
 run('read_len', m.read_len, b)
 run('read_comp', m.read_comp, b)
+run('read_item', m.read_item, b)
 run('both_if', m.both_if, b, True)
 run('mixed_if', m.mixed_if, b, True, s.T)
 run('mixed_if_else', m.mixed_if, b, False, s.T)
@@ -346,6 +352,7 @@ read_format 0 0
 read_discard 0 0
 read_len 0 0
 read_comp 0 0
+read_item 0 0
 both_if 0 0
 mixed_if 0 0
 mixed_if_else 0 0
@@ -545,3 +552,61 @@ fn an_embedded_executable_instance_attribute_owns_its_reference() {
     assert_eq!(run.status.code(), Some(0), "{}", stderr_of(&run));
     assert_eq!(stdout_of(&run), stdout_of(&oracle));
 }
+
+/// A native build has `object`-typed attributes too -- a generic class's
+/// `T`-typed field -- but links no CPython shim, so the store and the read
+/// emit no reference traffic there and the program links and runs. (Part 1
+/// of #1499's unconditional store-side retain broke this link.)
+#[cfg(not(windows))]
+#[test]
+fn a_native_generic_attribute_links_without_the_shim() {
+    let dir = ScratchDir::new("t1504_native").expect("scratch");
+    let src = dir.join("n.py");
+    std::fs::write(&src, NATIVE_GENERIC).expect("write the program");
+    let build = pycc()
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(dir.join("app"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    assert!(!dir.join("app.pycc").exists(), "a native build");
+    let run = Command::new(dir.join("app"))
+        .output()
+        .expect("the native binary runs");
+    assert_eq!(run.status.code(), Some(0), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "ok\n");
+}
+
+/// A generic class whose `T` field is stored from a parameter, rebound,
+/// bound to a local, discarded and returned, with no boxing of a native
+/// value (which needs the shim's packers).
+#[cfg(not(windows))]
+const NATIVE_GENERIC: &str = "\
+from typing import Generic, TypeVar
+
+T = TypeVar(\"T\")
+
+
+class Box(Generic[T]):
+    def __init__(self, v: T) -> None:
+        self.v = v
+
+    def get(self) -> T:
+        y = self.v
+        self.v
+        return self.v
+
+    def put(self, v: T) -> None:
+        self.v = v
+
+
+def wrap(v: T) -> Box[T]:
+    b = Box(v)
+    b.put(b.get())
+    return b
+
+
+print(\"ok\")
+";

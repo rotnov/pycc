@@ -219,8 +219,9 @@ pub(super) fn selects_an_owned_arm(a: &MirExpr, b: &MirExpr) -> bool {
 /// [`selects_an_owned_arm`], in a module compiled for the CPython host
 /// (`object_frame::enabled`). A fully native executable links no retain or
 /// release shim and owns no `object` reference -- its only `object` values
-/// are a generic function's borrowed parameters and their call results
-/// (`object_frame::is_unowned_discard`) -- so there the node never retains.
+/// are a generic function's borrowed parameters and their call results and
+/// a generic class's `T`-typed attributes (`object_frame::is_unowned_discard`,
+/// `object_attr.rs`) -- so there the node never retains.
 pub(super) fn retains_borrowed_arm(
     rt: &RtFns<'_>,
     ty: &pycc_mir::Ty,

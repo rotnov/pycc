@@ -2048,8 +2048,9 @@ call, rebound to a module global, and bound to a function local, passed to
 and returned from a compiled function, and for all-borrowed selections at
 the same consumers, at two trip counts.
 `hash` has no object operand to release: `hash(o)` is refused with `C0001`.
-What stays leaked is values bound outside a module global, #1499's later
-parts.
+Since Parts 2 and 4 of #1499 a value bound to a frame slot or an instance
+attribute is owned there too; what remains is the D-107 instance lifetime and
+the narrow accepted leaks D-244's #1502 amendment enumerates.
 `tests/issue_1498_iteration_temp_release.rs` pins a zero `sys.getrefcount`
 delta for loops (nested, with a raising iterator, with a raising body, in a
 module-level `try` and uncaught out of the module body), comprehensions and
@@ -2203,7 +2204,8 @@ program as an embedded executable and compares it with CPython 3.14.7.
 Since Part 1 of [#1367](https://github.com/rotnov/pycc/issues/1367) an object
 may also live in an instance slot, established from an `__init__` parameter
 annotated with a class a foreign import binds: the slot word is the same
-pointer (D-154), read with no reference-count change. Since Part 1 of #1499 a
+pointer (D-154); since Part 4 of #1499 a read returns a new reference
+(below). Since Part 1 of #1499 a
 store of a borrowed object into an instance slot first retains it
 (`pycc_ext_obj_retain`), because the module global or frame slot it was read
 from may release it on rebind or scope exit.
@@ -2238,14 +2240,19 @@ of #1499 ([#1503](https://github.com/rotnov/pycc/issues/1503)) retains the
 borrowed one and the whole result is a producer. An embedded executable compiles for the CPython host
 and links the same shim, so its attributes own their references too; there a
 bare `object` annotation is `C0001`, and the `object`-typed attribute is one
-annotated with a class a foreign import binds (Part 1 of #1367). A native
-executable has no `object` value at all.
+annotated with a class a foreign import binds (Part 1 of #1367). A fully
+native executable links no shim and owns no `object` reference
+(`object_frame::enabled`); its only `object` attribute is a generic class's
+`T`-typed field, which it stores and reads as a plain borrowed word. (Part 1
+of #1499's store-side retain was unconditional and broke the native link of
+`self.v = v` in a generic class; Part 4 gates it.)
 `tests/issue_1504_instance_object_attr_ownership.rs` runs every attribute shape
 compiled and as plain Python, fifty times each, and requires the same
 live-object and `sys.getrefcount` deltas, once more under `-X dev` with
 `PYTHONMALLOC=debug` (the mixed-arm shapes included); it pins the
 instance-lifetime residual, and an embedded
-program's `Fraction` attribute against CPython's run of the same source.
+program's `Fraction` attribute against CPython's run of the same source, and
+links and runs a native generic-class program.
 `tests/issue_1333_foreign_in_function.rs` pins it against a mortal stub
 attribute at two trip counts `N`:
 
@@ -2308,9 +2315,9 @@ the leaked set either. An out-of-range selector or a `NULL` operand raises
 **`type(o)` is one more producer.** Part 11 of
 [#1371](https://github.com/rotnov/pycc/issues/1371) adds
 `pycc_ext_obj_type(o)`, which wraps `PyObject_Type`: it borrows the operand
-and returns a new reference to its class, leaked once per evaluation when
-passed on or bound outside a module global, on the same terms as an attribute load (an unbound one is
-released, Part 1 of #1092 above) (`crates/pycc_codegen/src/foreign_type.rs`).
+and returns a new reference to its class, owned on the same terms as an
+attribute load's: an unbound one is released (Part 1 of #1092 above) and a
+bound or passed one is owned by its receiver (#1499) (`crates/pycc_codegen/src/foreign_type.rs`).
 `PyObject_Type` cannot fail for a live object; the helper answers `NULL` only
 for a `NULL` operand, the defence in depth `pycc_ext_obj_getattr` and
 `pycc_ext_obj_len` keep, without setting a second exception, and that `NULL`
@@ -2642,14 +2649,15 @@ hoisted into the entry block, and handed to
 element on every path**: when a packer already failed with `NULL` it builds
 no list and releases the rest; when `PyList_New` fails it releases them all;
 otherwise each reference moves into the list through `PyList_SetItem` (the
-limited API has no `PyList_SET_ITEM`). The list is a new reference, leaked on
-the same terms as every other producer, so each successful display that is
-passed on or bound outside a module global leaks the list and the one reference it holds per element
-(an unbound display is released, Part 1 of #1092 above). An element that raises
+limited API has no `PyList_SET_ITEM`). The list is a new reference and a producer
+like every other: an unbound display is released by its consumer (Part 1 of
+#1092 above), and a bound or passed one is owned by the global, frame slot,
+attribute or callee that receives it (#1499), which releases the list, and the
+one reference it holds per element with it, on rebind or scope exit. An element that raises
 before packing (`[o, 1 // z]`) leaves nothing to release. The hosted test
 `tests/issue_1371_object_list_display.rs` pins `sys.getrefcount` of a mortal
-element across 100 calls: `+2` per call for a `[probe, probe]` bound and dropped,
-unchanged for a packer failure and for a raising element. The display shares
+element across 100 calls: unchanged for a `[probe, probe]` bound to a local
+and dropped, for a packer failure and for a raising element. The display shares
 the packers' divergence: an `int` element outside the inline range raises
 `OverflowError` where CPython would build the list, until
 [#1040](https://github.com/rotnov/pycc/issues/1040) widens the packer.
@@ -2657,10 +2665,11 @@ the packers' divergence: an `int` element outside the inline range raises
 same node is now also produced for a display stored into an object attribute
 slot and for a display operand of `and`/`or` or a conditional-expression
 branch bound to an object slot, so an operand is built only on the arm that
-selects it. `tests/issue_1421_object_slot_list_display.rs` pins the same
-leak through an attribute: across 100 calls `+200` for `self.s = [probe,
-probe]`, `+100` for `self.s = self.s or [probe]` with an empty slot, and
-unchanged when the slot is truthy.
+selects it. `tests/issue_1421_object_slot_list_display.rs` pins the attribute
+shapes against CPython: since Part 4 of #1499 the slot releases the display it
+replaces, so across 100 calls `self.s = [probe, probe]` leaves only the last
+display's two references, `self.s = self.s or [probe]` with an empty slot only
+the last one, and a truthy slot none.
 
 **A native value boxed into an object slot is one more producer.** Part 2 of
 [#1387](https://github.com/rotnov/pycc/issues/1387)
@@ -2728,7 +2737,7 @@ packed anew. A `str` subclass is therefore flattened there: D-258's
 documented deviation, described in TYPE_SYSTEM.md under "What a narrowed
 read is".
 
-**`and`/`or` boxes a selected native operand and, outside a module global, leaks it.** Part 6 of
+**`and`/`or` boxes a selected native operand.** Part 6 of
 [#1371](https://github.com/rotnov/pycc/issues/1371) types `n or o` and
 `o and n` (`n` an `int`, `float`, `bool` or `str`) as `object`
 (`docs/TYPE_SYSTEM.md`, "`and` and `or`"). An object operand passes through
@@ -2857,21 +2866,23 @@ count, and Parts 3 and 4 (#1503, #1504) do the same for a comprehension's
 per-trip item, a mixed-arm result and an instance attribute. What remains is
 the D-107 instance lifetime (a dropped compiled instance keeps each attribute's
 last value) and the narrow accepted leaks D-244's #1502 amendment enumerates.
-Part 2 accepts it because releasing correctly requires a release protocol that
-is not yet built, and because nothing in Part 2 can hand such a value to a host:
+Part 2 accepted it because releasing correctly required a release protocol that
+was not yet built, and because nothing in Part 2 could hand such a value to a host:
 every consuming operation other than a further attribute load, a method call,
 a subscript load, `for` iteration, `len`, a truth test, a module-level binding
 (#1325), a `float`/`bool`/`int`/`str` conversion or printing and f-string
-interpolation (#1340, which hand CPython's text back as a pycc `str`) is refused with `I0404`. Since [#1397](https://github.com/rotnov/pycc/issues/1397) the `ext` export boundary carries an `object`
+interpolation (#1340, which hand CPython's text back as a pycc `str`) was refused with `I0404`. Since [#1397](https://github.com/rotnov/pycc/issues/1397) the `ext` export boundary carries an `object`
 parameter or return (D-258 rule 5); the parameter's reference is borrowed
 from the calling host, which owns it, so compiled code never releases it, as
 CPython's callee does not, and the returned object is handed to the host as a fresh
-reference. A method call's bound or passed-on result leaks on exactly the same
-terms and is trip-count-linear in exactly the same way. **A benchmark run under
+reference. A method call's bound or passed-on result leaked on exactly the same
+terms, and is released on them now. **Until #1499, a benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
-rule 6's 5× kill criterion must not measure a hot loop that passes, returns or
+rule 6's 5× kill criterion could not measure a hot loop that passes, returns or
 boxes the result of a foreign attribute load, method call or subscript load, or
-binds it inside a compiled function**. Since Part 1 of
+binds it inside a compiled function; since Part 4 the one remaining restriction
+of that kind is a hot loop that creates and drops compiled instances holding
+object attributes (the D-107 instance lifetime)**. Since Part 1 of
 [#1499](https://github.com/rotnov/pycc/issues/1499) a module global owns what
 it binds and a module-level foreign `for` loop releases each previous item, and
 since Part 3 of #1499 a comprehension over an object releases each trip's item
