@@ -579,9 +579,11 @@ fn a_native_generic_attribute_links_without_the_shim() {
     assert_eq!(stdout_of(&run), "ok\n");
 }
 
-/// A generic class whose `T` field is stored from a parameter, rebound,
-/// bound to a local, discarded and returned, with no boxing of a native
-/// value (which needs the shim's packers).
+/// A generic class whose `T` fields are stored from a parameter, rebound,
+/// bound to a local, discarded, returned, selected by a conditional
+/// expression and passed to a generic function and a constructor. Nothing
+/// calls them with a native value, whose boxing needs the shim's packers in
+/// any build: the build links every emitted body, which is what is pinned.
 #[cfg(not(windows))]
 const NATIVE_GENERIC: &str = "\
 from typing import Generic, TypeVar
@@ -592,6 +594,7 @@ T = TypeVar(\"T\")
 class Box(Generic[T]):
     def __init__(self, v: T) -> None:
         self.v = v
+        self.w = v
 
     def get(self) -> T:
         y = self.v
@@ -601,11 +604,22 @@ class Box(Generic[T]):
     def put(self, v: T) -> None:
         self.v = v
 
+    def pick(self, c: bool) -> T:
+        return self.v if c else self.w
+
+    def copy(self) -> Box[T]:
+        return Box(ident(self.v))
+
+
+def ident(x: T) -> T:
+    return x
+
 
 def wrap(v: T) -> Box[T]:
     b = Box(v)
     b.put(b.get())
-    return b
+    b.w = b.pick(True)
+    return b.copy()
 
 
 print(\"ok\")
