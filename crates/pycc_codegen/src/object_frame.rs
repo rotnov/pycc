@@ -175,11 +175,17 @@ pub(super) fn release_slots<'ctx>(
     }
 }
 
-/// Whether the discarded value of the statement `expr` is a compiled
-/// function's `object` result a native executable must not release: there
-/// frame slots own nothing ([`enabled`]), so the callee returned a borrow.
-pub(super) fn is_unowned_call_result(rt: &RtFns<'_>, expr: &MirExpr) -> bool {
-    !enabled(rt) && matches!(expr, MirExpr::Call { .. })
+/// Whether the discarded value of the statement `expr` is an `object` value
+/// a native executable must not release: there frame slots own nothing
+/// ([`enabled`]), so a compiled function's `object` result is a borrow, and
+/// so is a conditional expression or `and`/`or` selecting one, which never
+/// retains its other arm there (`object_release::retains_borrowed_arm`).
+pub(super) fn is_unowned_discard(rt: &RtFns<'_>, expr: &MirExpr) -> bool {
+    !enabled(rt)
+        && matches!(
+            expr,
+            MirExpr::Call { .. } | MirExpr::IfExp { .. } | MirExpr::BoolOp { .. }
+        )
 }
 
 /// `pointer`, evaluated from `value` (boxed into a new object first when

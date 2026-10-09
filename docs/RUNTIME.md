@@ -1995,11 +1995,11 @@ any produced argument evaluated before it, on the way to the exception target
 temporary: since Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499) a
 module global owns it and releases it on rebind (below); since Part 2 a
 function frame does the same for its parameters and locals, and since Part 4
-an instance attribute (below). Each per-trip item of a comprehension is still
-leaked (an object `for` is admitted only in a module body, so its target is
-always a module global); Part 3 below releases the iterator and the remaining
-unbound operands, and Part 3 of #1499
-([#1503](https://github.com/rotnov/pycc/issues/1503)) owns the rest.
+an instance attribute (below). Since Part 3 of #1499
+([#1503](https://github.com/rotnov/pycc/issues/1503)) a comprehension releases
+each per-trip item itself (an object `for` is admitted only in a module body,
+so its target is always a module global); Part 3 below releases the iterator
+and the remaining unbound operands.
 `tests/issue_1092_object_temp_release.rs` pins a zero `sys.getrefcount` delta
 for every consumer and every held-operand failure, foreign or native, at
 module level (one 200-trip loop at import, and a failed import retried 50
@@ -2027,14 +2027,29 @@ formatted; `raise o.e` releases its operand once `PyErr_SetObject` has taken
 its own reference; a conditional expression's test and a truth-only boolean
 operator's operands are released after their truth test; and a value
 boolean operator releases its left operand when the right one is selected.
-An object-typed conditional expression is itself a producer only when both
-arms are produced objects, and a value boolean operator only when every arm
-is owned (a produced object, or a scalar it boxes into a new reference) --
-the rule `object_release::is_produced` implements; one with a borrowed arm is neither released nor incremented,
-so its produced arm still leaks when selected (#1499). `hash` has no object
-operand to release: `hash(o)` is refused with `C0001`. What stays leaked is
-values bound outside a module global, the per-trip item of a comprehension,
-and those mixed-arm results, all #1499's.
+An object-typed conditional expression or value boolean operator with at
+least one owned arm -- a produced object, or a native value the operator
+boxes into a new reference -- is a producer (`object_release::is_produced`):
+since Part 3 of #1499 ([#1503](https://github.com/rotnov/pycc/issues/1503))
+its borrowed arm (a name, a compiled-instance attribute read, a boxed
+`None`) is retained in its own arm (`object_slot::retain_if_borrowed`), so
+the result is owned whichever arm was selected and its consumer releases it
+exactly once -- or, at a frame or global slot, a compiled call's argument or
+a return, takes it over without a second retain ("A function frame owns its
+object slots"). A compiled call's `object` result is itself an owned arm
+(#1502). One whose arms are all borrowed stays a borrow with no
+reference-count traffic, exactly as `y = x`. Both rules share one predicate,
+`object_release::selects_an_owned_arm`; a fully native executable, which
+links no retain or release shim, never retains an arm and never releases a
+discarded selection (`object_release::retains_borrowed_arm`).
+`tests/issue_1503_object_select_release.rs` pins a zero delta against
+CPython for produced/borrowed and boxed/borrowed mixes passed to a foreign
+call, rebound to a module global, and bound to a function local, passed to
+and returned from a compiled function, and for all-borrowed selections at
+the same consumers, at two trip counts.
+`hash` has no object operand to release: `hash(o)` is refused with `C0001`.
+What stays leaked is values bound outside a module global, #1499's later
+parts.
 `tests/issue_1498_iteration_temp_release.rs` pins a zero `sys.getrefcount`
 delta for loops (nested, with a raising iterator, with a raising body, in a
 module-level `try` and uncaught out of the module body), comprehensions and
@@ -2170,8 +2185,9 @@ code is unchanged and links without the shims.
   null carrier into the pending return slot and the override replaces it. A
   boxed compiled-instance carrier is now released with the last frame slot
   holding it, so a later crossing of the same instance may pack a new
-  carrier. Comprehension variables are not frame slots
-  ([#1503](https://github.com/rotnov/pycc/issues/1503)), and an object `for`
+  carrier. Comprehension variables are not frame slots: since Part 3 of
+  #1499 ([#1503](https://github.com/rotnov/pycc/issues/1503)) a comprehension
+  releases each trip's item itself at the trip's end. An object `for`
   target in a function body, once admitted
   ([#1363](https://github.com/rotnov/pycc/issues/1363)), must bind through
   the frame store. An unpacking temporary holds the last sequence it
@@ -2213,14 +2229,13 @@ owned reference, or is unassigned:
   each copied `object` slot (#1455); the field getter `Py_XINCREF`s before it
   packs (Part 2).
 
-Two residuals remain. A compiled instance is never freed (D-107, D-154), so a
+One residual remains. A compiled instance is never freed (D-107, D-154), so a
 dropped instance keeps each attribute's last value where CPython frees it:
-that is the instance-lifetime policy, not a store leak. And a conditional
+that is the instance-lifetime policy, not a store leak. A conditional
 expression or `and`/`or` whose arms mix an attribute read with a borrowed
-value (`self.a if c else x`) leaks the read's reference when that arm is
-selected and the result is bound, because the mixed result is classified as
-borrowed; Part 3 of #1499 ([#1503](https://github.com/rotnov/pycc/issues/1503))
-owns mixed-arm results. An embedded executable compiles for the CPython host
+value (`self.a if c else x`) is balanced: the read is an owned arm, so Part 3
+of #1499 ([#1503](https://github.com/rotnov/pycc/issues/1503)) retains the
+borrowed one and the whole result is a producer. An embedded executable compiles for the CPython host
 and links the same shim, so its attributes own their references too; there a
 bare `object` annotation is `C0001`, and the `object`-typed attribute is one
 annotated with a class a foreign import binds (Part 1 of #1367). A native
@@ -2228,7 +2243,8 @@ executable has no `object` value at all.
 `tests/issue_1504_instance_object_attr_ownership.rs` runs every attribute shape
 compiled and as plain Python, fifty times each, and requires the same
 live-object and `sys.getrefcount` deltas, once more under `-X dev` with
-`PYTHONMALLOC=debug`; it pins the instance-lifetime residual, and an embedded
+`PYTHONMALLOC=debug` (the mixed-arm shapes included); it pins the
+instance-lifetime residual, and an embedded
 program's `Fraction` attribute against CPython's run of the same source.
 `tests/issue_1333_foreign_in_function.rs` pins it against a mortal stub
 attribute at two trip counts `N`:
@@ -2594,16 +2610,26 @@ operation's failure edge, so an iterable that is not one, a raising
 unhashable item each surface CPython's own exception. Under the
 [#1092](https://github.com/rotnov/pycc/issues/1092) rule Part 1 releases a
 produced *source* right after `iter()`, and Part 3 releases the iterator and
-an unbound result (above); a result bound to a module global is owned by it
-(Part 1 of #1499), while each loop item and a result bound anywhere else are new
-references still leaked (#1499), and the loop variable reads the item
-borrowed. `tests/issue_1255_object_comprehension.rs` pins it against a mortal
-item at two trip counts `n`, with each result bound inside a function: a list comprehension of
-`n` items raises the item's count by `2n` (the leaked loop item plus the
-leaked list's own reference), a set comprehension of `n` identical items by
-`n + 1`, and the iterated list's count by `0`, since its only new referrer is
-the list iterator, which is released. When a later part of #1499 releases the
-items and the function-local result, the deltas become CPython's.
+an unbound result (above); a bound result is owned by the module global
+(Part 1 of #1499), frame slot (Part 2) or instance attribute (Part 4) that
+binds it, and released on rebind. Since Part 3 of #1499
+([#1503](https://github.com/rotnov/pycc/issues/1503)) each loop item is held
+for its own trip: the loop variable reads it borrowed, every failure edge
+inside the trip releases it, and the trip's end (`objcomp_trip_end`, which a
+rejected filter also reaches) releases it before the next `next()`, so no
+item is held while `next()` runs. Nothing in a trip can keep the item
+borrowed past it: a packer or a foreign operation takes its own reference, a
+store into an instance attribute retains, and the comprehension's scope ends
+with the trip's loop variable (a walrus inside a comprehension, which could
+bind it to a longer-lived name, is refused). `tests/issue_1255_object_comprehension.rs`
+pins it against a mortal item at two trip counts `n`, with each result bound
+inside a function, and compares with CPython's own run: a list comprehension
+of `n` items raises the item's count by `n` (the references the list holds),
+a set comprehension of `n` identical items by `1`, and the iterated list's
+count by `0`, since its only new referrer is the list iterator, which is
+released. These are CPython's deltas, since the probe reads while the
+function-local results are still alive; that they then outlive the function
+is #1502's leak, not this probe's.
 
 **A list display bound to an object slot is one more producer.** Part 2d of
 [#1371](https://github.com/rotnov/pycc/issues/1371) builds `x: object = [a,
@@ -2649,10 +2675,10 @@ export boundary uses; a `None` value is the borrowed `Py_None` from
 `pycc_ext_obj_none`, with no packer. A packer's `NULL` routes through the
 function's ordinary error path (the IR label `object_box_failed`), so its
 CPython exception propagates from the seam. The packed reference is new and the
-boxing emits no decrement: bound to a module global, the global owns it
-(Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499), "A module global owns its reference"
-below); anywhere else it is leaked, like every other producer's, until
-[#1092](https://github.com/rotnov/pycc/issues/1092). The int packer's inline-range `OverflowError` applies here too
+boxing emits no decrement: the module global (Part 1 of
+[#1499](https://github.com/rotnov/pycc/issues/1499), "A module global owns its reference"
+below), frame slot (Part 2), instance attribute (Part 4), compiled call or
+`return` that binds the box moves its reference (`object_slot::is_owned`). The int packer's inline-range `OverflowError` applies here too
 ([#1040](https://github.com/rotnov/pycc/issues/1040)). An instance packs to
 its live carrier when it has one, so the same instance boxed twice is the
 same CPython object, as `is` sees it in CPython.
@@ -2709,9 +2735,10 @@ read is".
 borrowed, with no reference-count traffic, and its truth test is
 `pycc_ext_obj_truthy`. The native operand is packed by the same packers as an
 argument, on the arm that selects it only; the packer's new reference is the
-node's result and is leaked once per evaluation, as every producer's is,
-unless a module global binds it (Part 1 of #1499: the global owns it and
-releases it on rebind). A
+node's result, and since Part 3 of #1499 the node is a producer
+(`object_release::selects_an_owned_arm`): an unbound result is released by its
+consumer, and a bound one is owned by the global, frame slot or attribute that
+binds it. A
 packer `NULL` -- the `OverflowError` for an `int` outside the inline range,
 until [#1040](https://github.com/rotnov/pycc/issues/1040) -- takes the node's
 foreign failure edge. The hosted test runs the object-operand shapes 200 times
@@ -2826,7 +2853,10 @@ trip-count-linear leak rather than one bounded by process exit. Part 1 of
 global release the value it replaces, and Part 2 of #1499 (#1502, "A function
 frame owns its object slots") makes a function's parameters and locals own
 their values, so a bound or passed result no longer grows with the trip
-count. What still leaks is enumerated there and in D-244's #1502 amendment.
+count, and Parts 3 and 4 (#1503, #1504) do the same for a comprehension's
+per-trip item, a mixed-arm result and an instance attribute. What remains is
+the D-107 instance lifetime (a dropped compiled instance keeps each attribute's
+last value) and the narrow accepted leaks D-244's #1502 amendment enumerates.
 Part 2 accepts it because releasing correctly requires a release protocol that
 is not yet built, and because nothing in Part 2 can hand such a value to a host:
 every consuming operation other than a further attribute load, a method call,
@@ -2840,14 +2870,15 @@ terms and is trip-count-linear in exactly the same way. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
 rule 6's 5× kill criterion must not measure a hot loop that passes, returns or
 boxes the result of a foreign attribute load, method call or subscript load, or
-binds it inside a compiled function, and must not measure a comprehension over
-an object**, since that one leaks an item per trip whatever its body contains.
-Since Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499) a module
-global owns what it binds and a module-level foreign `for` loop releases each
-previous item, so neither leaks per trip any more -- except a conditional
-expression or value boolean operator with a borrowed arm, whose produced arm
-still leaks when selected (above), so a hot loop binding one is not measured
-either. Since Part 1 of #1092
+binds it inside a compiled function**. Since Part 1 of
+[#1499](https://github.com/rotnov/pycc/issues/1499) a module global owns what
+it binds and a module-level foreign `for` loop releases each previous item, and
+since Part 3 of #1499 a comprehension over an object releases each trip's item
+and a conditional expression or value boolean operator with one owned arm
+owns whichever arm it selected (an all-borrowed one stays a borrow), so none
+of those leaks per trip any more, at a module global, a function frame
+(#1502) or a foreign call's argument alike, and since Part 4 (#1504) neither
+does the value a compiled instance attribute replaces. Since Part 1 of #1092
 an *unbound* producer result -- `len(o.items)`, `o.a < o.b`, `float(o.x)`, a
 discarded `o.m()` -- is released by its consumer, so a hot loop of only those
 is a legitimate measurement. **The caveat

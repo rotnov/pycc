@@ -81,10 +81,17 @@
 //! `raise <object>` is a consumer like any other, and so is the condition
 //! of a conditional expression and every operand of a truth-only `and`/`or`.
 //! A value `and`/`or` holds its left operand across that operand's truth
-//! test and releases it on the arm that discards it; the node is a
-//! producer itself only when every arm it can select is owned (a produced
-//! object or a boxed native value), and a conditional expression only when
-//! both of its arms are produced objects.
+//! test and releases it on the arm that discards it. An `object`-typed
+//! value `and`/`or` or conditional expression with at least one owned arm
+//! (a produced object or a boxed native value, [`selects_an_owned_arm`])
+//! is a producer: since Part 3 of #1499 its borrowed arm is retained
+//! (`boolop::owned_value`), so every arm it can select is owned. One whose
+//! arms are all borrowed is a borrow, never released.
+//!
+//! The per-trip item of a comprehension over an object
+//! (`pycc_ext_obj_iter_next`'s new reference) is held on the same stack
+//! for its trip and released at the trip's end (Part 3 of #1499,
+//! `object_comprehension.rs`).
 //!
 //! **Bound values** are not temporaries and are never released here. Since
 //! Part 1 of #1499 a module-global `object` slot owns the reference it holds
@@ -93,12 +100,10 @@
 //! through this stack; since Part 2 (#1502) a function parameter or local
 //! does the same in `object_frame.rs`, which also makes a user-function
 //! `object` argument and return value owned references; since Part 4
-//! (#1504) a compiled-instance attribute does the same in `object_attr.rs`.
-//! **Not yet released** (Part 3 of #1499, #1503): the per-trip item of a
-//! comprehension over an object (an object `for` is admitted only in a
-//! module body, whose target owns its item), which the comprehension's
-//! scoped loop variable holds without a reference of its own; and the result of an `and`/`or` or a conditional expression
-//! whose arms mix produced and borrowed objects.
+//! (#1504) a compiled-instance attribute does the same in `object_attr.rs`,
+//! and its read is a producer. Since Part 3 (#1503) a comprehension releases
+//! each trip's item at the trip's end and a mixed-arm `and`/`or` or
+//! conditional expression is a producer (see [`selects_an_owned_arm`]).
 //! `hash(<object>)` is not admitted yet (C0001), so it has no site. The
 //! read of a narrowed `object` name (`MirExpr::ObjectUnbox`) needs no
 //! release: its operand is always a borrowed slot.
@@ -161,37 +166,78 @@ pub(super) fn is_produced(expr: &MirExpr) -> bool {
         // Part 3 of #1092: the fresh CPython `list`/`set` the comprehension
         // builds (`object_comprehension.rs`).
         MirExpr::Comprehension(comp) => matches!(comp.source, pycc_mir::CompSource::Object(_)),
+        // Part 3 of #1499: when one arm is owned, `boolop::owned_value`
+        // retains a selected borrowed object arm, so every arm is owned.
         MirExpr::BoolOp {
             left,
             right,
             ty: pycc_mir::Ty::Object,
             truth_only: false,
             ..
-        } => owned_arm(left) && owned_arm(right),
+        } => selects_an_owned_arm(left, right),
         MirExpr::IfExp {
             body,
             orelse,
             ty: pycc_mir::Ty::Object,
             ..
-        } => is_produced_object(body) && is_produced_object(orelse),
+        } => selects_an_owned_arm(body, orelse),
         _ => false,
     }
 }
 
-/// Whether `operand`, an arm an `object`-valued `and`/`or` can select, is
-/// a reference the node owns: a produced object, or a native value
-/// `boolop.rs` boxes into a new reference (`boolop::needs_boxing`). An
-/// arm of any other type is never treated as owned.
+/// Whether an `object`-typed value `and`/`or` or conditional expression
+/// whose arms are `a` and `b` owns its result (Part 3 of #1499): true when
+/// at least one arm is owned, and then `boolop::owned_value` retains the
+/// other arm too when it is a borrowed object, so whichever arm is selected
+/// the node's value is a new reference and the node is a producer. A node
+/// whose arms are all borrowed stays a borrow with no reference-count
+/// traffic, exactly as a name read; its consumer retains it where it needs
+/// a reference of its own (a frame or global slot, a compiled call's
+/// argument, a returned value). Whether the retain is emitted at all is
+/// [`retains_borrowed_arm`], which also requires a CPython-hosted module.
+///
+/// An arm is owned when it is a native value `boolop.rs` boxes into a new
+/// reference (`boolop::needs_boxing`; `pycc_hir`'s `is_object_joinable`
+/// owns which native arm types an `object` node admits), or a produced
+/// `object` -- the same [`is_produced`] test the hold and the
+/// discard of a value `and`/`or`'s left operand apply, so the node never
+/// counts as owned an arm those paths would not release. Since Part 2 of
+/// #1499 (#1502) that includes a compiled function's `object` result.
+///
+/// A non-`None` `ObjectBox` arm is the one shape on which this test and
+/// `object_slot::is_owned` (which `retain_if_borrowed` applies) differ. It
+/// is never inserted inside an operator today (`box_into` boxes at
+/// statement seams only); admitting one must route the hold and the discard
+/// through `object_slot::is_owned` as well, or the box leaks on one path.
+pub(super) fn selects_an_owned_arm(a: &MirExpr, b: &MirExpr) -> bool {
+    owned_arm(a) || owned_arm(b)
+}
+
+/// Whether an `and`/`or` or conditional expression of type `ty` with arms
+/// `a` and `b` retains a selected borrowed `object` arm
+/// (`boolop::owned_value`): when it is an `object` node that
+/// [`selects_an_owned_arm`], in a module compiled for the CPython host
+/// (`object_frame::enabled`). A fully native executable links no retain or
+/// release shim and owns no `object` reference -- its only `object` values
+/// are a generic function's borrowed parameters and their call results
+/// (`object_frame::is_unowned_discard`) -- so there the node never retains.
+pub(super) fn retains_borrowed_arm(
+    rt: &RtFns<'_>,
+    ty: &pycc_mir::Ty,
+    a: &MirExpr,
+    b: &MirExpr,
+) -> bool {
+    *ty == pycc_mir::Ty::Object && crate::object_frame::enabled(rt) && selects_an_owned_arm(a, b)
+}
+
+/// Whether `operand`, an arm of an `object`-typed node, evaluates to a
+/// reference the node owns.
 fn owned_arm(operand: &MirExpr) -> bool {
     match operand.ty() {
         pycc_mir::Ty::Bool | pycc_mir::Ty::Int | pycc_mir::Ty::Float | pycc_mir::Ty::Str => true,
-        _ => is_produced_object(operand),
+        pycc_mir::Ty::Object => is_produced(operand),
+        _ => false,
     }
-}
-
-/// Whether `operand` is an `object` arm evaluated to a produced reference.
-fn is_produced_object(operand: &MirExpr) -> bool {
-    operand.ty() == pycc_mir::Ty::Object && is_produced(operand_source(operand))
 }
 
 /// The node an operand's value really comes from:

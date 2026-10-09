@@ -267,8 +267,10 @@ pub(super) fn emit_comprehension_expr<'ctx>(
         MirCompElt::Set(elt, ops) => CompElts::Set(elt, ops.as_deref()),
         MirCompElt::Dict { key, value } => CompElts::Dict(key, value),
     };
-    // Part 1 of #1255: a CPython iterable builds a CPython list or set, and
-    // its loop variable is a borrowed object pointer with nothing to release.
+    // Part 1 of #1255: a CPython iterable builds a CPython list or set. Its
+    // loop variable holds each trip's item, which that trip owns and
+    // releases (Part 3 of #1499, `object_comprehension.rs`), so the slot
+    // needs no cleanup after the loop.
     if let CompSource::Object(iterable) = &comp.source {
         return super::object_comprehension::emit_object_comprehension(
             &inner,

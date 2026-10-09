@@ -7199,8 +7199,9 @@ fn emit_stmt<'ctx>(
             // Part 1 of #1092: the same for a produced CPython object
             // (`o.update()`), whose reference nothing else will retire.
             // Part 2 of #1499 (#1502): a compiled function's discarded
-            // `object` result is one only where frame slots own theirs.
-            if !object_frame::is_unowned_call_result(rt, expr) {
+            // `object` result is one only where frame slots own theirs, and
+            // so is a conditional or `and`/`or` selecting one (Part 3).
+            if !object_frame::is_unowned_discard(rt, expr) {
                 object_release::release_if_produced(context, builder, module, expr, &scalar);
             }
             Ok(())
