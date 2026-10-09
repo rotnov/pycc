@@ -88,7 +88,7 @@ pub(super) fn is_frame_slot<'ctx>(rt: &RtFns<'ctx>, slot: &StorageSlot<'ctx>) ->
 }
 
 /// Declares `void pycc_ext_obj_release(PyObject *)` once per module.
-fn release_fn<'ctx>(
+pub(super) fn release_fn<'ctx>(
     context: &'ctx Context,
     module: &inkwell::module::Module<'ctx>,
 ) -> FunctionValue<'ctx> {
@@ -179,12 +179,17 @@ pub(super) fn release_slots<'ctx>(
 /// a native executable must not release: there frame slots own nothing
 /// ([`enabled`]), so a compiled function's `object` result is a borrow, and
 /// so is a conditional expression or `and`/`or` selecting one, which never
-/// retains its other arm there (`object_release::retains_borrowed_arm`).
+/// retains its other arm there (`object_release::retains_borrowed_arm`),
+/// and so is an instance attribute read, which retains nothing there
+/// (`object_attr::retain_read`).
 pub(super) fn is_unowned_discard(rt: &RtFns<'_>, expr: &MirExpr) -> bool {
     !enabled(rt)
         && matches!(
             expr,
-            MirExpr::Call { .. } | MirExpr::IfExp { .. } | MirExpr::BoolOp { .. }
+            MirExpr::Call { .. }
+                | MirExpr::IfExp { .. }
+                | MirExpr::BoolOp { .. }
+                | MirExpr::AttrGet { .. }
         )
 }
 

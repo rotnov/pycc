@@ -515,12 +515,13 @@ pub(super) fn emit_call_borrowed<'ctx>(
 /// of an object temporary shares (Part 1 of #1092): a subscript load, an
 /// attribute load, a method or direct call's result, `type(o)`, a slice, a
 /// list display, a tuple unpack and a rich comparison. Handing such a
-/// result to the consuming `pycc_ext_obj_call` is what releases it. Every other
-/// callee is a *borrow* and goes to `pycc_ext_obj_call_borrowed`: a `Name`
-/// read (#1313), and also the pycc `__class_getitem__` method call that
-/// `C[k]` lowers to for a pycc class base, whose `object` result is the
-/// caller's pointer handed back without a new reference
-/// (`docs/RUNTIME.md`). Consuming that would underflow the refcount; the
+/// result to the consuming `pycc_ext_obj_call` is what releases it. So is a
+/// pycc call returning `object` -- including the `__class_getitem__` method
+/// call that `C[k]` lowers to for a pycc class base -- which hands back a
+/// new reference since #1502, and a pycc instance's `object` attribute read,
+/// which retains the slot's word since #1504 (`object_attr.rs`). Every other
+/// callee is a *borrow* and goes to `pycc_ext_obj_call_borrowed`, such as a
+/// `Name` read (#1313). Consuming a borrow would underflow the refcount; the
 /// borrowed helper is at worst a leak, which is why an unlisted node
 /// defaults to it. Unlike `object_release::hold`, this does not look through
 /// `MirExpr::ObjectUnbox`: a callee is evaluated by `emit_expr` itself, never

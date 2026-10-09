@@ -8,8 +8,8 @@
 //! A store converts the value by the parameter row of the slot's declared
 //! type and replaces the slot word as a compiled `self.x = v` does,
 //! releasing the replaced word by its kind
-//! (`pycc_rt_ext_instance_store_slot`); a `del` un-assigns the slot
-//! (`pycc_rt_ext_instance_delete_slot`), so the next read -- host or
+//! (`pycc_ext_instance_store_slot`); a `del` un-assigns the slot
+//! (`pycc_ext_instance_delete_slot`), so the next read -- host or
 //! compiled -- raises CPython's `AttributeError`.
 //!
 //! The hosted test drives the extension from a host script and runs the
@@ -24,9 +24,10 @@
 //! with that row's `TypeError` or `OverflowError` (a `float` slot refuses an
 //! `int`, as a `float` parameter does); a name with no
 //! descriptor has nowhere to go; a carrier whose `__init__` never ran
-//! cannot be stored into; and the object
-//! a store replaces or a `del` removes keeps the reference the slot held
-//! (the compiled object store's own #1092 leak).
+//! cannot be stored into. Its last two lines -- the reference the object a
+//! store replaces or a `del` removes loses -- were a divergence too until
+//! Part 4 of #1499 (#1504) made the slot release it; they now read what
+//! CPython reads, and stay here as the pin of that fix.
 //!
 //! The hosted test is `#[ignore]`d and contributes no line coverage; the
 //! Tier-1 `native-build-test` leg runs it with
@@ -252,13 +253,13 @@ const EXT_ONLY_OUT: &str = "TypeError Conf.n() argument 1: 'str' object cannot b
     AttributeError 'pycc_field_set_mod.Conf' object has no attribute 'zzz' and no __dict__ for setting new attributes\n\
     3 1.5 True ab 1\n\
     AttributeError cannot set 'n' on a 'Conf' object whose __init__ never ran\n\
-    0\n\
-    0\n";
+    -1\n\
+    -1\n";
 
 /// What CPython answers for the lines [`EXT_ONLY_DRIVER`] pins, so the
 /// divergence is stated, not inferred: a dynamically typed attribute takes
-/// any value, and the replaced or
-/// deleted object's reference is dropped.
+/// any value. The replaced or deleted object's reference is dropped, as the
+/// compiled extension now does too (#1504).
 const EXT_ONLY_CPYTHON_OUT: &str = "ok\n\
     ok\n\
     ok\n\

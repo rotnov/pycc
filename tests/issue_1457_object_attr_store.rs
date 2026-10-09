@@ -444,9 +444,9 @@ AttributeError 'Conf' object has no attribute 'o'\n\
 /// only. A store into a compiled instance's typed slot is converted by the
 /// slot's parameter row (Part 1 of #1443), so a `str` stored into an `int`
 /// slot raises `TypeError`, which a compiled `except` catches. An object
-/// slot of a compiled instance keeps the reference a replaced or deleted
-/// object held (the #1092 leak Part 1 documents), so 400 stores and 200
-/// deletions leave 400 references and a `del` drops none. A compiled `int`
+/// slot of a compiled instance owns its reference (Part 4 of #1499, #1504),
+/// so the pin/unpin counts match CPython's: 400 stores and 200 deletions
+/// leave no reference, and a `del` drops the one the slot held. A compiled `int`
 /// past the inline range cannot be packed (#1040): the store raises
 /// `OverflowError` and the attribute keeps its old value -- a failed pack
 /// never becomes a deletion.
@@ -469,8 +469,8 @@ print(ns.n)
 /// What the extension prints for [`EXT_ONLY_DRIVER`].
 const EXT_ONLY_OUT: &str = "\
 TypeError 3\n\
-400\n\
 0\n\
+-1\n\
 OverflowError an int argument to a CPython object's method is outside the inline-integer range [-2**62, 2**62-1] this pycc version's `ext` boundary supports (see #1040)\n\
 1\n";
 

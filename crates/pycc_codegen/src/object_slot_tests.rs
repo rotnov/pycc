@@ -331,10 +331,11 @@ fn a_function_local_of_a_global_name_keeps_the_frame_rule() {
 
 /// A compiled-instance attribute store of a borrowed object retains it,
 /// because the global it was read from may now release it; a produced
-/// value is stored as it is. Neither releases the replaced word (Part 4):
-/// the one release is the epilogue's release of the parameter `v`.
+/// value is stored as it is. Since Part 4 (#1504) each store also releases
+/// the replaced word after it stores, and the third release is the
+/// epilogue's release of the parameter `v`.
 #[test]
-fn an_attribute_store_retains_a_borrowed_object_and_releases_nothing() {
+fn an_attribute_store_retains_a_borrowed_object_and_releases_the_replaced_word() {
     let instance = Ty::Instance(Box::new("C".to_string()));
     let set = |value: MirExpr| MirStmt::AttrSet {
         base: MirExpr::Name {
@@ -356,9 +357,15 @@ fn an_attribute_store_retains_a_borrowed_object_and_releases_nothing() {
     let (_, irs) = compile("slot_attr_set", vec![import_copy(), f], &["pyfn_f"]);
     let ir = &irs[0];
     assert_eq!(ir.matches(RETAIN).count(), 1, "{ir}");
-    assert_eq!(ir.matches(RELEASE).count(), 1, "{ir}");
+    assert_eq!(ir.matches(RELEASE).count(), 3, "{ir}");
     assert!(
         ir.contains("call void @pycc_ext_obj_release(ptr %object_epilogue_live"),
+        "{ir}"
+    );
+    assert_eq!(
+        ir.matches("call void @pycc_ext_obj_release(ptr %object_attr_old_ptr")
+            .count(),
+        2,
         "{ir}"
     );
     let retain = at(ir, RETAIN);

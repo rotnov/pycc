@@ -106,9 +106,10 @@ pub(crate) fn slot_word_to_scalar<'ctx>(
         // Part 1 of #1367: a foreign object (`Ty::Object`) shares the same
         // `inttoptr` -- D-154 already stores `str`/instance pointers
         // reinterpreted as `i64`, and a `PyObject*` is one more pointer.
-        // Every `object` producer hands back a reference that is never
-        // released and `pycc_rt::instance` never releases a slot word, so
-        // the read needs no refcount traffic. A slot read before its
+        // The slot owns its word (Part 4 of #1499, #1504), so the caller,
+        // `emit_expr`'s `AttrGet` arm, retains an `object` read through
+        // `object_attr::retain_read` to answer a new reference, as
+        // `LOAD_ATTR` does; this helper only reinterprets. A slot read before its
         // `__init__` assignment never reaches here: the checked read raises
         // `AttributeError` first (#1388).
         //
@@ -169,9 +170,9 @@ pub(crate) fn scalar_to_slot_word<'ctx>(
         // `str`/`int` value type.
         // Part 1 of #1367: a foreign object's `PyObject*` is stored the
         // same way, with no refcount traffic here (see
-        // `slot_word_to_scalar`). Since Part 1 of #1499 the
-        // `MirStmt::AttrSet` arm retains a borrowed object before this
-        // conversion (`object_slot::retain_if_borrowed`).
+        // `slot_word_to_scalar`). Since Part 4 of #1499 (#1504) an
+        // `object` store does not reach this conversion: `object_attr::store`
+        // owns its reference traffic and its own encoding.
         // #1389: so is an instance of a class of this program.
         Scalar::List(v) | Scalar::Dict(v) | Scalar::Object(v) | Scalar::Instance(v) => builder
             .build_ptr_to_int(v, context.i64_type(), "attr_container_ptrtoint")
@@ -388,18 +389,20 @@ mod tests {
         // pointer word (one `ptrtoint` per store, one `inttoptr` per read).
         // Containers are leak-only (D-107, D-124), so neither store may
         // release the slot's previous value: `MirStmt::AttrSet` gates its
-        // `str` decref and `int` release on the value's type. Part 1 of
-        // #1367: an `object` slot holds its `PyObject*` the same way, with
-        // no refcount traffic either (every `object` producer's reference
-        // is never released). #1389: so does an instance of a class of this
-        // program, which `pycc_rt` never frees.
+        // `str` decref and `int` release on the value's type. #1389: an
+        // instance of a class of this program is stored the same way, since
+        // `pycc_rt` never frees one. Part 1 of #1367 stored an `object`
+        // slot's `PyObject*` this way too; since Part 4 of #1499 (#1504) it
+        // owns its reference instead (`object_attr.rs`), with its own
+        // `ptrtoint`, pinned in `object_attr_tests.rs`.
         let ir = container_slot_function_ir();
         let defined = |prefix: &str| {
             ir.lines()
                 .filter(|line| line.trim_start().starts_with(prefix))
                 .count()
         };
-        assert_eq!(defined("%attr_container_ptrtoint"), 4, "{ir}");
+        assert_eq!(defined("%attr_container_ptrtoint"), 3, "{ir}");
+        assert_eq!(defined("%object_attr_word"), 1, "{ir}");
         assert_eq!(defined("%attr_container_inttoptr"), 4, "{ir}");
         assert!(!ir.contains("Py_DecRef"), "{ir}");
         assert!(!ir.contains("pycc_rt_str_decref"), "{ir}");

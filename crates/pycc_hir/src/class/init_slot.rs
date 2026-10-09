@@ -349,9 +349,9 @@ fn slot_ty_from_init_rhs(
                 // admitted shapes. Part 1 of #1367: a `Ty::Object`
                 // parameter -- one annotated with a class a foreign import
                 // binds -- seeds a slot holding its `PyObject*`, the same
-                // pointer word; every `object` producer hands back a
-                // reference that is never released, so the store needs no
-                // refcount traffic either. #1389: a `Ty::Instance`
+                // pointer word; the slot owns that reference, which the
+                // codegen's store retains and releases (Part 4 of #1499,
+                // `pycc_codegen::object_attr`). #1389: a `Ty::Instance`
                 // parameter -- an instance of a class of this program,
                 // including the receiver itself (`self.link = self`) --
                 // seeds a slot holding its instance pointer; `pycc_rt`

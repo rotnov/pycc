@@ -172,11 +172,11 @@ fn an_int_slot_setter_unpacks_by_the_parameter_row_and_stores_by_kind() {
                   PyErr_SetString(PyExc_AttributeError, \
                   \"cannot set 'n' on a 'P' object whose __init__ never ran\");\n        }\n        \
                   return -1;\n    }\n    if (value == NULL) {\n        \
-                  if (pycc_rt_ext_instance_delete_slot(inst, 0, 'i') != 0) {\n            \
+                  if (pycc_ext_instance_delete_slot(inst, 0, 'i') != 0) {\n            \
                   pycc_ext_raise_pending();\n            return -1;\n        }\n        \
                   return 0;\n    }\n    \
                   if (pycc_ext_unpack_int(value, \"P.n\", 0, &v) != 0) {\n        return -1;\n    }\n    \
-                  word = v;\n    pycc_rt_ext_instance_store_slot(inst, 0, 'i', word);\n    \
+                  word = v;\n    pycc_ext_instance_store_slot(inst, 0, 'i', word);\n    \
                   return 0;\n}\n\n";
     assert!(inc.contains(setter), "missing:\n{setter}\nin:\n{inc}");
 }
@@ -229,10 +229,10 @@ fn each_slot_setter_converts_its_type_to_the_compiled_slot_word() {
         let body = &inc[start..start + inc[start..].find("\n}\n").expect("the setter ends")];
         for expected in [
             format!("    {local}\n"),
-            format!("pycc_rt_ext_instance_delete_slot(inst, {index}, '{kind}')"),
+            format!("pycc_ext_instance_delete_slot(inst, {index}, '{kind}')"),
             format!("    if ({unpack} != 0) {{\n"),
             format!(
-                "    {to_word}\n    pycc_rt_ext_instance_store_slot(inst, {index}, '{kind}', word);\n"
+                "    {to_word}\n    pycc_ext_instance_store_slot(inst, {index}, '{kind}', word);\n"
             ),
         ] {
             assert!(
@@ -629,7 +629,7 @@ fn an_instance_slot_getter_packs_through_the_instance_egress() {
     for expected in [
         "    if (pycc_ext_unpack_instance(value, \"St.parse_conf\", 0, \"Conf\", &v) != 0) {\n",
         "    word = (long long)(intptr_t)v;\n    \
-         pycc_rt_ext_instance_store_slot(inst, 0, 'w', word);\n",
+         pycc_ext_instance_store_slot(inst, 0, 'w', word);\n",
     ] {
         assert!(inc.contains(expected), "missing:\n{expected}\nin:\n{inc}");
     }

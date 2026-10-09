@@ -31,8 +31,8 @@
 //! boxed `None` -- CPython's borrowed `Py_None` -- as borrowed and retains
 //! it); a frame slot, a compiled callee's parameter and a compiled return
 //! own it the same way (Part 2, #1502, `object_frame.rs`, with the same
-//! `None` rule); every other destination still never releases it (#1092's
-//! leak-only rule, `docs/RUNTIME.md`). A packer `NULL` --
+//! `None` rule); and an instance attribute owns it and releases it when a
+//! store replaces it (Part 4, #1504, `object_attr.rs`). A packer `NULL` --
 //! `OverflowError` for a bigint outside D-141's inline range (#1040) --
 //! takes the foreign failure edge at once ([`foreign_fail::route_null`]).
 
