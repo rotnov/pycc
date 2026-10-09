@@ -98,7 +98,8 @@ fn assert_matches_cpython(tag: &str, module: &str, body: &str) -> String {
 /// #1499); the conditional expressions alternate their arm on `i % 2`, and
 /// the `and`/`or` shapes select the produced arm (`src[0] or probe`,
 /// `probe and src[0]`) and the retained borrowed arm (`probe or src[0]`,
-/// `src[0] and probe`), so both kinds of arm reach the global. The probe delta must be `0`, as it is under CPython.
+/// `src[0] and probe`), so both kinds of arm reach the global. The probe
+/// delta must be `0`, as it is under CPython.
 const BODY: &str = "import builtins\n\
     import sys\n\
     \n\

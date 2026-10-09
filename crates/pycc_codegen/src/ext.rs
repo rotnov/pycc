@@ -21,6 +21,14 @@
 
 use pycc_mir::Ty;
 
+mod iteration;
+pub use iteration::{
+    EXT_OBJ_COLLECT_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL,
+    EXT_OBJ_NEW_COLLECTION_SYMBOL, ObjCollectionKind,
+};
+mod naming;
+pub use naming::{ext_thunk_symbol, is_ext_exportable_name, mangle_ext_name};
+
 /// Everything `compile_to_object` needs beyond the MIR and the output path.
 ///
 /// Additive by construction: `compile_to_object` has hundreds of call sites
@@ -471,12 +479,6 @@ pub const EXT_OBJ_ISINSTANCE_SYMBOL: &str = "pycc_ext_obj_isinstance";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL: &str = "pycc_ext_obj_isinstance_compiled";
 
-mod iteration;
-pub use iteration::{
-    EXT_OBJ_COLLECT_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL,
-    EXT_OBJ_NEW_COLLECTION_SYMBOL, ObjCollectionKind,
-};
-
 /// The fixed C shim's `float(o)` conversion helper (Part 4 of #1026, PR 4a
 /// of #1083): it takes a borrowed `PyObject *` and a `double *`
 /// out-parameter, writes the converted value and returns `0`, or returns
@@ -633,9 +635,6 @@ pub const EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL: &str = "pycc_ext_obj_unpack_float_t
 ///
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_UNPACK_SYMBOL: &str = "pycc_ext_obj_unpack";
-
-mod naming;
-pub use naming::{ext_thunk_symbol, is_ext_exportable_name, mangle_ext_name};
 
 /// The boundary slots a value of type `ty` occupies when it crosses the
 /// `ext` seam: a `tuple`'s elements, in order, or the type itself.

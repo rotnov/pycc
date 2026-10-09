@@ -173,12 +173,18 @@ pub(super) fn is_produced(expr: &MirExpr) -> bool {
 /// argument to a compiled function, a returned value) leaks nothing.
 ///
 /// An arm is owned when it is a native value `boolop.rs` boxes into a new
-/// reference (`boolop::needs_boxing`), or an `object` that
-/// `object_slot::is_owned` calls a new reference -- the same test
-/// `object_slot::retain_if_borrowed` applies to each arm when the node
-/// owns, so the node counts as owned exactly the arms it does not retain.
-/// This one predicate decides both the classification and whether any
-/// retain is emitted, so the two cannot disagree.
+/// reference (`boolop::needs_boxing`: every non-`object` arm the packer
+/// accepts -- `int`, `float`, `bool`, `str` or a class instance), or a
+/// produced `object` -- the same [`is_produced`] test the hold and the
+/// discard of a value `and`/`or`'s left operand apply, so the node never
+/// counts as owned an arm those paths would not release. This one predicate
+/// decides both the classification and whether any retain is emitted.
+///
+/// A non-`None` `ObjectBox` arm is the one shape on which this test and
+/// `object_slot::is_owned` (which `retain_if_borrowed` applies) differ. It
+/// is never inserted inside an operator today (`box_into` boxes at
+/// statement seams only); admitting one must route the hold and the discard
+/// through `object_slot::is_owned` as well, or the box leaks on one path.
 ///
 /// At a consumer that does not release yet (a function local, a compiled
 /// call's argument or returned value; #1502) a mixed node therefore leaks
@@ -192,8 +198,12 @@ pub(super) fn selects_an_owned_arm(a: &MirExpr, b: &MirExpr) -> bool {
 /// reference the node owns.
 fn owned_arm(operand: &MirExpr) -> bool {
     match operand.ty() {
-        pycc_mir::Ty::Bool | pycc_mir::Ty::Int | pycc_mir::Ty::Float | pycc_mir::Ty::Str => true,
-        pycc_mir::Ty::Object => crate::object_slot::is_owned(operand),
+        pycc_mir::Ty::Bool
+        | pycc_mir::Ty::Int
+        | pycc_mir::Ty::Float
+        | pycc_mir::Ty::Str
+        | pycc_mir::Ty::Instance(_) => true,
+        pycc_mir::Ty::Object => is_produced(operand_source(operand)),
         _ => false,
     }
 }

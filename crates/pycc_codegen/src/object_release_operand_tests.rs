@@ -278,17 +278,18 @@ fn the_part_3_producers_are_classified() {
     assert!(is_produced(&value(attr("a"), copy_name())));
     assert!(!is_produced(&value(copy_name(), copy_name())));
     let boxed = |inner| MirExpr::ObjectBox(Box::new(inner));
-    // A boxed object arm is never inserted inside an operator today; if one
-    // were, it is owned exactly when `object_slot::is_owned` says so (a
-    // non-`None` box is a new reference, the `None` singleton is not).
-    assert!(is_produced(&value(
+    // A boxed object arm is never inserted inside an operator today; it is
+    // not produced, so it is not an owned arm (see `selects_an_owned_arm`).
+    assert!(!is_produced(&value(
         copy_name(),
         boxed(MirExpr::IntLiteral(7))
     )));
-    assert!(!is_produced(&value(
-        copy_name(),
-        boxed(MirExpr::NoneLiteral)
-    )));
+    // A class instance is boxed by its packer into a new reference.
+    let instance = MirExpr::Name {
+        name: "c".to_string(),
+        ty: Ty::Instance(Box::new("C".to_string())),
+    };
+    assert!(is_produced(&value(copy_name(), instance)));
     // An arm of any other type is never treated as owned.
     assert!(!is_produced(&value(copy_name(), MirExpr::NoneLiteral)));
     assert!(!is_produced(&bool_op(
@@ -302,7 +303,7 @@ fn the_part_3_producers_are_classified() {
     assert!(is_produced(&choose(attr("a"), attr("b"))));
     assert!(is_produced(&choose(copy_name(), attr("b"))));
     assert!(!is_produced(&choose(copy_name(), copy_name())));
-    assert!(is_produced(&choose(
+    assert!(!is_produced(&choose(
         boxed(MirExpr::IntLiteral(7)),
         copy_name()
     )));
