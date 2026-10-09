@@ -88,7 +88,7 @@ pub(super) fn is_frame_slot<'ctx>(rt: &RtFns<'ctx>, slot: &StorageSlot<'ctx>) ->
 }
 
 /// Declares `void pycc_ext_obj_release(PyObject *)` once per module.
-fn release_fn<'ctx>(
+pub(super) fn release_fn<'ctx>(
     context: &'ctx Context,
     module: &inkwell::module::Module<'ctx>,
 ) -> FunctionValue<'ctx> {

@@ -851,12 +851,16 @@ ingress does) where CPython would store any value. The converted word is the
 one a compiled `self.x = v` writes, and
 `pycc_rt_ext_instance_store_slot` releases the replaced word by the slot's
 `__copy__` kind byte (#1455): a `str` is decref'd and an out-of-range `int`
-released, exactly as the compiled store does, while an object word is not --
-the object a store replaces, or a `del` removes, keeps the reference the slot
-held, the compiled object store's own leak (#1092). A compiled method that
+released, exactly as the compiled store does. Since Part 4 of #1499
+([#1504](https://github.com/rotnov/pycc/issues/1504)) an object word is
+released too, by the shim's `pycc_ext_instance_store_slot` and
+`pycc_ext_instance_delete_slot` that the setter calls in place of the
+`pycc_rt` entry points (`pycc_rt` has no CPython dependency, D-244 rule 2):
+each reads the old word first and `Py_XDECREF`s it once the store or `del`
+has succeeded, as the compiled store does (below). A compiled method that
 reads the slot afterwards sees the host's value, including a `bool` stored
 into an `int` slot (`True + 100` is `101`). `del` goes through
-`pycc_rt_ext_instance_delete_slot`, so a later read -- host or compiled --
+`pycc_ext_instance_delete_slot`, so a later read -- host or compiled --
 and a second `del` raise `AttributeError: '<Class>' object has no attribute
 '<name>'`, as in CPython. A carrier whose `__init__` never ran has no compiled
 instance to store into: a store raises `AttributeError: cannot set '<name>' on
@@ -1989,12 +1993,13 @@ pycc's own exception state, and the post-node guard's unwind
 any produced argument evaluated before it, on the way to the exception target
 ([#1486](https://github.com/rotnov/pycc/issues/1486)). A result that is bound is not a
 temporary: since Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499) a
-module global owns it and releases it on rebind (below). A result bound to a
-function local or an instance slot, passed to a user function, returned, or
-boxed is still leaked, as is each per-trip item of a comprehension (an object
-`for` is admitted only in a module body, so its target is always a module
-global); Part 3 below releases the iterator and the remaining unbound
-operands, and the later parts of #1499 own the rest.
+module global owns it and releases it on rebind (below); since Part 2 a
+function frame does the same for its parameters and locals, and since Part 4
+an instance attribute (below). Each per-trip item of a comprehension is still
+leaked (an object `for` is admitted only in a module body, so its target is
+always a module global); Part 3 below releases the iterator and the remaining
+unbound operands, and Part 3 of #1499
+([#1503](https://github.com/rotnov/pycc/issues/1503)) owns the rest.
 `tests/issue_1092_object_temp_release.rs` pins a zero `sys.getrefcount` delta
 for every consumer and every held-operand failure, foreign or native, at
 module level (one 200-trip loop at import, and a failed import retried 50
@@ -2185,8 +2190,46 @@ annotated with a class a foreign import binds: the slot word is the same
 pointer (D-154), read with no reference-count change. Since Part 1 of #1499 a
 store of a borrowed object into an instance slot first retains it
 (`pycc_ext_obj_retain`), because the module global or frame slot it was read
-from may release it on rebind or scope exit; the replaced word is still never released (Part 4,
-[#1504](https://github.com/rotnov/pycc/issues/1504)).
+from may release it on rebind or scope exit.
+
+**Instance attributes own their reference** (Part 4 of #1499,
+[#1504](https://github.com/rotnov/pycc/issues/1504);
+`crates/pycc_codegen/src/object_attr.rs`). An `object` slot holds exactly one
+owned reference, or is unassigned:
+
+- A compiled store `o.a = v` retains a borrowed `v`, reads the old word with
+  the unchecked slot read (`0` when unassigned), stores the new word, and only
+  then releases the old one through `pycc_ext_obj_release` -- CPython's
+  `Py_XSETREF` order, so a finalizer the release runs reads the new value, and
+  `self.a = self.a` keeps its object alive.
+- A compiled read `o.a` returns a **new reference**, as CPython's `LOAD_ATTR`
+  does: it retains the slot's word, and `object_release::is_produced` lists the
+  read, so a binding moves it and every other consumer releases it. A borrowed
+  read would be unsound once a store releases: `self.a.m(self.reset())` -- or a
+  host callback inside any foreign operation -- can rebind the attribute while
+  the old word is still in use.
+- A host store or `del` through the slot's descriptor releases the word it
+  replaces or removes (above), and `copy.copy` already takes a reference for
+  each copied `object` slot (#1455); the field getter `Py_XINCREF`s before it
+  packs (Part 2).
+
+Two residuals remain. A compiled instance is never freed (D-107, D-154), so a
+dropped instance keeps each attribute's last value where CPython frees it:
+that is the instance-lifetime policy, not a store leak. And a conditional
+expression or `and`/`or` whose arms mix an attribute read with a borrowed
+value (`self.a if c else x`) leaks the read's reference when that arm is
+selected and the result is bound, because the mixed result is classified as
+borrowed; Part 3 of #1499 ([#1503](https://github.com/rotnov/pycc/issues/1503))
+owns mixed-arm results. An embedded executable compiles for the CPython host
+and links the same shim, so its attributes own their references too; there a
+bare `object` annotation is `C0001`, and the `object`-typed attribute is one
+annotated with a class a foreign import binds (Part 1 of #1367). A native
+executable has no `object` value at all.
+`tests/issue_1504_instance_object_attr_ownership.rs` runs every attribute shape
+compiled and as plain Python, fifty times each, and requires the same
+live-object and `sys.getrefcount` deltas, once more under `-X dev` with
+`PYTHONMALLOC=debug`; it pins the instance-lifetime residual, and an embedded
+program's `Fraction` attribute against CPython's run of the same source.
 `tests/issue_1333_foreign_in_function.rs` pins it against a mortal stub
 attribute at two trip counts `N`:
 

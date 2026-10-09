@@ -15,10 +15,12 @@
 //!   ([`crate::pycc_rt_bigint_release`]); an inline int or a `bool` marker
 //!   is a no-op there.
 //! * `o` -- an opaque CPython object, and `w` -- any other word. Nothing is
-//!   released: `pycc_rt` keeps no CPython dependency (D-244 rule 2), and
-//!   under the leak-only rule (#1092) the reference a compiled object slot
-//!   holds may be the very one compiled code still uses, so the compiled
-//!   store does not release it either.
+//!   released here: `pycc_rt` keeps no CPython dependency (D-244 rule 2).
+//!   An `o` slot owns its reference all the same (Part 4 of #1499, #1504):
+//!   the setter calls these through the shim's
+//!   `pycc_ext_instance_store_slot`/`pycc_ext_instance_delete_slot`
+//!   (`src/ext/pycc_ext_module.c`), which read the old word first and
+//!   `Py_XDECREF` it once the store or `del` has succeeded.
 //!
 //! The new word is stored as given: the setter hands over a reference it
 //! owns (a fresh `PyStrObj`, a new CPython reference), or a plain word.

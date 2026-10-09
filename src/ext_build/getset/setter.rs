@@ -8,14 +8,18 @@
 //! `pycc_ext_unpack_*` helper a parameter of that type uses, so a slot
 //! admits exactly the values an argument of its type admits. The converted
 //! word is the one a compiled `self.x = v` stores (`pycc_codegen`'s
-//! `scalar_to_slot_word`), and `pycc_rt_ext_instance_store_slot` releases
-//! the replaced word by the slot's kind byte -- #1455's
+//! `scalar_to_slot_word`), and the shim's `pycc_ext_instance_store_slot`
+//! releases the replaced word by the slot's kind byte -- #1455's
 //! [`copy_kind`] -- exactly as the compiled store does, so a host store and
-//! a compiled store leave the slot in the same ownership state.
+//! a compiled store leave the slot in the same ownership state: `pycc_rt`
+//! releases an `s`/`i` word, and the shim an `o` word (Part 4 of #1499,
+//! #1504), after the new word is stored.
 //!
-//! A `del` un-assigns the slot through `pycc_rt_ext_instance_delete_slot`,
-//! which raises the checked read's own `AttributeError` when the slot is
-//! not assigned, as CPython does for `del` of a missing attribute.
+//! A `del` un-assigns the slot through the shim's
+//! `pycc_ext_instance_delete_slot`, which raises the checked read's own
+//! `AttributeError` when the slot is not assigned, as CPython does for
+//! `del` of a missing attribute, and otherwise releases the deleted word
+//! the same way.
 //!
 //! A property's setter (#1458) is [`property_setter_c`]: it hands the value
 //! to the compiled setter's `METH_FASTCALL` wrapper as its one argument, so
@@ -83,10 +87,10 @@ pub(super) fn slot_setter_c(class: &str, name: &str, index: usize, ty: &Ty) -> S
          PyErr_SetString(PyExc_AttributeError, \
          \"cannot set '{name}' on a '{class}' object whose __init__ never ran\");\n        \
          }}\n        return -1;\n    }}\n    if (value == NULL) {{\n        \
-         if (pycc_rt_ext_instance_delete_slot(inst, {index}, '{kind}') != 0) {{\n            \
+         if (pycc_ext_instance_delete_slot(inst, {index}, '{kind}') != 0) {{\n            \
          pycc_ext_raise_pending();\n            return -1;\n        }}\n        \
          return 0;\n    }}\n    if ({unpack} != 0) {{\n        return -1;\n    }}\n    \
-         {to_word}\n    pycc_rt_ext_instance_store_slot(inst, {index}, '{kind}', word);\n    \
+         {to_word}\n    pycc_ext_instance_store_slot(inst, {index}, '{kind}', word);\n    \
          return 0;\n}}\n\n"
     )
 }

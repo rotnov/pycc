@@ -101,11 +101,13 @@ extern void pycc_rt_ext_instance_set_carrier(void *instance, void *carrier);
 extern void *pycc_rt_ext_instance_copy(void *instance, const char *kinds, size_t kinds_len);
 extern long long pycc_rt_instance_get_slot(void *instance, long long slot);
 
-/* A host store into, and `del` of, a slot (Part 1 of #1443), called by the
+/* A host store into, and `del` of, a slot (Part 1 of #1443), called through
+ * `pycc_ext_instance_store_slot`/`pycc_ext_instance_delete_slot` below by the
  * generated slot setters (`src/ext_build/getset/setter.rs`). The kind byte is
  * the copy's: the replaced or deleted word's `s`/`i` reference is released by
- * `pycc_rt`; `o`/`w` release nothing. The delete answers -1 with the checked
- * read's `AttributeError` pending for a slot not assigned. */
+ * `pycc_rt`, an `o` word's by those two wrappers (`pycc_rt` has no CPython
+ * dependency, D-244 rule 2), and a `w` word has none. The delete answers -1
+ * with the checked read's `AttributeError` pending for a slot not assigned. */
 extern void pycc_rt_ext_instance_store_slot(void *instance, long long slot, unsigned char kind,
                                             long long word);
 extern int pycc_rt_ext_instance_delete_slot(void *instance, long long slot, unsigned char kind);
@@ -1846,9 +1848,9 @@ void pycc_ext_name_error(const unsigned char *name, long long len)
  * duration of this call: a module global or slot, or a produced temporary
  * the caller releases only after this call (Part 1 of #1092). The returned
  * reference is released by compiled code through `pycc_ext_obj_release`
- * when it is consumed unbound, is owned by a module global that binds it
- * (Part 1 of #1499), and is otherwise leaked until a later part of #1499;
- * `docs/RUNTIME.md` records all three.
+ * when it is consumed unbound, and is owned by the module global, frame
+ * slot or instance attribute that binds it (Parts 1, 2 and 4 of #1499);
+ * `docs/RUNTIME.md` records each case and the residual leaks.
  *
  * Deliberately *not* translated into `pycc_rt`'s pending-exception state
  * here. The two failure protocols are kept apart; the caller's own contract
@@ -2010,9 +2012,9 @@ PyObject *pycc_ext_obj_pack_object(PyObject *value)
  * the generated code never has to. The returned reference is the only
  * thing that escapes into compiled code as an `object` value; compiled code
  * releases it through `pycc_ext_obj_release` when it is an unbound
- * temporary (Part 1 of #1092), a module global that binds it owns it
- * (Part 1 of #1499), and otherwise compiled code leaks it, on the rule
- * `docs/RUNTIME.md` records for this boundary.
+ * temporary (Part 1 of #1092), and the module global, frame slot or
+ * instance attribute that binds it owns it (Parts 1, 2 and 4 of #1499);
+ * `docs/RUNTIME.md` records the residual leaks for this boundary.
  *
  * A packer that failed stored NULL in its slot with a CPython exception
  * already set. Scanning for that here rather than testing each packer's
@@ -2209,8 +2211,8 @@ int pycc_ext_obj_truthy(PyObject *o)
  *
  * Returns a new reference to `o`'s class (`PyObject_Type`), owned like every
  * other producer's: released when consumed unbound (Part 1 of #1092),
- * owned by a module global that binds it (Part 1 of #1499), leaked
- * otherwise.
+ * owned by the module global, frame slot or instance attribute that binds
+ * it (Parts 1, 2 and 4 of #1499).
  * `o` is borrowed. `PyObject_Type` cannot fail for a live object; a NULL
  * `o` is the defence in depth `pycc_ext_obj_getattr` and `pycc_ext_obj_len`
  * document: a NULL operand comes only from a producer whose own NULL check
@@ -3805,6 +3807,46 @@ static void pycc_ext_unhashable_slots(PyType_Slot *slots)
             slots->pfunc = (void *)PyObject_HashNotImplemented;
         }
     }
+}
+
+/*
+ * Part 4 of #1499 (#1504): a host store into a slot of kind `kind`, the one
+ * every generated slot setter calls. An `o` slot owns one CPython reference,
+ * so the word it replaces -- read first with the unchecked read, which
+ * answers 0 for an unassigned slot -- is released after the new word is
+ * stored: the `Py_XSETREF` order the compiled store
+ * (`crates/pycc_codegen/src/object_attr.rs`) uses, so a finalizer the
+ * release runs reads the new value. `word` is a reference the slot takes
+ * over (`pycc_ext_unpack_object`'s new reference, for `o`).
+ */
+static void pycc_ext_instance_store_slot(void *inst, long long slot, unsigned char kind,
+                                         long long word)
+{
+    PyObject *old = NULL;
+    if (kind == 'o') {
+        old = (PyObject *)(intptr_t)pycc_rt_instance_get_slot(inst, slot);
+    }
+    pycc_rt_ext_instance_store_slot(inst, slot, kind, word);
+    Py_XDECREF(old);
+}
+
+/*
+ * The `del` counterpart of `pycc_ext_instance_store_slot`: un-assigns the
+ * slot, then releases an `o` slot's reference. A slot not assigned answers
+ * -1 with the `AttributeError` pending and releases nothing (its unchecked
+ * read was 0).
+ */
+static int pycc_ext_instance_delete_slot(void *inst, long long slot, unsigned char kind)
+{
+    PyObject *old = NULL;
+    if (kind == 'o') {
+        old = (PyObject *)(intptr_t)pycc_rt_instance_get_slot(inst, slot);
+    }
+    if (pycc_rt_ext_instance_delete_slot(inst, slot, kind) != 0) {
+        return -1;
+    }
+    Py_XDECREF(old);
+    return 0;
 }
 
 #include "pycc_ext_exports.inc"

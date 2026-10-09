@@ -55,9 +55,11 @@
 //! gate. A function-local name never resolves to a global's slot, because
 //! a function cannot assign a global (`global` is refused with `C0001`), so
 //! a local target always gets its own alloca. Compiled-instance `object`
-//! attributes retain a borrowed source ([`retain_if_borrowed`] in the
-//! `MirStmt::AttrSet` arm) but never release the replaced word; that slot
-//! class is Part 4 ([#1504](https://github.com/rotnov/pycc/issues/1504)).
+//! attributes own their reference since Part 4
+//! ([#1504](https://github.com/rotnov/pycc/issues/1504)), through
+//! `object_attr.rs`: a store retains a borrowed source
+//! ([`retain_if_borrowed`]) and releases the replaced word, and a read
+//! returns a new reference.
 
 use super::*;
 use crate::ext::{

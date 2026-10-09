@@ -67,6 +67,7 @@ mod foreign_unpack;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
 mod hash;
+mod object_attr;
 mod object_box;
 mod object_comprehension;
 mod object_frame;
@@ -336,11 +337,13 @@ enum Scalar<'ctx> {
     /// reference. An unbound temporary is released by its consumer
     /// (`object_release.rs`, #1092), and a module global owns the value
     /// bound to it and releases it on rebind (`object_slot.rs`, Part 1 of
-    /// #1499). A value bound to a frame slot or an instance slot, passed to
-    /// a user function, or returned is still never released (the later
-    /// parts of #1499), so such a leak inside a loop is trip-count-linear;
-    /// see `docs/RUNTIME.md`'s "Foreign imports in the module body"
-    /// ownership subsection.
+    /// #1499); a frame slot does the same, with owned arguments and returns
+    /// (`object_frame.rs`, Part 2), and so does an instance attribute, whose
+    /// read is itself a new reference (`object_attr.rs`, Part 4). A
+    /// comprehension's per-trip item and a mixed-arm conditional or boolean
+    /// result are still never released (Part 3, #1503); see
+    /// `docs/RUNTIME.md`'s "Foreign imports in the module body" ownership
+    /// subsection.
     Object(PointerValue<'ctx>),
     /// A pointer to the `PyccExtBufferView` -- `pycc_rt`'s `{ ptr, len }`
     /// pair -- that a `pycc build --ext` wrapper passed for a `memoryview`
@@ -3778,7 +3781,11 @@ fn emit_expr_unchecked<'ctx>(
                 .try_as_basic_value()
                 .expect_basic("pycc_rt_instance_get_slot_checked returns a non-void i64")
                 .into_int_value();
-            slot_word_to_scalar(context, builder, raw, ty)
+            // Part 4 of #1499 (#1504): an `object` read answers a new
+            // reference, because a nested rebind now releases the old word
+            // (`object_attr.rs`).
+            let scalar = slot_word_to_scalar(context, builder, raw, ty);
+            object_attr::retain_read(context, builder, module, scalar)
         }
         // Part 2 of #1026: the string-keyed runtime sibling of the
         // compile-time-slot `AttrGet` directly above. `foreign_attr::emit`
@@ -8413,17 +8420,16 @@ fn emit_stmt<'ctx>(
                 emit_expr(context, builder, module, rt, user_functions, locals, value);
             let value_scalar = incref_if_str_duplicate(builder, rt, value, value_scalar);
             let value_scalar = retain_if_int_duplicate(context, builder, rt, value, value_scalar);
-            // Part 1 of #1499: a borrowed object takes its own reference
-            // before the slot word keeps it, because a module global it was
-            // read from now releases its old value on rebind. The replaced
-            // word is still never released (Part 4, #1504).
-            let value_scalar = match value_scalar {
-                Scalar::Object(pointer) => Scalar::Object(object_slot::retain_if_borrowed(
-                    context, builder, module, value, pointer,
-                )),
-                other => other,
-            };
             let slot_index = context.i64_type().const_int(*slot as u64, false);
+            // Part 4 of #1499 (#1504): an `object` slot owns its reference;
+            // the store retains a borrowed value and releases the replaced
+            // word after storing (`object_attr.rs`).
+            if let Scalar::Object(pointer) = value_scalar {
+                object_attr::store(
+                    context, builder, module, rt, base_ptr, slot_index, value, pointer,
+                );
+                return Ok(());
+            }
             if value_ty == pycc_mir::Ty::Str {
                 decref_str_attr_slot_before_store(context, builder, rt, base_ptr, slot_index);
             }

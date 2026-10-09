@@ -22,7 +22,9 @@
 //! classification `foreign_call::callee_is_produced` also answers through.
 //! Since Part 2 of #1499 (#1502) a user function's `object` result is one
 //! of them: the callee returns a reference its caller owns
-//! (`object_frame.rs`). Everything else that evaluates to a
+//! (`object_frame.rs`); since Part 4 (#1504) so is a compiled-instance
+//! `object` attribute read (`object_attr.rs`), which retains the slot's
+//! word as CPython's `LOAD_ATTR` does. Everything else that evaluates to a
 //! `Scalar::Object` is a *borrow* -- a `Name` read of a module global or a
 //! slot, a function parameter, a `for` target, a boxed value -- and is
 //! never released here: a slot's reference belongs to the slot (a module
@@ -90,13 +92,12 @@
 //! `for x in <object>:` target's per-trip item -- in `object_slot.rs`, not
 //! through this stack; since Part 2 (#1502) a function parameter or local
 //! does the same in `object_frame.rs`, which also makes a user-function
-//! `object` argument and return value owned references. **Not yet
-//! released** (the later parts of #1499): the replaced value of a
-//! compiled-instance attribute (Part 4, #1504); the per-trip item of a
+//! `object` argument and return value owned references; since Part 4
+//! (#1504) a compiled-instance attribute does the same in `object_attr.rs`.
+//! **Not yet released** (Part 3 of #1499, #1503): the per-trip item of a
 //! comprehension over an object (an object `for` is admitted only in a
 //! module body, whose target owns its item), which the comprehension's
-//! scoped loop variable holds without a reference of its own (Part 3,
-//! #1503); and the result of an `and`/`or` or a conditional expression
+//! scoped loop variable holds without a reference of its own; and the result of an `and`/`or` or a conditional expression
 //! whose arms mix produced and borrowed objects.
 //! `hash(<object>)` is not admitted yet (C0001), so it has no site. The
 //! read of a narrowed `object` name (`MirExpr::ObjectUnbox`) needs no
@@ -148,6 +149,12 @@ pub(super) fn is_produced(expr: &MirExpr) -> bool {
         // lower to `Call` (`len`, `int`, `float`, `bool`, `str`,
         // `math.sqrt`) answer native types.
         MirExpr::Call {
+            ty: pycc_mir::Ty::Object,
+            ..
+        } => true,
+        // Part 4 of #1499 (#1504): a compiled-instance `object` attribute
+        // read retains the slot's word (`object_attr::retain_read`).
+        MirExpr::AttrGet {
             ty: pycc_mir::Ty::Object,
             ..
         } => true,
