@@ -477,224 +477,165 @@ pub use iteration::{
     EXT_OBJ_NEW_COLLECTION_SYMBOL, ObjCollectionKind,
 };
 
-mod conversion;
-pub use conversion::{
-    EXT_OBJ_FORMAT_SYMBOL, EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL,
-    EXT_OBJ_UNBOX_BOOL_SYMBOL, EXT_OBJ_UNBOX_FLOAT_SYMBOL, EXT_OBJ_UNBOX_INSTANCE_SYMBOL,
-    EXT_OBJ_UNBOX_INT_SYMBOL, EXT_OBJ_UNBOX_STR_SYMBOL, EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL,
-    EXT_OBJ_UNPACK_SYMBOL,
-};
+/// The fixed C shim's `float(o)` conversion helper (Part 4 of #1026, PR 4a
+/// of #1083): it takes a borrowed `PyObject *` and a `double *`
+/// out-parameter, writes the converted value and returns `0`, or returns
+/// `-1` with the CPython exception already set.
+///
+/// **This is an explicit conversion, not an implicit boundary crossing.**
+/// D-244 rule 7 keeps the type boundary closed at the *thunk export seam*,
+/// where a value crosses implicitly and the annotation is the whole
+/// contract. `float(o)` in user source names its destination type, so
+/// running CPython's own `PyNumber_Float` protocol -- the operand's
+/// `__float__`, `__index__` or string parse -- is precisely what the author
+/// asked for. `docs/TYPE_SYSTEM.md`'s `object` row and the helper's own C
+/// comment record the same distinction.
+///
+/// **Ownership.** The helper releases the temporary `PyNumber_Float`
+/// produces on *every* exit, including the failing one, and nothing but a
+/// `double` escapes into compiled code -- so unlike an attribute load or a
+/// subscript, this operation adds nothing to the #1092 leak-only set.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_TO_FLOAT_SYMBOL: &str = "pycc_ext_obj_to_float";
 
-/// The C-legal spelling of a possibly-dotted pycc name.
+/// The fixed C shim's `int(o)` conversion helper (Part 4 of #1026, PR 4b
+/// of #1083): it takes a borrowed `PyObject *` and a `long long *`
+/// out-parameter, writes a **D-141 encoded** integer word and returns `0`,
+/// or returns `-1` with the CPython exception already set.
 ///
-/// A method reaches MIR under a dotted name (`Grid.scale.static`), and two
-/// of the places that name is used are *C identifiers*: the
-/// `extern void *fnptr_<name>;` declaration `pycc::ext_build`'s
-/// `wrapper_for` emits, and the `pycc_ext_wrap_<name>` /
-/// `pycc_ext_thunk_<name>` symbols. `extern void *fnptr_Grid.scale.static;`
-/// is not accepted by any C compiler, so the dotted spelling has to be
-/// encoded -- and `src/ext_build.rs`'s rebind-dedup comment records that a
-/// *duplicate* export name makes clang reject the generated `.inc`
-/// outright, so the encoding has to be injective as well as legal.
+/// **This is an explicit conversion, not an implicit boundary crossing.**
+/// The distinction [`EXT_OBJ_TO_FLOAT_SYMBOL`] records applies unchanged:
+/// D-244 rule 7 closes the type boundary at the *thunk export seam*, and
+/// `int(o)` in user source names its destination type, so running CPython's
+/// own `PyNumber_Long` protocol is what the author asked for. It is
+/// therefore *not* `pycc_ext_unpack_int_at`, whose `PyBool_Check` and
+/// `PyLong_Check` guards exist precisely because that seam is closed.
 ///
-/// The encoding: a name with no `.` is returned unchanged; otherwise the
-/// result is `"0m"` followed by, for each `.`-separated segment in order,
-/// the segment's byte length in decimal, then `"_"`, then the segment. So
-/// `f` stays `f` and `Grid.scale.static` becomes `0m4_Grid5_scale6_static`.
+/// **Overflow.** The encode is fused into the helper, exactly as
+/// [`EXT_OBJ_LEN_SYMBOL`]'s is and for its reason (one failure edge rather
+/// than two). A value outside pycc's inline-integer range
+/// `[-2**62, 2**62-1]` raises `OverflowError` citing #1040 -- there is no
+/// bigint path across this boundary.
 ///
-/// **It is injective, and that is argued rather than fixture-tested.**
-/// Every dot-free name reaching this function is either a Python identifier
-/// or carries the compiler-generated `0gen_` prefix
-/// (`pycc_types::monomorphize`), and neither can begin with `0m` -- the
-/// premise is stated this way rather than as "Python identifiers cannot
-/// begin with a digit", because a dot-free name like `0gen_make__T_int` is
-/// a real identity-branch input that *does* begin with a digit. So the
-/// identity branch's outputs never collide with a `0m...` output. Within
-/// the `0m` branch the encoding is length-prefixed and therefore uniquely
-/// decodable, so two distinct dotted names cannot mangle alike. `.` -> `_`
-/// and `.` -> `__` both fail this argument, the second one silently: a
-/// module-level `def Grid__scale__static` would collide with
-/// `Grid.scale.static`.
+/// **Ownership.** The helper releases the `PyNumber_Long` temporary on
+/// *every* exit, including the `OverflowError` path that still holds it, so
+/// this operation adds nothing to the #1092 leak-only set.
 ///
-/// Every use site prefixes the result (`fnptr_`, `fnname_`,
-/// `pycc_ext_thunk_`, `pycc_ext_wrap_`), so the leading digit never starts
-/// a C identifier. Because the dot-free case is the identity, every symbol
-/// the compiler emitted before methods became exportable is byte-identical.
-///
-/// This is the one canonical implementation: `pycc::ext_build` calls it
-/// rather than reimplementing it, exactly as it already calls
-/// [`ext_thunk_symbol`].
-#[must_use]
-pub fn mangle_ext_name(name: &str) -> String {
-    if !name.contains('.') {
-        return name.to_string();
-    }
-    let mut out = String::from("0m");
-    for segment in name.split('.') {
-        out.push_str(&segment.len().to_string());
-        out.push('_');
-        out.push_str(segment);
-    }
-    out
-}
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_TO_INT_SYMBOL: &str = "pycc_ext_obj_to_int";
 
-/// The external symbol `name`'s scalar-only `ext` export thunk is emitted
-/// under.
+/// The fixed C shim's `str(o)` conversion helper (Part 4 of #1026, PR 4b of
+/// #1083): it takes a borrowed `PyObject *` and a `void **` out-parameter,
+/// writes a pycc `PyStrObj *` at refcount 1 and returns `0`, or returns `-1`
+/// with the CPython exception already set.
 ///
-/// `name` is mangled through [`mangle_ext_name`] first, so a method's thunk
-/// is a legal C identifier the generated `extern` declaration can name. The
-/// mangling is the identity for a dot-free name, so every module-level
-/// function's thunk symbol is unchanged.
-#[must_use]
-pub fn ext_thunk_symbol(name: &str) -> String {
-    format!("{EXT_THUNK_PREFIX}{}", mangle_ext_name(name))
-}
+/// **This is an explicit conversion, not an implicit boundary crossing.**
+/// See [`EXT_OBJ_TO_FLOAT_SYMBOL`]; `PyObject_Str` *is* `str()`, so no other
+/// answer is defensible. Unlike `pycc_ext_unpack_str` it does not
+/// `PyUnicode_Check` its operand -- refusing a non-`str` is exactly what an
+/// explicit conversion must not do.
+///
+/// **Ownership.** The handle written through the out-parameter is produced
+/// by `pycc_rt_str_from_literal`, the same call a `str` literal's own
+/// emission uses, and arrives as compiled code's own reference -- so this
+/// crate needs no new rule for it. On the C side the copy must complete
+/// *before* the `PyObject_Str` result is released, because
+/// `PyUnicode_AsUTF8AndSize` points into that result's buffer; the helper's
+/// own comment records why that ordering is load-bearing. The temporary is
+/// released on every exit, so nothing joins the #1092 leak-only set.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_TO_STR_SYMBOL: &str = "pycc_ext_obj_to_str";
 
-/// Whether `name` is a name D-244 rule 1 can export at all, disregarding
-/// its signature.
+/// The fixed C shim's f-string interpolation helper (#1340): it takes a
+/// borrowed `PyObject *` and a `void **` out-parameter, writes a pycc
+/// `PyStrObj *` at refcount 1 and returns `0`, or returns `-1` with the
+/// CPython exception already set.
 ///
-/// The tests are exactly `pycc::ext_build::collect_exports`' own *lexical*
-/// verdict, and this is their one canonical home so the two sides of the
-/// seam cannot drift: a wrapper generated for a name codegen declined to
-/// emit a thunk for links cleanly and crashes on the first call.
-/// `src/ext_build_tests/exports.rs` carries a test pinning the two equal
-/// over a shared table of names, because the drift is otherwise silent --
-/// `wrapper_for` picks the thunk `extern` or the `fnptr_` `extern` from
-/// [`ext_thunk_required`], so a disagreement emits the wrong C declaration
-/// for a `tuple`-carrying method.
+/// [`EXT_OBJ_TO_STR_SYMBOL`]'s contract, ownership and copy-before-release
+/// ordering exactly, with `PyObject_Format(o, NULL)` in place of
+/// `PyObject_Str(o)`: CPython renders `f"{value}"` as `format(value, '')`,
+/// which reaches the value's `__format__`, not its `__str__`. `print(o)`
+/// writes `str(o)` and so reaches [`EXT_OBJ_TO_STR_SYMBOL`] instead.
 ///
-/// Two name classes are answered `true` beyond that lexical verdict: the
-/// PEP 562 module hooks `__getattr__` and `__dir__` (#1467), which the
-/// driver admits through `is_module_hook`, and `<Class>.<slot dunder>`
-/// (#1427), which it admits through `is_slot_dunder_method`, neither through
-/// `classify_export_name`. So the parity test compares this function with
-/// `classify_export_name(name).is_some() || is_module_hook(name) ||
-/// is_slot_dunder_method(name)` -- the last for #1427's comparison and
-/// `__hash__` slots, admitted for any non-empty class segment.
-///
-/// The public-name test is D-038's predicate, spelled out rather than
-/// delegated to `pycc_hir::is_public_name` because this crate deliberately
-/// does not depend on `pycc_hir` -- it sees only `pycc_mir`'s re-export of
-/// `Ty`. The body there is `!name.starts_with('_')` and nothing else; if it
-/// ever grows a case, this copy must grow with it.
-///
-/// **Dotted names are no longer refused wholesale.** A method reaches MIR
-/// under `<Class>.<method>` and the suffixed spellings
-/// `<Class>.<method>.static`, `<Class>.<method>.classmethod` and
-/// `<Class>.<property>.setter` (`pycc_hir::class`'s mangling). This admits
-/// the `.static` and `.classmethod` spellings and -- since #1145 -- the
-/// bare `<Class>.<method>` one, with every segment public.
-/// `<Class>.<property>.setter` stays refused: a `@property` is attribute
-/// syntax on the host side, never a method table entry.
-///
-/// The bare spelling covers the three `MethodKind`s `Regular`,
-/// `PropertyGetter` and `AbstractMethod` at once, and nothing here can tell
-/// them apart. Admitting it is deliberate rather than an approximation:
-/// widening this mirror is what makes it a **superset** of the driver's
-/// admitted set again, and a superset is the safe direction. The driver
-/// narrows the bare spelling back down with filters that read
-/// `HirModule::class_defs`; leaving this side refusing it would instead
-/// make `ext_thunk_required` answer `false` for a `tuple`-carrying instance
-/// method, so the wrapper would emit the `fnptr_` cast form -- measured to
-/// fault (SIGBUS) on aarch64-apple-darwin for an out-pointer signature.
-///
-/// **This verdict is purely lexical, and must stay so.** The function
-/// receives a bare `&str` and this crate cannot see `pycc_hir`, so a
-/// verdict that consulted `HirModule::class_defs` would have no
-/// mirror-comparable form here and the parity test would stop being
-/// well-formed. The driver layers its exception-class exclusion *on top of*
-/// this verdict rather than inside it, which makes this mirror a
-/// **superset** of the driver's admitted set: at worst a thunk is emitted
-/// for a name no wrapper calls, which is dead code -- never the link error
-/// the drift above would be.
-///
-/// A monomorphized generic specialization carries the `0gen_` prefix and
-/// has no `fnptr_` global to dispatch through, so it stays refused; that
-/// test is applied to the whole name *before* the split and takes
-/// precedence, as cheap defense in depth. It is not a live hazard: the real
-/// specialization shapes put the substitution suffix last
-/// (`0gen_<Class>.<method>__<P>_<C>`), so a `0gen_` name's last segment is
-/// never `static`.
-///
-/// A receiver-exact copy of an inherited body (#1337, D-254) needs no case
-/// of its own: a primary copy is spelled exactly as the receiver's own
-/// definition would be (`C.m`, `C.k.classmethod`) and is judged as one, and
-/// a `super()`-target copy (`C.m.0super_D`, plus a kind suffix for a setter
-/// or classmethod) carries a third segment that is
-/// neither `static` nor `classmethod`, so it is refused here and by the
-/// driver alike -- it is only ever called from another copy, never hosted.
-#[must_use]
-pub fn is_ext_exportable_name(name: &str) -> bool {
-    if name.starts_with("0gen_") {
-        return false;
-    }
-    // #1467: the two PEP 562 module hooks, which the driver publishes from
-    // the entry module although D-038's predicate refuses every dunder. The
-    // driver admits only the entry module's own `def`, which this lexical
-    // mirror cannot see, so a helper module's hook gets a dead thunk -- the
-    // safe superset direction described above.
-    if name == "__getattr__" || name == "__dir__" {
-        return true;
-    }
-    if is_slot_dunder_method_name(name) {
-        return true;
-    }
-    let mut segments = name.split('.');
-    // `str::split` always yields at least one segment, so the fallback is
-    // unreachable rather than a second refusal path; an empty first segment
-    // is refused on the next line either way, which is what the driver's
-    // mirror does with its own empty-segment guard.
-    let first = segments.next().unwrap_or("");
-    if first.starts_with('_') || first.is_empty() {
-        return false;
-    }
-    let Some(second) = segments.next() else {
-        // A dot-free name: a module-level function, admitted by D-038's
-        // predicate alone.
-        return true;
-    };
-    if second.starts_with('_') || second.is_empty() {
-        return false;
-    }
-    match segments.next() {
-        // `<Class>.<method>` -- `Regular`, `PropertyGetter` or
-        // `AbstractMethod`, indistinguishable here and all admitted as the
-        // superset the driver narrows (#1145).
-        None => true,
-        Some(kind) => {
-            // The only four-segment name is a `super()`-target copy of a
-            // setter or classmethod (`C.k.0super_D.classmethod`, D-254),
-            // which is never hosted: a class nested in a class or a
-            // function is refused by `pycc_hir` (`stmt.rs`, `class.rs`), so
-            // no `A.B.method` name exists. Refusing every fourth segment is
-            // the fail-closed reading.
-            segments.next().is_none() && (kind == "static" || kind == "classmethod")
-        }
-    }
-}
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_FORMAT_SYMBOL: &str = "pycc_ext_obj_format";
 
-/// The special methods the `--ext` driver installs as a type slot rather
-/// than a `PyMethodDef` row (#1427): the six rich comparisons and
-/// `__hash__`. Mirrors `src/ext_build/richcompare.rs`'s `SLOT_DUNDERS`;
-/// the parity test in `src/ext_build_tests/exports.rs` keeps the two equal.
-const SLOT_DUNDERS: [&str; 7] = [
-    "__lt__", "__le__", "__eq__", "__ne__", "__gt__", "__ge__", "__hash__",
-];
+/// The fixed C shim's narrowed-read helpers (#1476, Part 3 of #1387): the
+/// read of an `object` name an `isinstance(o, int|float|bool|str)` guard
+/// narrowed (`pycc_mir::MirExpr::ObjectUnbox`). Each takes a borrowed
+/// `PyObject *` and an out-parameter of the native ABI type (`long long`
+/// D-141 word, `double`, one-byte `char`, `PyStrObj *`), writes the value
+/// and returns `0`, or returns `-1` with the CPython exception set.
+///
+/// The read is an implicit crossing, so each helper keeps D-244 rule 7's
+/// closed type check rather than CPython's conversion protocol: a `bool`
+/// under an `int` guard keeps its D-141 marker word, an `int` outside the
+/// inline range raises `OverflowError` citing #1040, and a `str` subclass
+/// is copied into a plain pycc `str` at refcount 1 (the ownership
+/// [`EXT_OBJ_TO_STR_SYMBOL`] documents). No CPython reference is taken.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_UNBOX_INT_SYMBOL: &str = "pycc_ext_obj_unbox_int";
+/// See [`EXT_OBJ_UNBOX_INT_SYMBOL`].
+pub const EXT_OBJ_UNBOX_FLOAT_SYMBOL: &str = "pycc_ext_obj_unbox_float";
+/// See [`EXT_OBJ_UNBOX_INT_SYMBOL`].
+pub const EXT_OBJ_UNBOX_BOOL_SYMBOL: &str = "pycc_ext_obj_unbox_bool";
+/// See [`EXT_OBJ_UNBOX_INT_SYMBOL`].
+pub const EXT_OBJ_UNBOX_STR_SYMBOL: &str = "pycc_ext_obj_unbox_str";
+/// The narrowed read under `isinstance(o, C)` for a regular class `C`
+/// compiled in this module (#1476): a borrowed `PyObject *`, the class's
+/// NUL-terminated name and a `void **` out-parameter; writes the compiled
+/// instance the carrier holds, borrowed (compiled instances are never
+/// freed), and returns `0`, or returns `-1` with a `TypeError` set for an
+/// uninitialized carrier or an object that is not a carrier of this module.
+pub const EXT_OBJ_UNBOX_INSTANCE_SYMBOL: &str = "pycc_ext_obj_unbox_instance";
 
-/// #1427: whether `name` is `<Class>.<slot dunder>` -- a comparison or
-/// `__hash__` method the driver wraps for a `tp_richcompare`/`tp_hash`
-/// slot. The class segment may be private: an unpublished class whose
-/// instance crosses gets a carrier type carrying the same slots, so its
-/// wrapper needs the thunk exactly as a published one's does. A `0gen_`
-/// name is refused by the caller before this runs.
-fn is_slot_dunder_method_name(name: &str) -> bool {
-    let mut segments = name.split('.');
-    let class = segments.next().unwrap_or("");
-    let Some(method) = segments.next() else {
-        return false;
-    };
-    !class.is_empty() && segments.next().is_none() && SLOT_DUNDERS.contains(&method)
-}
+/// The fixed C shim's fixed-arity all-`float` tuple unpack helper (Part 4
+/// of #1026, PR 4c of #1083): it takes a borrowed `PyObject *`, the
+/// declared arity and a `double *` out-array, writes that many converted
+/// doubles and returns `0`, or returns `-1` with the CPython exception
+/// already set.
+///
+/// **Strict container, converting elements.** The helper checks
+/// `PyTuple_Check` with an *exact*-arity test and then converts each item
+/// with `PyNumber_Float`. The two halves answer two different questions:
+/// D-115/D-116 hold a tuple as a by-value LLVM struct of fixed width, so
+/// there is no shape a `list`, a generator or a differently-sized tuple
+/// could be written into -- while the elements' `float` is a type the
+/// author wrote in the annotation, which makes running CPython's own
+/// conversion protocol on them the same explicit-conversion case
+/// [`EXT_OBJ_TO_FLOAT_SYMBOL`] records. It is therefore *not*
+/// `pycc_ext_unpack_float_at`, whose `PyFloat_Check` refusal exists because
+/// the thunk export seam is closed.
+///
+/// **The arity is a parameter, never a constant.** The admission rule is
+/// any fixed arity with every element `float`, so neither this declaration
+/// nor the shim may hard-code the three of `tuple[float, float, float]`.
+///
+/// **Ownership.** Each `PyNumber_Float` temporary is released inside the
+/// same loop iteration that produced it, so the failing exit holds nothing
+/// and this operation adds nothing to the #1092 leak-only set -- Part 4's
+/// property, unchanged.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL: &str = "pycc_ext_obj_unpack_float_tuple";
+
+/// The fixed C shim's tuple-unpacking helper (Part 1 of #891): it takes a
+/// borrowed `PyObject *` and the target count `n`, and returns a *new*
+/// reference to a `tuple` of exactly `n` items taken from the object by
+/// CPython's own unpack protocol, or `NULL` with CPython's own exception
+/// set -- `TypeError` for a non-iterable, `ValueError` for too many or too
+/// few values. The tuple is bound to the unpacking temporary: leaked on the
+/// #1092 rule for a bound value in a function body, owned and released on
+/// rebind by a module-global temporary (Part 1 of #1499).
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_UNPACK_SYMBOL: &str = "pycc_ext_obj_unpack";
+
+mod naming;
+pub use naming::{ext_thunk_symbol, is_ext_exportable_name, mangle_ext_name};
 
 /// The boundary slots a value of type `ty` occupies when it crosses the
 /// `ext` seam: a `tuple`'s elements, in order, or the type itself.
