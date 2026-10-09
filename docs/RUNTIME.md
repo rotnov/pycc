@@ -2863,8 +2863,9 @@ every consuming operation other than a further attribute load, a method call,
 a subscript load, `for` iteration, `len`, a truth test, a module-level binding
 (#1325), a `float`/`bool`/`int`/`str` conversion or printing and f-string
 interpolation (#1340, which hand CPython's text back as a pycc `str`) is refused with `I0404`. Since [#1397](https://github.com/rotnov/pycc/issues/1397) the `ext` export boundary carries an `object`
-parameter or return (D-258 rule 5); the parameter's reference is likewise
-never released, and the returned object is handed to the host as a fresh
+parameter or return (D-258 rule 5); the parameter's reference is borrowed
+from the calling host, which owns it, so compiled code never releases it, as
+CPython's callee does not, and the returned object is handed to the host as a fresh
 reference. A method call's bound or passed-on result leaks on exactly the same
 terms and is trip-count-linear in exactly the same way. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
