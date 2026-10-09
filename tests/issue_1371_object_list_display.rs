@@ -206,11 +206,12 @@ fn a_raising_element_propagates_from_the_display() {
 /// *mortal* `object()` held by the module across 100 calls of each
 /// function:
 ///
-/// - `keep` binds `[probe, probe]` and drops it: a bound list is still
-///   leaked under #1092 (Part 1 releases only unbound temporaries), so each
-///   call adds exactly the two references
-///   the list holds -- one more would be a packed element leaked twice, one
-///   fewer a stolen reference released.
+/// - `keep` binds `[probe, probe]` and drops it: since Part 2 of #1499
+///   ([#1502](https://github.com/rotnov/pycc/issues/1502)) the local owns
+///   the list and releases it at scope exit, so the count is unchanged, as
+///   in CPython -- a packed element leaked twice would raise it, a stolen
+///   reference released twice would lower it or crash. (Before #1502 the
+///   bound list leaked with the two references it holds.)
 /// - `fail` packs `probe`, then an `int` outside the packer's range, then
 ///   `probe` again: the packer raises `OverflowError` (the documented
 ///   divergence, `docs/RUNTIME.md`), and the helper releases both packed
@@ -252,7 +253,7 @@ fn every_packed_element_is_consumed_exactly_once() {
     assert_ok(&run);
     assert_eq!(
         stdout_of(&run),
-        "keep ok 200\nfail OverflowError 0\nzdiv ZeroDivisionError 0\n"
+        "keep ok 0\nfail OverflowError 0\nzdiv ZeroDivisionError 0\n"
     );
 }
 

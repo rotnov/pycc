@@ -13,10 +13,11 @@
 //! since Part 2 of #1387 the `return` path boxes every native returned value
 //! -- the `None` literal included -- through `object_box`, which turns the
 //! literal into [`crate::foreign_pack::none_pointer`]'s borrowed `Py_None`.
-//! Borrowed is the leak-only ownership model's convention for a compiled
-//! body (`docs/RUNTIME.md`): the export wrapper's `pycc_ext_pack_object`
-//! takes the new reference the host receives, exactly as it does for a
-//! borrowed object parameter returned by name.
+//! Since #1502 an `object` return is a new reference the caller owns, so
+//! the `return` path retains that borrowed `Py_None`
+//! (`object_frame::owned_return`), exactly as it retains an object
+//! parameter returned by name; the export wrapper's `pycc_ext_pack_object`
+//! hands that reference to the host unchanged.
 
 use super::*;
 

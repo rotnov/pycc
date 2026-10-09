@@ -302,8 +302,8 @@ fn a_nested_from_import_owns_its_binding() {
 }
 
 /// A function's own `x` shadows the module global `x` with a frame slot,
-/// which keeps the leak-only, borrowed-pointer rule until Part 2: neither a
-/// produced nor a borrowed store retains or releases anything.
+/// which follows the frame rule (`object_frame.rs`, Part 2): never the
+/// global's owned bit or activation gate.
 #[test]
 fn a_function_local_of_a_global_name_keeps_the_frame_rule() {
     let f = MirItem::Function {
@@ -322,16 +322,17 @@ fn a_function_local_of_a_global_name_keeps_the_frame_rule() {
     items.extend(top(vec![bind("x", attr("a"))]));
     let (_, irs) = compile("slot_shadow", items, &["pyfn_f", "pyfn_g"]);
     for ir in &irs {
-        assert_eq!(ir.matches(RETAIN).count(), 0, "{ir}");
-        assert_eq!(ir.matches(RELEASE).count(), 0, "{ir}");
         assert!(!ir.contains("@pyglobal_x"), "{ir}");
+        assert!(!ir.contains("@pyglobal.owned.x"), "{ir}");
+        assert!(!ir.contains("rebind_may_release"), "{ir}");
         assert!(!ir.contains("global_release_old"), "{ir}");
     }
 }
 
 /// A compiled-instance attribute store of a borrowed object retains it,
 /// because the global it was read from may now release it; a produced
-/// value is stored as it is. Neither releases the replaced word (Part 4).
+/// value is stored as it is. Neither releases the replaced word (Part 4):
+/// the one release is the epilogue's release of the parameter `v`.
 #[test]
 fn an_attribute_store_retains_a_borrowed_object_and_releases_nothing() {
     let instance = Ty::Instance(Box::new("C".to_string()));
@@ -355,7 +356,11 @@ fn an_attribute_store_retains_a_borrowed_object_and_releases_nothing() {
     let (_, irs) = compile("slot_attr_set", vec![import_copy(), f], &["pyfn_f"]);
     let ir = &irs[0];
     assert_eq!(ir.matches(RETAIN).count(), 1, "{ir}");
-    assert_eq!(ir.matches(RELEASE).count(), 0, "{ir}");
+    assert_eq!(ir.matches(RELEASE).count(), 1, "{ir}");
+    assert!(
+        ir.contains("call void @pycc_ext_obj_release(ptr %object_epilogue_live"),
+        "{ir}"
+    );
     let retain = at(ir, RETAIN);
     let first_set = at(ir, "@pycc_rt_instance_set_slot(");
     assert!(retain < first_set, "{ir}");

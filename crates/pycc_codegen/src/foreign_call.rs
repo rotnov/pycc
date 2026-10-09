@@ -191,7 +191,9 @@ pub(super) struct ForeignIterLoop<'ctx> {
     /// target owns it and releases it on the next trip (Part 1 of #1499,
     /// `object_slot::store_new_reference`). `pycc_types` admits an object
     /// `for` statement only in a module body, so its target is always a
-    /// module global; `store_new_reference`'s frame-slot arm is defensive.
+    /// module global; `store_new_reference`'s frame-slot arm is defensive
+    /// and unreachable, and #1363 must bind a function-body target through
+    /// `object_frame::assign` instead.
     /// A comprehension shares this struct and stores `item` into a scoped
     /// slot that does not own it, so it still leaks one item per trip
     /// (#1499).

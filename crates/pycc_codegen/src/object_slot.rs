@@ -48,13 +48,13 @@
 //! `init_x`'s value slot, and `Module::add_global` silently renames a
 //! duplicate, so a name lookup can return the wrong global.
 //!
-//! **Frame slots are untouched.** A function body's locals, parameters and
-//! returns keep #1092's leak-only, borrowed-pointer rule until Part 2
-//! ([#1502](https://github.com/rotnov/pycc/issues/1502)): a parameter
-//! rebind would otherwise release a reference its caller still owns. A
-//! function-local name never resolves to a global's slot, because a
-//! function cannot assign a global (`global` is refused with `C0001`), so a
-//! local target always gets its own alloca. Compiled-instance `object`
+//! **Frame slots** own their reference too since Part 2
+//! ([#1502](https://github.com/rotnov/pycc/issues/1502)), through
+//! `object_frame.rs` rather than this module: a frame slot is private to
+//! one activation, so it needs neither the owned bit nor the activation
+//! gate. A function-local name never resolves to a global's slot, because
+//! a function cannot assign a global (`global` is refused with `C0001`), so
+//! a local target always gets its own alloca. Compiled-instance `object`
 //! attributes retain a borrowed source ([`retain_if_borrowed`] in the
 //! `MirStmt::AttrSet` arm) but never release the replaced word; that slot
 //! class is Part 4 ([#1504](https://github.com/rotnov/pycc/issues/1504)).
@@ -70,9 +70,17 @@ use std::cell::RefCell;
 /// value pointer. Empty until [`declare_owned_bits`] fills it, which is also
 /// what a hand-built test fixture sees: every store then keeps the
 /// pass-through it had before this part.
+///
+/// It also records every function-frame `object` slot (Part 2 of #1499,
+/// `object_frame.rs`), keyed by the slot's own pointer, and whether frame
+/// slots own their reference at all: only in a module compiled for the
+/// CPython host (an `--ext` artifact or an embedded executable), which links
+/// the retain and release shims (`object_frame::enable`).
 #[derive(Default)]
 pub(super) struct ModuleObjectSlots<'ctx> {
     owned: RefCell<HashMap<PointerValue<'ctx>, PointerValue<'ctx>>>,
+    pub(super) frame: RefCell<std::collections::HashSet<PointerValue<'ctx>>>,
+    pub(super) frame_owned: std::cell::Cell<bool>,
 }
 
 /// Declares the owned bit of every `object`-typed global in `globals`,
@@ -113,8 +121,9 @@ pub(super) fn declare_owned_bits<'ctx>(
 /// `None` for every other slot -- a function local, a parameter, a
 /// non-`object` global.
 ///
-/// This predicate becomes obsolete in Part 2 (#1502), when every `object`
-/// slot owns its reference.
+/// Part 2 (#1502) gave frame slots their own, ungated ownership
+/// (`object_frame.rs`); a module global keeps this bit, because a frame of
+/// another activation may still hold its old value borrowed.
 ///
 /// SAFETY: a rebind may release the old value only when no frame can still
 /// use it borrowed. [`store_owned`] therefore releases only when the shim's
@@ -201,11 +210,22 @@ pub(super) fn retain_if_borrowed<'ctx>(
     pointer: PointerValue<'ctx>,
 ) -> PointerValue<'ctx> {
     if !is_owned(value) {
-        builder
-            .build_call(retain_fn(context, module), &[pointer.into()], "obj_retain")
-            .expect("build_call should not fail for pycc_ext_obj_retain");
+        retain(context, builder, module, pointer);
     }
     pointer
+}
+
+/// Emits `pycc_ext_obj_retain(pointer)` (`Py_XINCREF`) at the builder's
+/// position.
+pub(super) fn retain<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    pointer: PointerValue<'ctx>,
+) {
+    builder
+        .build_call(retain_fn(context, module), &[pointer.into()], "obj_retain")
+        .expect("build_call should not fail for pycc_ext_obj_retain");
 }
 
 /// Stores `new`, an owned reference, into the module-global `object` slot
@@ -327,8 +347,14 @@ pub(super) fn assign<'ctx>(
 /// Binds `new`, a new reference -- a `for x in <object>:` item, or a
 /// foreign import's result -- to `slot`: moved in through [`store_owned`]
 /// when `slot` is a module-global `object` slot, and otherwise a plain
-/// store that raises the `initialized` flag, the frame-slot rule until
-/// Part 2.
+/// store that raises the `initialized` flag.
+///
+/// The plain store never releases the slot's previous value, so it is
+/// leak-only, never a use-after-free. It has no live frame-slot caller: an
+/// object `for` (`I0404`) and an `import` (`C0001`) are both refused inside
+/// a function body. Whichever change admits one there (#1363 for the loop)
+/// must route the frame slot through `object_frame`'s release-after-store
+/// instead.
 pub(super) fn store_new_reference<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,

@@ -347,10 +347,11 @@ fn getter_symbol(class: &str, name: &str) -> String {
 }
 
 /// The packing statements for a slot word of type `ty`, already read into
-/// the local `word`. The slot keeps its own reference, so the two packers
+/// the local `word`. The slot keeps its own reference, so the three packers
 /// that discharge one -- `int` for a heap bigint (D-180 rule 6), `str` for
-/// its `PyStrObj` -- are handed a reference taken here first; the object
-/// packer takes its own new reference.
+/// its `PyStrObj`, and since Part 2 of #1499 (#1502) the object packer,
+/// which steals the reference a compiled `object` return hands it -- are
+/// handed a reference taken here first.
 fn pack_slot_word(class: &str, name: &str, ty: &Ty) -> String {
     match ty {
         Ty::Int => format!(
@@ -373,7 +374,9 @@ fn pack_slot_word(class: &str, name: &str, ty: &Ty) -> String {
         }
         // `collect_getsets` admits exactly the `carried` types, so the
         // remaining one is the opaque object.
-        _ => "    return pycc_ext_pack_object((void *)(intptr_t)word);\n".to_string(),
+        _ => "    Py_XINCREF((PyObject *)(intptr_t)word);\n    \
+              return pycc_ext_pack_object((void *)(intptr_t)word);\n"
+            .to_string(),
     }
 }
 
