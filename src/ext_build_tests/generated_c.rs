@@ -2797,8 +2797,10 @@ fn a_source_level_default_does_not_reach_the_generated_wrapper() {
 /// D-258 rule 5 (#1397): an `Any`/`object`/container-of-objects signature
 /// lowered from real source by the `--ext` frontend crosses as the
 /// `PyObject *` itself -- one `void *` slot, unpacked by
-/// `pycc_ext_unpack_object` and packed by `pycc_ext_pack_object` -- and the
-/// shim's two helpers take a new reference in both directions. Not
+/// `pycc_ext_unpack_object` and packed by `pycc_ext_pack_object`. The
+/// unpacker hands the parameter slot a new reference (released by the
+/// wrapper's bail path when a later argument fails, #1502) and the packer
+/// steals the native result, which a compiled function returns owned. Not
 /// `#[ignore]`d, so the lines reached only through the hosted tests in
 /// `tests/issue_1397_ext_any_object.rs` are also executed here.
 #[test]
@@ -2828,6 +2830,7 @@ fn an_object_signature_crosses_the_boundary_as_the_pyobject_itself() {
         "pycc_ext_unpack_object(args[1], \"ident\", 1, &a1)",
         "pycc_ext_unpack_object(args[0], \"keep\", 0, &a0)",
         "return pycc_ext_activation_exit(pycc_ext_pack_object(result));",
+        "        Py_DECREF((PyObject *)a0);\n",
     ] {
         assert!(inc.contains(needle), "{needle}\n{inc}");
     }
@@ -2839,7 +2842,7 @@ fn an_object_signature_crosses_the_boundary_as_the_pyobject_itself() {
         ),
         (
             "static PyObject *pycc_ext_pack_object(void *result)",
-            "return Py_NewRef((PyObject *)result);",
+            "return (PyObject *)result;",
         ),
     ] {
         let body = &shim[shim.find(signature).expect(signature)..];

@@ -83,6 +83,11 @@ pub(crate) enum SlotCleanup {
     /// wrapper must release on every exit after acquisition -- including
     /// the one where the compiled call returned normally.
     BufferRelease,
+    /// The new `PyObject *` reference `pycc_ext_unpack_object` produced
+    /// (Part 2 of #1499, #1502). Like `StrDecref`, the compiled function's
+    /// parameter slot takes it over once the call is made, so the wrapper
+    /// owes it only on a later argument's bail path.
+    ObjectRelease,
 }
 
 impl BoundaryCarrier {
@@ -123,6 +128,7 @@ impl BoundaryCarrier {
     pub(crate) fn cleanup(&self) -> Option<SlotCleanup> {
         match self {
             BoundaryCarrier::Scalar(_, "str") => Some(SlotCleanup::StrDecref),
+            BoundaryCarrier::Scalar(_, "object") => Some(SlotCleanup::ObjectRelease),
             // Every numeric scalar is a copied machine word, and a `tuple`'s
             // elements are copied out by value, so neither owes anything.
             // Part 1 of #1447: an instance is never freed (D-107, D-154) and
@@ -198,9 +204,9 @@ pub(crate) fn boundary_carrier(ty: &Ty) -> Option<BoundaryCarrier> {
         // amendment) -- crosses as the `PyObject *` itself, which is what
         // `ty_to_basic_type` gives `Ty::Object`.
         // `pycc_ext_unpack_object` admits any object and hands the compiled
-        // body a strong reference it never releases (RUNTIME #1092's
-        // leak-only rule), and `pycc_ext_pack_object` returns a new
-        // reference to the very pointer the body handed back, so identity
+        // body a strong reference its parameter slot owns and releases
+        // (Part 2 of #1499, #1502), and `pycc_ext_pack_object` steals the
+        // owned reference the body returns -- the very pointer, so identity
         // survives the round trip (`f(x) is x`).
         Ty::Object => Some(BoundaryCarrier::Scalar("void *", "object")),
         Ty::Tuple(elements) => elements

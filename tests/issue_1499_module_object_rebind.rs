@@ -12,10 +12,10 @@
 //! counts, so a leak that grows with the trip count cannot hide behind a
 //! constant.
 //!
-//! **What stays leaked, pinned as such.** A function-local binding keeps
-//! #1092's leak-only rule until Part 2 (#1502); the positive control
-//! `local_fresh` leaks one object per call, which also shows the probe sees
-//! a leak. A value an *earlier* module exec stored is never released (a
+//! **What stays leaked, pinned as such.** A function-local binding owns its
+//! reference since Part 2 (#1502), so `local_fresh` releases its object on
+//! every call, exactly as CPython does (`tests/issue_1502_frame_object_ownership.rs`
+//! carries the frame cases). A value an *earlier* module exec stored is never released (a
 //! failed import retried, a re-import after `del sys.modules[name]`), so
 //! each such exec leaks at most the one value it left in each slot.
 //!
@@ -313,8 +313,8 @@ fn expected_bindings(trips: usize) -> String {
 }
 
 /// The module-level bindings release every rebound value exactly once, at
-/// two trip counts, exactly as CPython does; a function-local binding
-/// still leaks one object per call (Part 2, #1502).
+/// two trip counts, exactly as CPython does; so does a function-local
+/// binding since Part 2 (#1502).
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn a_module_global_rebind_releases_the_previous_value_as_cpython_does() {
@@ -348,7 +348,7 @@ fn a_module_global_rebind_releases_the_previous_value_as_cpython_does() {
          report('local', s.LIVE - live)\n"
     );
     let module = &modules[0].0;
-    assert_eq!(python(&dir, &[], &[], module, &leak), "local 50\n");
+    assert_eq!(python(&dir, &[], &[], module, &leak), "local 0\n");
     assert_eq!(
         python(&dir, &[], &[], &format!("{module}_py"), &leak),
         "local 0\n"

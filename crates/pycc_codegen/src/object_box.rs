@@ -29,7 +29,9 @@
 //! whatever slot receives it: a module-global `object` slot owns it and
 //! releases it on rebind (Part 1 of #1499, `object_slot.rs`, which treats a
 //! boxed `None` -- CPython's borrowed `Py_None` -- as borrowed and retains
-//! it), and every other destination still never releases it (#1092's
+//! it); a frame slot, a compiled callee's parameter and a compiled return
+//! own it the same way (Part 2, #1502, `object_frame.rs`, with the same
+//! `None` rule); every other destination still never releases it (#1092's
 //! leak-only rule, `docs/RUNTIME.md`). A packer `NULL` --
 //! `OverflowError` for a bigint outside D-141's inline range (#1040) --
 //! takes the foreign failure edge at once ([`foreign_fail::route_null`]).

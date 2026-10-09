@@ -69,6 +69,7 @@ mod frozenset;
 mod hash;
 mod object_box;
 mod object_comprehension;
+mod object_frame;
 mod object_release;
 mod object_return;
 mod object_slot;
@@ -4600,25 +4601,27 @@ fn build_call_to_with_leading_args<'ctx>(
     // evaluating this loop's own argument, and this loop's earlier
     // pending entries must stay untouched by that nested truncation.
     let mark = rt.exceptions.pending_int_releases.borrow().len();
+    // Part 2 of #1499 (#1502): every `object` argument is an owned
+    // reference the callee's parameter slot takes over (caller-incref,
+    // `object_frame.rs`), held across the later arguments' evaluation and
+    // retired without a release just before the call.
+    let mut object_holds: Vec<object_release::Held<'ctx>> = Vec::new();
     let marshalled_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = args
         .iter()
         .zip(&user_function.param_tys[leading_args.len()..])
         .map(|(a, param_ty)| {
             // Part 2 of #1387: a native argument to an `object` parameter
             // is boxed (`object_box`). The packer borrows the value and the
-            // box is a new `PyObject *` reference, so none of the
+            // box is a new `PyObject *` reference (a boxed `None` excepted,
+            // which `object_frame::owned_argument` retains), so none of the
             // `str`/`int` ownership steps below applies to it.
             if object_box::boxes_into(a, param_ty) {
-                return object_box::emit_boxed(
-                    context,
-                    builder,
-                    module,
-                    rt,
-                    user_functions,
-                    locals,
-                    a,
-                )
-                .into();
+                let pointer =
+                    object_box::emit_boxed(context, builder, module, rt, user_functions, locals, a);
+                object_holds.push(object_frame::owned_argument(
+                    context, builder, module, rt, a, pointer, true,
+                ));
+                return pointer.into();
             }
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, a);
             let scalar = incref_if_str_duplicate(builder, rt, a, scalar);
@@ -4687,17 +4690,22 @@ fn build_call_to_with_leading_args<'ctx>(
                 // further conversion, only the same `Into` `BasicMetadataValueEnum`
                 // has for any `StructValue`.
                 Scalar::Optional(v) => v.into(),
-                // Pass-through (Part 1 of #1333): a `Ty::Object` argument
-                // reaches an unannotated private helper's solver-inferred
-                // `object` parameter or, since Part 1 of #1367, a parameter
+                // A `Ty::Object` argument (Part 1 of #1333) reaches an
+                // unannotated private helper's solver-inferred `object`
+                // parameter or, since Part 1 of #1367, a parameter
                 // annotated with a class a foreign import binds -- either
                 // way the callee is another pycc function taking the same
                 // `ptr` (a public one called from the host gets the object
-                // through its `--ext` thunk instead, #1397/#1386). The
-                // borrowed pointer is passed through with no refcount
-                // change: the callee never releases it (#1092's leak-only
-                // rule, `docs/RUNTIME.md`).
-                Scalar::Object(v) => v.into(),
+                // through its `--ext` thunk instead, #1397/#1386). Since
+                // Part 2 of #1499 (#1502) the callee's parameter slot owns
+                // it, so a borrowed pointer is retained first
+                // (`object_frame::owned_argument`).
+                Scalar::Object(v) => {
+                    object_holds.push(object_frame::owned_argument(
+                        context, builder, module, rt, a, v, false,
+                    ));
+                    v.into()
+                }
                 // Defensive (Part 2 of #1027): passing `b` to another
                 // function is a bare read of the name, which
                 // `reject_memoryview_read` refuses with `C0001` for a
@@ -4728,6 +4736,13 @@ fn build_call_to_with_leading_args<'ctx>(
         .pending_int_releases
         .borrow_mut()
         .truncate(mark);
+    // Part 2 of #1499 (#1502): likewise for the owned `object` arguments.
+    // The dispatch guard below cannot unwind -- its null branch ends in
+    // `pycc_rt_name_error` and `unreachable` -- so the parameter slots own
+    // them from here on, and the callee releases them on every exit.
+    for held in object_holds {
+        held.consumed(rt);
+    }
     arg_values.extend(marshalled_args);
     // Issue #22: dispatch indirectly through the function-pointer slot.
     // Load the current binding; if null, the function hasn't been defined
@@ -5076,7 +5091,7 @@ fn storage_slot_at_entry<'ctx>(
     let ptr = builder
         .build_alloca(ty_to_basic_type(context, ty.clone()), name)
         .expect("build_alloca should not fail for a supported local type");
-    if ty == pycc_mir::Ty::Str || ty == pycc_mir::Ty::MemoryView {
+    if ty == pycc_mir::Ty::Str || ty == pycc_mir::Ty::MemoryView || ty == pycc_mir::Ty::Object {
         // Part 2a of #1142 (#1165) joins `Ty::Str` on this arm rather than
         // adding one of its own: both are owning pointer slots released on
         // the way out, and both runtime releases are documented no-ops on
@@ -5085,6 +5100,10 @@ fn storage_slot_at_entry<'ctx>(
         // would each read uninitialized alloca memory. Gating those on the
         // `initialized` flag below is *not* an alternative: that flag guards
         // reads, and the very first store happens before any read.
+        // Part 2 of #1499 (#1502) joins `Ty::Object` for the same reason:
+        // a frame `object` slot releases its old value on every store and
+        // at scope exit (`object_frame.rs`), and `pycc_ext_obj_release` is
+        // a no-op on null.
         builder
             .build_store(
                 ptr,
@@ -5187,6 +5206,7 @@ fn emit_assign<'ctx>(
         // ever hold a bigint word to release).
         release_optional_int_slot_before_store(context, builder, rt, &slot);
     }
+    let frame_object_slot = object_frame::is_frame_slot(rt, &slot);
     let value = coerce_scalar_to_type(context, builder, value, slot.ty);
     let basic_value: inkwell::values::BasicValueEnum = match value {
         Scalar::Int(v) => v.into(),
@@ -5246,17 +5266,22 @@ fn emit_assign<'ctx>(
         Scalar::Optional(v) => v.into(),
         // A pass-through since #1325: storing one `PyObject *` into a slot
         // `ty_to_basic_type` already allocated as a pointer, with no
-        // refcount traffic. Since Part 1 of #1499 only a *frame* slot -- a
-        // function local, reached since Part 1 of #1333 (#1362) -- stores
-        // here: `MirStmt::Assign` routes a module-global `object` target
-        // through `object_slot::assign`, which owns its reference. A frame
-        // slot keeps #1092's leak-only rule, where a rebinding overwrites
-        // and leaks the previous reference. A release here would be a
-        // use-after-free, not a fix: a parameter or a local alias holds a
-        // borrowed pointer without an incref, so freeing the old value
-        // could free an object the caller still names. Part 2 (#1502)
-        // gives frame slots the ownership model.
-        Scalar::Object(v) => v.into(),
+        // refcount traffic. `MirStmt::Assign` routes a module-global
+        // `object` target through `object_slot::assign` (Part 1 of #1499)
+        // and a function-frame one through `object_frame::assign` (Part 2,
+        // #1502), both of which own their reference, so only a slot with
+        // no ownership of its own -- a comprehension's scoped loop
+        // variable -- stores here. A registered frame slot reaching this
+        // plain store would leak its old value and break the slot's
+        // one-owned-reference invariant, so it is an internal error.
+        Scalar::Object(v) => {
+            assert!(
+                !frame_object_slot,
+                "pycc_codegen: internal error: a frame `object` slot was stored without \
+                 object_frame::assign"
+            );
+            v.into()
+        }
         // A pass-through since Part 2a of #1142 (#1165), where it was a
         // panic (as `Object`'s arm above was until #1325): storing one
         // `PyccExtBufferView *` into a slot `ty_to_basic_type` already
@@ -6134,6 +6159,12 @@ fn compile_to_object_with_observer(
     // Part 1 of #1499: every module-global `object` slot's owned bit,
     // cleared before the first statement (`object_slot.rs`).
     object_slot::declare_owned_bits(&context, &builder, &module, &rt, &module_globals);
+    // Part 2 of #1499 (#1502): frame `object` slots own their reference
+    // only in a module compiled for the CPython host -- an `--ext` artifact
+    // or an embedded executable (`object_frame::enable`).
+    if options.ext {
+        object_frame::enable(&rt);
+    }
     // Top-level statements share one `locals` map across the synthetic
     // `main` entry block (module-level Python names are one shared
     // scope); each user function gets its own, fresh map below, since
@@ -6435,6 +6466,10 @@ fn compile_to_object_with_observer(
             // releasing, so this asymmetry with the `str` list above is a
             // checked invariant rather than an assumption.
             let mut owned_buffer_slots: Vec<PointerValue> = Vec::new();
+            // Part 2 of #1499 (#1502): the same list for `object` parameters
+            // and locals, each owning one `PyObject *` reference or null
+            // (`object_frame.rs`), released through `pycc_ext_obj_release`.
+            let mut owned_object_slots: Vec<PointerValue> = Vec::new();
             for (i, (param_name, ty)) in params.iter().enumerate() {
                 // `.expect(...)`, not `.unwrap_or_else(|| panic!(...))`:
                 // `f`'s own `fn_type` (built above, in the first pass) was
@@ -6455,6 +6490,11 @@ fn compile_to_object_with_observer(
                 );
                 if *ty == pycc_mir::Ty::Str {
                     owned_str_slots.push(slot.ptr);
+                }
+                // Part 2 of #1499 (#1502): an `object` parameter owns the
+                // reference its caller handed over (`object_frame.rs`).
+                if *ty == pycc_mir::Ty::Object && object_frame::register(&rt, slot.ptr) {
+                    owned_object_slots.push(slot.ptr);
                 }
                 fn_locals.insert(param_name.clone(), slot);
             }
@@ -6501,7 +6541,11 @@ fn compile_to_object_with_observer(
                 // storage and joins the release list; the parameter loop above
                 // deliberately has no counterpart.
                 let is_buffer = ty == pycc_mir::Ty::MemoryView;
+                let is_object = ty == pycc_mir::Ty::Object;
                 let slot = storage_slot_at_entry(&context, &builder, ty, &local_name, true);
+                if is_object && object_frame::register(&rt, slot.ptr) {
+                    owned_object_slots.push(slot.ptr);
+                }
                 if is_str {
                     owned_str_slots.push(slot.ptr);
                 }
@@ -6593,9 +6637,13 @@ fn compile_to_object_with_observer(
             // `owned_str_slots` alone, a buffer-owning but `str`-free
             // function would get no epilogue block at all and leak one
             // allocation per call into a long-lived host process -- silently,
-            // since nothing else in this emitter would notice.
+            // since nothing else in this emitter would notice. Part 2 of
+            // #1499 (#1502) widens it once more to `object` parameters and
+            // locals, which own their reference (`object_frame.rs`); an
+            // object-free function still emits byte-identical IR.
             let owned_slot_epilogue_bb = if owned_str_slots.is_empty()
                 && owned_buffer_slots.is_empty()
+                && owned_object_slots.is_empty()
             {
                 None
             } else {
@@ -6915,6 +6963,11 @@ fn compile_to_object_with_observer(
                         )
                         .expect("build_call should not fail for pycc_rt_buffer_f64_free");
                 }
+                // Part 2 of #1499 (#1502): one `pycc_ext_obj_release` per
+                // frame `object` slot. A returned value needs no identity
+                // test here, unlike a buffer: the `return` already made it a
+                // reference of its own (`object_frame::owned_return`).
+                object_frame::release_slots(&context, &builder, &module, &owned_object_slots);
                 match ret_slot {
                     Some(slot) => {
                         let ret_val = builder
@@ -7138,7 +7191,11 @@ fn emit_stmt<'ctx>(
             release_scalar_if_int_temporary(context, builder, rt, expr, &scalar);
             // Part 1 of #1092: the same for a produced CPython object
             // (`o.update()`), whose reference nothing else will retire.
-            object_release::release_if_produced(context, builder, module, expr, &scalar);
+            // Part 2 of #1499 (#1502): a compiled function's discarded
+            // `object` result is one only where frame slots own theirs.
+            if !object_frame::is_unowned_call_result(rt, expr) {
+                object_release::release_if_produced(context, builder, module, expr, &scalar);
+            }
             Ok(())
         }
         MirStmt::Assign { target, value } => {
@@ -7148,6 +7205,10 @@ fn emit_stmt<'ctx>(
             // reference (`object_slot.rs`); every other slot keeps
             // `emit_assign`'s store below.
             if object_slot::assign(context, builder, module, rt, locals, target, value, scalar) {
+                return Ok(());
+            }
+            // Part 2 of #1499 (#1502): so does a function-frame one.
+            if object_frame::assign(context, builder, module, rt, locals, target, value, scalar) {
                 return Ok(());
             }
             let scalar = incref_if_str_duplicate(builder, rt, value, scalar);
@@ -7785,7 +7846,8 @@ fn emit_stmt<'ctx>(
             let value = object_return::object_return_value(&expected_return_ty, value, &bare_none);
             match value {
                 Some(expr) => {
-                    let scalar = if object_box::boxes_into(expr, &expected_return_ty) {
+                    let boxed = object_box::boxes_into(expr, &expected_return_ty);
+                    let scalar = if boxed {
                         Scalar::Object(object_box::emit_boxed(
                             context,
                             builder,
@@ -7802,6 +7864,19 @@ fn emit_stmt<'ctx>(
                     let scalar = retain_if_int_duplicate(context, builder, rt, expr, scalar);
                     let scalar =
                         coerce_scalar_to_type(context, builder, scalar, expected_return_ty.clone());
+                    // Part 2 of #1499 (#1502): an `object` result is a
+                    // reference the caller owns, taken before any `finally`
+                    // or the epilogue can release the slot it was read from.
+                    let scalar = object_frame::owned_return(
+                        context,
+                        builder,
+                        module,
+                        rt,
+                        &expected_return_ty,
+                        expr,
+                        boxed,
+                        scalar,
+                    );
                     // Part 2b of #1142 (#1164): a returned artifact-owned
                     // buffer leaves through the frame's owned-slot
                     // epilogue, and **nothing about ownership happens

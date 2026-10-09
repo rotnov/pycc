@@ -128,7 +128,8 @@ fn each_slot_getter_packs_its_word_and_the_table_is_installed() {
         getter(
             "o",
             5,
-            "    return pycc_ext_pack_object((void *)(intptr_t)word);\n",
+            "    Py_XINCREF((PyObject *)(intptr_t)word);\n    \
+             return pycc_ext_pack_object((void *)(intptr_t)word);\n",
         ),
     ] {
         assert!(inc.contains(&expected), "missing:\n{expected}\nin:\n{inc}");

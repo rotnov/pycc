@@ -557,7 +557,8 @@ pub(crate) fn unpack_args(
         // only the compiled function's own parameter slot ever consumes, and
         // this branch bails before the call -- so release them here, or a
         // `TypeError` on argument 2 would leak argument 1's `PyStrObj` on
-        // every raising call.
+        // every raising call. An `object` argument's new reference is owed
+        // the same way since Part 2 of #1499 (#1502).
         let cleanup: String = slots[..index]
             .iter()
             .enumerate()
@@ -565,6 +566,9 @@ pub(crate) fn unpack_args(
             .map(|(earlier, owed)| match owed {
                 SlotCleanup::StrDecref => format!("        pycc_rt_str_decref(a{earlier});\n"),
                 SlotCleanup::BufferRelease => format!("        PyBuffer_Release(&b{earlier});\n"),
+                SlotCleanup::ObjectRelease => {
+                    format!("        Py_DECREF((PyObject *)a{earlier});\n")
+                }
             })
             .collect();
         let arg = arg_expr(index);

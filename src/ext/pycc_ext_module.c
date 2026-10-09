@@ -1121,13 +1121,12 @@ static PyObject *pycc_ext_pack_str(void *result)
  * object -- which is also why `fn_name` and `index` are unused, kept only so
  * every scalar unpack helper shares one call shape.
  *
- * The compiled body receives a *strong* reference it never releases:
- * RUNTIME.md's #1092 rule has a function body add no reference-count
- * traffic, and a body may store the parameter somewhere that outlives this
- * call (`self.x = x`), so a borrowed pointer would dangle once the host
- * dropped its own reference. The reference is deliberately leaked, exactly
- * as every other object the body produces is, until the object lifetime
- * model lands; nothing is owed on a later argument's bail path either.
+ * The compiled body receives a *strong* reference: since Part 2 of #1499
+ * (#1502) every `object` argument is an owned reference the callee's
+ * parameter slot takes over and releases when the frame exits, the same
+ * caller-incref convention compiled-to-compiled calls follow. Until the call
+ * is made the reference is the wrapper's, so its bail path releases it when
+ * a later argument fails to unpack (`SlotCleanup::ObjectRelease`).
  */
 static int pycc_ext_unpack_object(PyObject *obj, const char *fn_name, Py_ssize_t index,
                                   void **out)
@@ -1141,9 +1140,10 @@ static int pycc_ext_unpack_object(PyObject *obj, const char *fn_name, Py_ssize_t
 /*
  * Packs an object-typed result (D-258 rule 5, #1397): the very `PyObject *`
  * the compiled body returned, so identity survives the round trip
- * (`f(x) is x`). Under #1092 a compiled return hands the pointer through
- * unchanged with no reference of its own, so the boundary takes the new
- * reference the CPython calling convention requires of a return value.
+ * (`f(x) is x`). Since Part 2 of #1499 (#1502) a compiled `object` return
+ * is a reference the caller owns, so this steals it: it is exactly the new
+ * reference the CPython calling convention requires of a return value. A
+ * field getter, whose slot keeps its own reference, increfs before it packs.
  *
  * `result` is never NULL on this path -- the generated wrapper checks for a
  * pending pycc exception first -- but the guard, as in `pycc_ext_pack_str`,
@@ -1155,7 +1155,7 @@ static PyObject *pycc_ext_pack_object(void *result)
         PyErr_SetString(PyExc_SystemError, "object result was NULL");
         return NULL;
     }
-    return Py_NewRef((PyObject *)result);
+    return (PyObject *)result;
 }
 
 /*
@@ -2363,10 +2363,9 @@ PyObject *pycc_ext_obj_none(void)
 /*
  * #1418: a *borrowed* pointer to CPython's `NotImplemented` singleton, the
  * value of an admitted `return NotImplemented` in a comparison method
- * (`EXT_OBJ_NOT_IMPLEMENTED_SYMBOL`). It is immortal on CPython 3.13+, so a
- * compiled return may hand the borrow back as is; when the result crosses
- * the export boundary, `pycc_ext_pack_object` takes the strong reference
- * (`Py_NewRef`) the host caller owns.
+ * (`EXT_OBJ_NOT_IMPLEMENTED_SYMBOL`). It is immortal on CPython 3.13+; a
+ * compiled `return` retains it like any other borrowed object (Part 2 of
+ * #1499), and `pycc_ext_pack_object` hands that reference to the host.
  */
 PyObject *pycc_ext_obj_not_implemented(void)
 {
@@ -3367,10 +3366,11 @@ static PyObject *pycc_ext_obj_unpack_type_name(PyTypeObject *type)
  * fetched so far are released on each failing exit; on success the
  * iterator is released and the items are owned by the returned tuple. The
  * extra item fetched to detect "too many" is released at once. The
- * returned reference is bound to the unpacking temporary: leaked in a
- * function body on the #1092 rule for a bound object value, owned and
- * released on rebind by a module-global temporary (Part 1 of #1499). `PyTuple_New` plus `PyTuple_SetItem` (which steals) build the
- * fresh tuple, both in the Limited API.
+ * returned reference is bound to the unpacking temporary, which owns it:
+ * a module-global temporary releases it on rebind (Part 1 of #1499), a
+ * function-frame one on rebind and at frame exit (Part 2, #1502).
+ * `PyTuple_New` plus `PyTuple_SetItem` (which steals) build the fresh
+ * tuple, both in the Limited API.
  *
  * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents;
  * `n` is guarded with it, codegen only ever emitting a positive arity.
