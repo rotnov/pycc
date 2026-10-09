@@ -339,10 +339,9 @@ enum Scalar<'ctx> {
     /// bound to it and releases it on rebind (`object_slot.rs`, Part 1 of
     /// #1499); a frame slot does the same, with owned arguments and returns
     /// (`object_frame.rs`, Part 2), and so does an instance attribute, whose
-    /// read is itself a new reference (`object_attr.rs`, Part 4). A
+    /// read is itself a new reference (`object_attr.rs`, Part 4); a
     /// comprehension's per-trip item and a mixed-arm conditional or boolean
-    /// result are still never released (Part 3, #1503); see
-    /// `docs/RUNTIME.md`'s "Foreign imports in the module body" ownership
+    /// result are released too (Part 3, #1503). See `docs/RUNTIME.md`'s "Foreign imports in the module body" ownership
     /// subsection.
     Object(PointerValue<'ctx>),
     /// A pointer to the `PyccExtBufferView` -- `pycc_rt`'s `{ ptr, len }`

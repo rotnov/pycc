@@ -216,6 +216,14 @@ def both_if(b: Box, c: bool) -> None:
     x = b.a if c else b.b
 
 
+def mixed_if(b: Box, c: bool, o: object) -> None:
+    x = b.a if c else o
+
+
+def mixed_or(b: Box, o: object) -> None:
+    x = b.a or o
+
+
 def construct() -> None:
     b = Box(s.fresh())
     b.a = s.fresh()
@@ -282,6 +290,9 @@ run('read_discard', m.read_discard, b)
 run('read_len', m.read_len, b)
 run('read_comp', m.read_comp, b)
 run('both_if', m.both_if, b, True)
+run('mixed_if', m.mixed_if, b, True, s.T)
+run('mixed_if_else', m.mixed_if, b, False, s.T)
+run('mixed_or', m.mixed_or, b, s.T)
 run('copy_self', b.copy_self)
 run('same', b.same)
 b.a = s.fresh()
@@ -336,6 +347,9 @@ read_discard 0 0
 read_len 0 0
 read_comp 0 0
 both_if 0 0
+mixed_if 0 0
+mixed_if_else 0 0
+mixed_or 0 0
 copy_self 0 0
 same 0 0
 hazard 0 0
