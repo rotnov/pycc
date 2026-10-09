@@ -95,7 +95,8 @@ fn assert_matches_cpython(tag: &str, module: &str, body: &str) -> String {
 /// CPython has released them), a compiled function's argument and its
 /// returned value (`ident`, #1502). Then the module global `g` is rebound to each
 /// mixed shape's result in turn, releasing the previous value (Part 1 of
-/// #1499). The probe delta must be `0`, as it is under CPython.
+/// #1499); the conditional expressions alternate their arm on `i % 2`, so
+/// both the produced and the retained borrowed arm reach the global. The probe delta must be `0`, as it is under CPython.
 const BODY: &str = "import builtins\n\
     import sys\n\
     \n\
@@ -137,8 +138,8 @@ const BODY: &str = "import builtins\n\
     pin(n, False)\n    \
     before = int(sys.getrefcount(probe))\n    \
     for i in range(n):\n        \
-    g = src[0] if n else probe\n        \
-    g = probe if n else src[0]\n        \
+    g = src[0] if i % 2 else probe\n        \
+    g = probe if i % 2 else src[0]\n        \
     g = src[0] or probe\n        \
     g = probe and src[0]\n        \
     g = probe or probe\n    \
