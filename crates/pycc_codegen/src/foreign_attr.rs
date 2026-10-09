@@ -16,11 +16,13 @@
 //! statement value, the iterable of a `for` or a comprehension -- is
 //! released by its consumer (`object_release.rs`), and since Part 1 of
 //! #1499 a module global owns a result bound to it and releases it on
-//! rebind (`object_slot.rs`), while a result bound to a function-local name
-//! or an instance slot, passed to a user function, returned, or boxed is
-//! still leaked: this boundary's leak-only rule, which later parts of #1499
-//! narrow further. Such a leak inside a
-//! loop is trip-count-linear rather than once per process.
+//! rebind (`object_slot.rs`); since Part 2 (#1502) so does a function-frame
+//! slot, a user function's parameter (the result moves into it) and a
+//! compiled caller of a function returning it (`object_frame.rs`). A result
+//! stored into an instance slot or boxed into a container is still leaked:
+//! this boundary's leak-only rule, which later parts of #1499 narrow
+//! further. Such a leak inside a loop is trip-count-linear rather than once
+//! per process.
 
 use super::*;
 use crate::foreign_fail::{ForeignFailEdge, route_null};

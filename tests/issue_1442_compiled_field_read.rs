@@ -14,11 +14,12 @@
 //! documented differences from CPython: a slot holding an int outside the
 //! inline range raises `OverflowError` (the D-244 `int` boundary, #1040), a
 //! host-side store of a value the slot's parameter row refuses raises
-//! `TypeError` (Part 1 of #1443), and the `self.items[-1]` subscript inside
-//! the `top` getter keeps one reference per call, an object-operation
-//! temporary #1092 tracks, not the descriptor: the host read of a slot or of
-//! the `whole` property, which creates no such temporary, is
-//! reference-neutral in [`DRIVER`]. The compiled `other.state_stack` read in
+//! `TypeError` (Part 1 of #1443). The `self.items[-1]` subscript the `top`
+//! getter returns kept one reference per call until Part 2 of #1499
+//! ([#1502](https://github.com/rotnov/pycc/issues/1502)) made a returned
+//! `object` a new reference the export wrapper hands to the host unchanged;
+//! its pinned delta is `0` now, as the host read of a slot or of the `whole`
+//! property already was in [`DRIVER`]. The compiled `other.state_stack` read in
 //! `ParserState.__eq__` kept one reference per call too until #1476: the
 //! `isinstance(other, ParserState)` guard before it now narrows `other`, so
 //! the read is a native field read and the pinned delta is `0`.
@@ -270,7 +271,7 @@ const EXT_ONLY_OUT: &str = "OverflowError\n\
     TypeError Fields.n() argument 1: 'str' object cannot be interpreted as an integer\n\
     7\n\
     0\n\
-    100\n";
+    0\n";
 
 fn run(script: &str, path_entry: &Path, cwd: &Path) -> Output {
     host_python()

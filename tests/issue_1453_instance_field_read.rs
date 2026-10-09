@@ -11,12 +11,13 @@
 //! very same script against the source imported as plain Python, so CPython
 //! is the oracle for every line of [`DRIVER`], including the reference-count
 //! deltas of the host reads. [`EXT_ONLY_DRIVER`] pins the documented
-//! differences: the compiled `o.parse_conf` read in `conf_of` keeps one
-//! reference per call -- the attribute-read temporary #1092 tracks, which
-//! #1442's `other.state_stack` read keeps too, not the descriptor -- an
-//! enum-typed slot gets no descriptor, and a host-side store of an object
+//! differences: an enum-typed slot gets no descriptor, and a host-side store of an object
 //! that is not a carrier of the declared class is refused with the
-//! parameter row's `TypeError` (Part 1 of #1443).
+//! parameter row's `TypeError` (Part 1 of #1443). The compiled
+//! `o.parse_conf` read `conf_of` returns kept one reference per call until
+//! Part 2 of #1499 ([#1502](https://github.com/rotnov/pycc/issues/1502))
+//! made a returned `object` a new reference the host takes over; its pinned
+//! delta is `0` now.
 //!
 //! The hosted test is `#[ignore]`d and contributes no line coverage; the
 //! Tier-1 `native-build-test` leg runs it with
@@ -207,7 +208,7 @@ except TypeError as e:
 print(s.parse_conf is c)
 "#;
 
-const EXT_ONLY_OUT: &str = "100\n\
+const EXT_ONLY_OUT: &str = "0\n\
     False\n\
     TypeError St.parse_conf() argument 1 must be pycc_instance_field_mod.Conf, not object\n\
     True\n";

@@ -20,15 +20,16 @@
 //! **Ownership is decided by MIR shape, never by type.** [`is_produced`] is
 //! an allowlist of the shim's new-reference producers, the one
 //! classification `foreign_call::callee_is_produced` also answers through.
-//! Everything else that evaluates to a `Scalar::Object` is a *borrow* --
-//! a `Name` read of a module global or a slot, a function parameter, a
-//! `for` target, a boxed value, a user function's `object` result -- and is
-//! never released here: a function local carries a borrowed or moved
-//! pointer with no reference-count traffic of its own, and a module
-//! global's reference belongs to the global (`object_slot.rs`), so
-//! releasing one would underflow a reference the slot still uses. An
-//! unlisted node therefore defaults to the old leak, never to a
-//! use-after-free.
+//! Since Part 2 of #1499 (#1502) a user function's `object` result is one
+//! of them: the callee returns a reference its caller owns
+//! (`object_frame.rs`). Everything else that evaluates to a
+//! `Scalar::Object` is a *borrow* -- a `Name` read of a module global or a
+//! slot, a function parameter, a `for` target, a boxed value -- and is
+//! never released here: a slot's reference belongs to the slot (a module
+//! global, `object_slot.rs`; a function parameter or local,
+//! `object_frame.rs`), so releasing one would underflow a reference the
+//! slot still uses. An unlisted node therefore defaults to the old leak,
+//! never to a use-after-free.
 //!
 //! **The exception edge.** An operand that is held while a later sibling
 //! or the consuming operation itself can fail sits on
@@ -94,9 +95,14 @@
 //! Part 1 of #1499 a module-global `object` slot owns the reference it holds
 //! and releases its previous value on rebind -- including a module-level
 //! `for x in <object>:` target's per-trip item -- in `object_slot.rs`, not
-//! through this stack. **Not yet released** (the later parts of #1499): a
-//! produced value bound to a function local or a compiled-instance
-//! attribute, passed to a user function, returned, or boxed.
+//! through this stack; since Part 2 (#1502) a function parameter or local
+//! does the same in `object_frame.rs`, which also makes a user-function
+//! `object` argument and return value owned references, and since Part 3
+//! (#1503) a comprehension releases each trip's item at the trip's end and a
+//! mixed-arm `and`/`or` or conditional expression is a producer (see
+//! [`selects_an_owned_arm`]). **Not yet released** (the later parts of
+//! #1499): the replaced value of a compiled-instance attribute (Part 4,
+//! #1504).
 //! `hash(<object>)` is not admitted yet (C0001), so it has no site. The
 //! read of a narrowed `object` name (`MirExpr::ObjectUnbox`) needs no
 //! release: its operand is always a borrowed slot.
@@ -141,6 +147,15 @@ pub(super) fn is_produced(expr: &MirExpr) -> bool {
         | MirExpr::ObjList { .. }
         | MirExpr::ObjUnpack { .. } => true,
         MirExpr::ObjCompare { .. } => expr.ty() == pycc_mir::Ty::Object,
+        // Part 2 of #1499 (#1502): a compiled function's `object` result is
+        // a reference its caller owns (`object_frame::owned_return`). Every
+        // `object`-typed `Call` is a user-function call: the builtins that
+        // lower to `Call` (`len`, `int`, `float`, `bool`, `str`,
+        // `math.sqrt`) answer native types.
+        MirExpr::Call {
+            ty: pycc_mir::Ty::Object,
+            ..
+        } => true,
         // Part 3 of #1092: the fresh CPython `list`/`set` the comprehension
         // builds (`object_comprehension.rs`).
         MirExpr::Comprehension(comp) => matches!(comp.source, pycc_mir::CompSource::Object(_)),
@@ -169,29 +184,43 @@ pub(super) fn is_produced(expr: &MirExpr) -> bool {
 /// other arm too when it is a borrowed object, so whichever arm is selected
 /// the node's value is a new reference and the node is a producer. A node
 /// whose arms are all borrowed stays a borrow with no reference-count
-/// traffic, so a consumer that does not release yet (a function local, an
-/// argument to a compiled function, a returned value) leaks nothing.
+/// traffic, exactly as a name read; its consumer retains it where it needs
+/// a reference of its own (a frame or global slot, a compiled call's
+/// argument, a returned value). Whether the retain is emitted at all is
+/// [`retains_borrowed_arm`], which also requires a CPython-hosted module.
 ///
 /// An arm is owned when it is a native value `boolop.rs` boxes into a new
 /// reference (`boolop::needs_boxing`; `pycc_hir`'s `is_object_joinable`
 /// owns which native arm types an `object` node admits), or a produced
 /// `object` -- the same [`is_produced`] test the hold and the
 /// discard of a value `and`/`or`'s left operand apply, so the node never
-/// counts as owned an arm those paths would not release. This one predicate
-/// decides both the classification and whether any retain is emitted.
+/// counts as owned an arm those paths would not release. Since Part 2 of
+/// #1499 (#1502) that includes a compiled function's `object` result.
 ///
 /// A non-`None` `ObjectBox` arm is the one shape on which this test and
 /// `object_slot::is_owned` (which `retain_if_borrowed` applies) differ. It
 /// is never inserted inside an operator today (`box_into` boxes at
 /// statement seams only); admitting one must route the hold and the discard
 /// through `object_slot::is_owned` as well, or the box leaks on one path.
-///
-/// At a consumer that does not release yet (a function local, a compiled
-/// call's argument or returned value; #1502) a mixed node therefore leaks
-/// whichever arm it selected -- the retained borrowed arm as well as the
-/// produced one -- exactly as any other producer does there.
 pub(super) fn selects_an_owned_arm(a: &MirExpr, b: &MirExpr) -> bool {
     owned_arm(a) || owned_arm(b)
+}
+
+/// Whether an `and`/`or` or conditional expression of type `ty` with arms
+/// `a` and `b` retains a selected borrowed `object` arm
+/// (`boolop::owned_value`): when it is an `object` node that
+/// [`selects_an_owned_arm`], in a module compiled for the CPython host
+/// (`object_frame::enabled`). A fully native executable links no retain or
+/// release shim and owns no `object` reference -- its only `object` values
+/// are a generic function's borrowed parameters and their call results
+/// (`object_frame::is_unowned_discard`) -- so there the node never retains.
+pub(super) fn retains_borrowed_arm(
+    rt: &RtFns<'_>,
+    ty: &pycc_mir::Ty,
+    a: &MirExpr,
+    b: &MirExpr,
+) -> bool {
+    *ty == pycc_mir::Ty::Object && crate::object_frame::enabled(rt) && selects_an_owned_arm(a, b)
 }
 
 /// Whether `operand`, an arm of an `object`-typed node, evaluates to a
@@ -293,6 +322,12 @@ pub(super) fn hold_new_reference<'ctx>(
 }
 
 impl<'ctx> Held<'ctx> {
+    /// A hold of nothing, whose retirement is a no-op: an argument a native
+    /// executable passes borrowed (`object_frame::owned_argument`).
+    pub(super) fn nothing() -> Self {
+        Held(None)
+    }
+
     /// Removes this entry from the stack. Usually the top one, but not
     /// always: a call's bound method is retired before the arguments held
     /// above it, which stay held across the call that consumes it.

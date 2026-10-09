@@ -38,10 +38,11 @@
 //! boxes `n`, exactly as CPython never converts it. The packer's `NULL` (a
 //! bigint outside D-141's inline range raises `OverflowError`, #1040) takes
 //! the foreign failure edge immediately. A selected `object` operand that
-//! is borrowed (a name, a boxed `None`, a compiled call's result) is
-//! retained on its arm when the other arm is owned ([`owned_value`], Part 3
-//! of #1499), and otherwise passes through borrowed; a produced one always
-//! passes through as the same pointer.
+//! is borrowed (a name, a boxed `None`) is retained on its arm when the
+//! other arm is owned in a CPython-hosted module ([`owned_value`], Part 3 of
+//! #1499), and otherwise passes through borrowed; a produced one -- since
+//! Part 2 of #1499 (#1502) also a compiled call's result -- always passes
+//! through as the same pointer.
 //!
 //! Object temporaries (Part 3 of #1092, `object_release.rs`): every
 //! operand of a truth-only node, and the left operand of a value node, is
@@ -250,7 +251,7 @@ fn emit_value<'ctx>(
     // Part 3 of #1092: a produced `object` left operand is held across its
     // truth test, then owned by whichever arm runs: `take_left` selects it
     // as the node's value, and `eval_right` releases it.
-    let owns = *ty == Ty::Object && crate::object_release::selects_an_owned_arm(left, right);
+    let owns = crate::object_release::retains_borrowed_arm(emitter.rt, ty, left, right);
     let held_left = emitter.hold(left, &left_scalar);
     let left_truth = emitter.truth(left_scalar);
     held_left.consumed(emitter.rt);
@@ -391,9 +392,9 @@ fn boxed_value<'ctx>(
 /// borrowed read, then converted to `ty`. The retain is decided before the
 /// conversion, on `source`'s own shape.
 ///
-/// When `owns` -- the node is `object`-typed and
-/// `object_release::selects_an_owned_arm` holds for its arms (Part 3 of
-/// #1499) -- a CPython-object arm is retained through the shim's
+/// When `owns` -- `object_release::retains_borrowed_arm`: the node is
+/// `object`-typed, `object_release::selects_an_owned_arm` holds for its
+/// arms, and the module is CPython-hosted (Part 3 of #1499) -- a CPython-object arm is retained through the shim's
 /// `pycc_ext_obj_retain` unless `object_slot::is_owned` says it is already
 /// a new reference, so every arm the node selects is owned and the node is
 /// a producer (`object_release::is_produced`). Otherwise an object arm

@@ -89,11 +89,14 @@ fn assert_matches_cpython(tag: &str, module: &str, body: &str) -> String {
 /// to `probe`) on one pass and the borrowed arm (`probe` itself) on the
 /// other, and hands the result to a foreign call argument, which releases
 /// it; `probe or 1` and `probe and 0` mix a borrowed arm with a boxed
-/// native one. An all-borrowed shape stays a borrow with no traffic, so it
-/// moves nothing even where its consumer does not release yet: a function
-/// local (`bind`'s `y`, `z`, `w`, read once `bind` has returned, when
-/// CPython has released them), a compiled function's argument and its
-/// returned value (`ident`, #1502). Then the module global `g` is rebound to each
+/// native one. `bind` hands the same selections to a function frame, which
+/// owns what it binds since Part 2 of #1499 (#1502): a local (`a`), a
+/// compiled function's argument (`b`), a compiled function's returned
+/// selection (`sel`, bound to `e` and discarded), and a selection whose
+/// owned arm is a compiled call's result (`c`, `d`, and the discarded
+/// statement); an all-borrowed shape (`y`, `z`, `w`) stays a borrow the
+/// frame retains itself. The delta is read once `bind` has returned, when
+/// CPython has released its locals. Then the module global `g` is rebound to each
 /// mixed shape's result in turn, releasing the previous value (Part 1 of
 /// #1499); the conditional expressions alternate their arm on `i % 2`, and
 /// the `and`/`or` shapes select the produced arm (`src[0] or probe`,
@@ -112,10 +115,21 @@ const BODY: &str = "import builtins\n\
     return o\n\
     \n\
     \n\
+    def sel(flag: bool) -> object:\n    \
+    return src[0] if flag else probe\n\
+    \n\
+    \n\
     def bind(flag: bool) -> None:\n    \
     y = probe or probe\n    \
     z = probe if flag else probe\n    \
-    w = ident(probe if flag else probe)\n\
+    w = ident(probe if flag else probe)\n    \
+    a = src[0] if flag else probe\n    \
+    b = ident(probe if flag else src[0])\n    \
+    c = ident(probe) if flag else probe\n    \
+    d = probe if flag else ident(probe)\n    \
+    e = sel(flag)\n    \
+    sel(flag)\n    \
+    ident(probe) if flag else probe\n\
     \n\
     \n\
     def pin(n: int, flag: bool) -> None:\n    \
