@@ -62,6 +62,7 @@ pub(super) fn retain_read<'ctx>(
 /// `MirStmt::AttrSet`'s store of the `object` `pointer`, evaluated from
 /// `value`, into slot `slot_index` of the instance `base_ptr`, in the order
 /// the module doc gives.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn store<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
