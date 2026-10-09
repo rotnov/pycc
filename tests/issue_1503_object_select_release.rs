@@ -95,8 +95,10 @@ fn assert_matches_cpython(tag: &str, module: &str, body: &str) -> String {
 /// CPython has released them), a compiled function's argument and its
 /// returned value (`ident`, #1502). Then the module global `g` is rebound to each
 /// mixed shape's result in turn, releasing the previous value (Part 1 of
-/// #1499); the conditional expressions alternate their arm on `i % 2`, so
-/// both the produced and the retained borrowed arm reach the global. The probe delta must be `0`, as it is under CPython.
+/// #1499); the conditional expressions alternate their arm on `i % 2`, and
+/// the `and`/`or` shapes select the produced arm (`src[0] or probe`,
+/// `probe and src[0]`) and the retained borrowed arm (`probe or src[0]`,
+/// `src[0] and probe`), so both kinds of arm reach the global. The probe delta must be `0`, as it is under CPython.
 const BODY: &str = "import builtins\n\
     import sys\n\
     \n\
@@ -142,6 +144,8 @@ const BODY: &str = "import builtins\n\
     g = probe if i % 2 else src[0]\n        \
     g = src[0] or probe\n        \
     g = probe and src[0]\n        \
+    g = probe or src[0]\n        \
+    g = src[0] and probe\n        \
     g = probe or probe\n    \
     g = probe\n    \
     print(n, int(sys.getrefcount(probe)) - before)\n";
