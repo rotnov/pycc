@@ -173,9 +173,9 @@ pub(super) fn is_produced(expr: &MirExpr) -> bool {
 /// argument to a compiled function, a returned value) leaks nothing.
 ///
 /// An arm is owned when it is a native value `boolop.rs` boxes into a new
-/// reference (`boolop::needs_boxing`: every non-`object` arm the packer
-/// accepts -- `int`, `float`, `bool`, `str` or a class instance), or a
-/// produced `object` -- the same [`is_produced`] test the hold and the
+/// reference (`boolop::needs_boxing`; `pycc_hir`'s `is_object_joinable`
+/// owns which native arm types an `object` node admits), or a produced
+/// `object` -- the same [`is_produced`] test the hold and the
 /// discard of a value `and`/`or`'s left operand apply, so the node never
 /// counts as owned an arm those paths would not release. This one predicate
 /// decides both the classification and whether any retain is emitted.
@@ -198,12 +198,8 @@ pub(super) fn selects_an_owned_arm(a: &MirExpr, b: &MirExpr) -> bool {
 /// reference the node owns.
 fn owned_arm(operand: &MirExpr) -> bool {
     match operand.ty() {
-        pycc_mir::Ty::Bool
-        | pycc_mir::Ty::Int
-        | pycc_mir::Ty::Float
-        | pycc_mir::Ty::Str
-        | pycc_mir::Ty::Instance(_) => true,
-        pycc_mir::Ty::Object => is_produced(operand_source(operand)),
+        pycc_mir::Ty::Bool | pycc_mir::Ty::Int | pycc_mir::Ty::Float | pycc_mir::Ty::Str => true,
+        pycc_mir::Ty::Object => is_produced(operand),
         _ => false,
     }
 }

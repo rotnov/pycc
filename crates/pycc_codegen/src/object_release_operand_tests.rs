@@ -284,12 +284,10 @@ fn the_part_3_producers_are_classified() {
         copy_name(),
         boxed(MirExpr::IntLiteral(7))
     )));
-    // A class instance is boxed by its packer into a new reference.
-    let instance = MirExpr::Name {
-        name: "c".to_string(),
-        ty: Ty::Instance(Box::new("C".to_string())),
-    };
-    assert!(is_produced(&value(copy_name(), instance)));
+    assert!(!is_produced(&value(
+        copy_name(),
+        boxed(MirExpr::NoneLiteral)
+    )));
     // An arm of any other type is never treated as owned.
     assert!(!is_produced(&value(copy_name(), MirExpr::NoneLiteral)));
     assert!(!is_produced(&bool_op(
