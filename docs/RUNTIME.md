@@ -1968,7 +1968,9 @@ and a rebind, a re-import or the next `for` item releases the previous one
 
 **An unbound temporary is released by its consumer (Part 1 of
 [#1092](https://github.com/rotnov/pycc/issues/1092)).** Every rule above
-describes what is still leaked; Part 1 of #1092 narrows it. A new reference
+describes the original leak-only policy; Part 1 of #1092 narrows it, and Parts
+1-4 of #1499 narrow it further for bound values ("A module global owns its
+reference" and the sections after it). A new reference
 produced by an object operation (an attribute load, a method or direct call,
 a keyword call, a subscript or slice load, `type(o)`, a list display, an
 unpack, or an object-typed rich comparison -- the allowlist
@@ -2503,8 +2505,9 @@ as `NULL`, which `PySlice_New` reads as `None` -- and answers it with
 `PyObject_GetItem`. The base is borrowed; each present bound was packed by one
 of the five packers and is **consumed on every path**, including the one where
 a packer already failed with `NULL`, and the temporary `slice` is released
-before the helper returns. The result is a new reference, leaked on the same
-terms as a subscript load's (released when unbound, Part 1 of #1092 above). `pycc_ext_obj_contains(container, item)` wraps
+before the helper returns. The result is a new reference, owned on the same
+terms as a subscript load's: released when unbound (Part 1 of #1092 above), and
+owned by its receiver when bound or passed (#1499). `pycc_ext_obj_contains(container, item)` wraps
 `PySequence_Contains` and answers a C `int` (`-1` on failure, routed to the
 operation's failure edge); it borrows the container, consumes the packed item
 on every path, and so adds nothing to the leaked set: the hosted test runs
@@ -2822,8 +2825,9 @@ anything Part 4 introduces (`a + b` in statement position leaks identically,
 measured at roughly 97 bytes per trip over 2,000,000 trips), and it is tracked
 as [#1109](https://github.com/rotnov/pycc/issues/1109).
 
-Everything the call creates *internally*, by contrast, is released, so the leak
-is exactly one reference per call rather than one per argument plus two.
+Everything the call creates *internally* is released, so before #1499 the leak
+was exactly one reference per call -- the result -- rather than one per
+argument plus two; since #1499 the result's receiver owns it too.
 `pycc_ext_obj_call` owns the bound method object `pycc_ext_obj_getattr`
 produced and `Py_XDECREF`s it on every path, and it consumes the packed
 argument array — releasing each element on every path, including the early one
