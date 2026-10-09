@@ -331,18 +331,25 @@ fn a_raising_comprehension_propagates_from_the_module_body() {
 }
 
 /// Reference-count pins on a *mortal* item and on the iterated source, at
-/// two trip counts. Under the #1092 leak-only rule (`docs/RUNTIME.md`) a
-/// list comprehension of `n` items leaves each item `+2` (the leaked loop
-/// item plus the leaked list's own reference), and a set comprehension of
-/// `n` identical items `n + 1` (each leaked loop item plus the one the set
-/// holds); the source list itself is unchanged, since the only thing that
-/// referenced it is the list iterator, released since Part 3 of #1092 (and
-/// CPython makes an exhausted one drop its sequence regardless). The deltas scale exactly with `n`, so a helper that
-/// consumed a packed element twice, or not at all, moves them. CPython
-/// frees everything (`n 1 0` per line), so this report is compiled-only.
+/// two trip counts, compared with CPython's own run of the same source.
+/// Since Part 3 of #1499 each trip releases its own item, so a list
+/// comprehension of `n` items leaves the probe `+n` (the list `xs` still
+/// holds, as in CPython), a set comprehension of `n` identical items `+1`
+/// (the one reference the set holds), and the source list unchanged, since
+/// the only thing that referenced it is the list iterator, released since
+/// Part 3 of #1092 (and CPython makes an exhausted one drop its sequence
+/// regardless). A filter that rejects every *mortal* item (`falsy`, an
+/// empty list) takes the rejected-filter edge to the trip end, and an
+/// element that raises on the first trip takes an in-trip failure edge;
+/// both leave their item's count unchanged. The failure is `int(x)`'s
+/// `TypeError`, whose message holds no reference to `x`: an
+/// `AttributeError` keeps its `.obj`, and a caught bridged exception stays
+/// in the bridge table until the host call returns (`docs/RUNTIME.md`). The deltas scale exactly with
+/// `n`, so a helper that consumed a packed element twice, or not at all,
+/// or an item released twice or never, on any edge, moves them.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn the_leak_only_reference_counts_are_pinned() {
+fn the_reference_counts_match_cpython() {
     let body = "import builtins\n\
         import sys\n\
         \n\
@@ -356,11 +363,24 @@ fn the_leak_only_reference_counts_are_pinned() {
         after_list = int(sys.getrefcount(probe))\n    \
         ys = {x for x in src.__iter__()}\n    \
         after_set = int(sys.getrefcount(probe))\n    \
-        print(after_list - before_p, after_set - after_list, int(sys.getrefcount(src)) - before_s)\n\
+        print(after_list - before_p, after_set - after_list, int(sys.getrefcount(src)) - before_s)\n    \
+        falsy = builtins.list()\n    \
+        rejected = builtins.list(builtins.dict.fromkeys(builtins.range(n), falsy).values())\n    \
+        before_f = int(sys.getrefcount(falsy))\n    \
+        zs = [x for x in rejected.__iter__() if x]\n    \
+        before_e = int(sys.getrefcount(probe))\n    \
+        try:\n        \
+        ws = [builtins.int(x) for x in src.__iter__()]\n    \
+        except TypeError:\n        \
+        print(\"raised\")\n    \
+        print(int(sys.getrefcount(falsy)) - before_f, int(sys.getrefcount(probe)) - before_e)\n\
         \n\
         \n\
         pin(100)\n\
         pin(200)\n";
-    let (_dir, out) = compiled_report("obj_comp_pin", "pycc_obj_comp_pin", body);
-    assert_eq!(out, "200 101 0\n400 201 0\nno error\n");
+    let out = assert_matches_cpython("obj_comp_pin", "pycc_obj_comp_pin", body);
+    assert_eq!(
+        out,
+        "100 1 0\nraised\n0 0\n200 1 0\nraised\n0 0\nno error\n"
+    );
 }

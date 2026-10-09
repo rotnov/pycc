@@ -330,6 +330,69 @@ fn a_native_executable_keeps_object_frames_borrowed() {
     }
 }
 
+/// A conditional expression selecting between a compiled call's `object`
+/// result and a borrowed name (Part 3 of #1499): in the CPython-hosted
+/// module the call arm is owned, so the name arm is retained and a discarded
+/// selection is released; in a fully native executable the same node -- a
+/// statement, a bound local and a returned value -- emits no object traffic
+/// at all, so the module links without the shims.
+#[test]
+fn a_mixed_call_selection_retains_only_where_frames_own() {
+    let ident = || {
+        function(
+            "ident",
+            &[("y", Ty::Object)],
+            Ty::Object,
+            vec![MirStmt::Return(Some(name("y")))],
+        )
+    };
+    let select = || MirExpr::IfExp {
+        test: Box::new(MirExpr::Name {
+            name: "flag".to_string(),
+            ty: Ty::Bool,
+        }),
+        body: Box::new(call("ident", vec![name("y")], Ty::Object)),
+        orelse: Box::new(name("y")),
+        ty: Ty::Object,
+    };
+    let pick = || {
+        function(
+            "pick",
+            &[("y", Ty::Object), ("flag", Ty::Bool)],
+            Ty::Object,
+            vec![
+                MirStmt::ExprStmt(select()),
+                bind("x", select()),
+                MirStmt::Return(Some(select())),
+            ],
+        )
+    };
+    let native = &compile_as(
+        "frame_native_selection",
+        vec![ident(), pick()],
+        &["pyfn_pick"],
+        false,
+    )[0];
+    assert!(!native.contains("pycc_ext_obj_"), "{native}");
+    let hosted = &compile_as(
+        "frame_hosted_selection",
+        vec![ident(), pick()],
+        &["pyfn_pick"],
+        true,
+    )[0];
+    let orelse = &hosted[hosted
+        .find("ifexp_orelse:")
+        .expect("the hosted node has an orelse arm")..];
+    assert!(
+        orelse[..orelse
+            .find("br label")
+            .expect("the arm branches to the join")]
+            .contains(RETAIN),
+        "{hosted}"
+    );
+    assert!(hosted.contains(RELEASE), "{hosted}");
+}
+
 /// An `object` call result is a new reference: a discarded one is released,
 /// and one bound to a local moves into the slot without a retain.
 #[test]

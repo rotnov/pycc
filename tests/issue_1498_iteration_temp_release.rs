@@ -12,8 +12,8 @@
 //! the stub's iterables (`SEQ`, `BOOM`) hand out iterators that keep a
 //! reference to the iterable they came from: an iterator that is never
 //! released keeps its iterable's count raised by one. The items are small
-//! `int`s, which are immortal, so the per-trip item -- still unreleased
-//! until #1499 -- moves no measured count. The positive control holds
+//! `int`s, which are immortal, so the per-trip item -- released since Part 3
+//! of #1499 -- moves no measured count either way. The positive control holds
 //! iterators from the host and shows the probe sees exactly that.
 //!
 //! `BOOM`'s iterator yields once and then raises `ValueError`, exercising

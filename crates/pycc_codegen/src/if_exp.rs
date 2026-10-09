@@ -26,11 +26,12 @@
 //!
 //! A produced CPython-object condition (`a if o.ready() else b`) is held
 //! across its truth test, which can raise, and released before either
-//! branch runs (Part 3 of #1092). An `object` arm passes through
-//! [`owned_value`] unchanged, so the node's result is owned only when both
-//! arms are produced objects; `object_release::is_produced` lists it as a
-//! producer exactly then. A result that mixes a produced and a borrowed
-//! arm is still leaked on the produced arm (#1499).
+//! branch runs (Part 3 of #1092). When one `object` arm is owned in a
+//! CPython-hosted module, the other, borrowed, arm is retained by
+//! [`owned_value`] (Part 3 of #1499, `object_release::retains_borrowed_arm`),
+//! so the result is owned whichever arm runs and
+//! `object_release::is_produced` lists it as a producer; with both arms
+//! borrowed the result is a borrow with no reference-count traffic.
 
 use super::boolop::{Emitter, basic_value, owned_value};
 use super::{Scalar, release_scalar_if_int_temporary, ty_to_basic_type};
@@ -64,11 +65,12 @@ pub(super) fn emit_if_exp<'ctx>(
         .build_conditional_branch(truth, body_block, orelse_block)
         .expect("build_conditional_branch should not fail for a well-formed i1");
 
+    let owns = crate::object_release::retains_borrowed_arm(emitter.rt, ty, body, orelse);
     let mut incoming = Vec::with_capacity(2);
     for (block, branch) in [(body_block, body), (orelse_block, orelse)] {
         emitter.builder.position_at_end(block);
         let scalar = emitter.emit(branch);
-        let value = basic_value(owned_value(emitter, branch, scalar, ty));
+        let value = basic_value(owned_value(emitter, branch, scalar, ty, owns));
         incoming.push((value, emitter.current_block()));
         emitter.branch_to(join);
     }
