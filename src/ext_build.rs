@@ -668,7 +668,12 @@ fn exception_classes_c(classes: &[UserExceptionClass]) -> String {
     out
 }
 
-/// The `-I`, code-model and source arguments for the shim, in driver order.
+/// The optimization flag the boundary shim is always compiled with
+/// ([`ext_compile_args`]).
+pub(crate) const EXT_SHIM_OPT_LEVEL: &str = "-O2";
+
+/// The optimization, `-I`, code-model and source arguments for the shim, in
+/// driver order.
 /// Split out from [`ext_link_args`] so the platform arms there stay purely
 /// about what makes the output loadable.
 ///
@@ -683,12 +688,27 @@ fn exception_classes_c(classes: &[UserExceptionClass]) -> String {
 /// reason this module takes its platform from the target triple and never
 /// from `cfg!`. The Windows arm omits it: a PE/COFF target is position
 /// independent by construction and its drivers warn the flag is ignored.
+///
+/// Every arm compiles the shim at `-O2` ([#1516]), whatever the build
+/// profile: the shim is fixed, already-correct C on the hot path of every
+/// boundary crossing, and the profile (`--release`) governs only the pycc
+/// IR and the `pycc_rt` archive linked beside it. The flag is spelled the
+/// same on all three arms because every driver this build runs is
+/// GCC-compatible -- the system `cc` (GCC or clang) on Linux and macOS, and
+/// on Windows the bundled `clang` driver targeting MSVC, never `cl.exe`
+/// (see `build_pipeline`'s `linker_command`) -- so no `/O2` arm is needed.
+///
+/// [#1516]: https://github.com/rotnov/pycc/issues/1516
 pub(crate) fn ext_compile_args(
     platform: ExtLinkPlatform,
     include: &Path,
     shim: &Path,
 ) -> Vec<OsString> {
-    let mut args = vec![OsString::from("-I"), include.as_os_str().to_os_string()];
+    let mut args = vec![
+        OsString::from(EXT_SHIM_OPT_LEVEL),
+        OsString::from("-I"),
+        include.as_os_str().to_os_string(),
+    ];
     if matches!(platform, ExtLinkPlatform::Linux | ExtLinkPlatform::MacOs) {
         args.push(OsString::from("-fPIC"));
     }
