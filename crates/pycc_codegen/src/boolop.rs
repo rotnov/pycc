@@ -217,8 +217,12 @@ fn emit_truth_only<'ctx>(
 }
 
 /// Emits `operand`, tests its truth and releases it
-/// (`condition::emit_condition`).
-fn operand_truth<'ctx>(emitter: &Emitter<'_, 'ctx>, operand: &MirExpr) -> IntValue<'ctx> {
+/// (`condition::emit_condition`). A conditional expression's test goes
+/// through here too (`if_exp.rs`).
+pub(super) fn operand_truth<'ctx>(
+    emitter: &Emitter<'_, 'ctx>,
+    operand: &MirExpr,
+) -> IntValue<'ctx> {
     super::condition::emit_condition(
         emitter.context,
         emitter.builder,

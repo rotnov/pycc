@@ -10,7 +10,10 @@
 //! `long` range, `bool` and `int` subclasses that override comparisons,
 //! `int` against `float`, NaN, an `__eq__` that returns a non-`bool` truthy
 //! or falsy value, one that raises, one whose result's `__bool__` raises, an
-//! unsupported pair, and a native `int` operand.
+//! unsupported pair, and a native `int` operand. It also covers the test of
+//! a conditional expression, and pins that an owned (packed) operand is
+//! released before the result's `__bool__` runs, by having that `__bool__`
+//! report `sys.getrefcount` of the operand.
 //!
 //! The test is hosted, so `#[ignore]`d and contributing no line coverage;
 //! the Tier-1 `native-build-test` leg runs it with `cargo test --workspace --
@@ -125,6 +128,17 @@ def both(a: Any, b: Any) -> int:
 
 def keep(xs: Any, b: Any) -> int:
     return len([x for x in xs[:] if x == b])
+
+
+def pick(a: Any, b: Any) -> str:
+    return "y" if a == b else "n"
+
+
+def held(a: Any, n: int) -> str:
+    out = "y" if a == n + 1 else "n"
+    if a == n + 2:
+        out += "Y"
+    return out
 "#;
 
 const SCRIPT: &str = r#"import m
@@ -178,6 +192,22 @@ try:
     m.keep([1, Boom()], 1)
 except RuntimeError as e:
     print('keep', e)
+print(''.join(m.pick(a, b) for a, b in cases))
+for a, b in [(Boom(), 1), (Weird(BadBool()), 1)]:
+    try:
+        m.pick(a, b)
+    except Exception as e:
+        print('pick', type(e).__name__, e)
+import sys
+class Peek:
+    def __init__(self, o): self.o = o
+    def __bool__(self):
+        print('refs', sys.getrefcount(self.o), end=' ')
+        return True
+class Probe:
+    def __eq__(self, o): return Peek(o)
+    __hash__ = None
+print(m.held(Probe(), 10**6))
 "#;
 
 #[test]
@@ -224,5 +254,10 @@ fn a_branch_only_comparison_matches_cpython_for_every_operand_shape() {
     ] {
         assert!(out.contains(line), "{line:?}: {out}");
     }
-    assert!(out.ends_with("4 0 1\nkeep eq boom\n"), "{out}");
+    assert!(out.contains("4 0 1\nkeep eq boom\n"), "{out}");
+    assert!(out.contains("pick TypeError bad bool\n"), "{out}");
+    // The packed `int` temporary is released before the result's
+    // `__bool__` runs, as CPython's `COMPARE_OP` releases its operands
+    // before `TO_BOOL`: only `Peek.o` and the call argument remain.
+    assert!(out.ends_with("refs 2 refs 2 yY\n"), "{out}");
 }

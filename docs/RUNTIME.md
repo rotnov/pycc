@@ -2497,6 +2497,7 @@ the leaked set either. An out-of-range selector or a `NULL` operand raises
 [#1514](https://github.com/rotnov/pycc/issues/1514)).** Some rich comparisons
 are used only for their truth:
 - an `if`, `while` or `assert` test;
+- the test of a conditional expression (`x if o == y else z`);
 - a comprehension filter;
 - the operand of `not`;
 - an operand of an `and`/`or` whose value is only tested.
@@ -2513,7 +2514,10 @@ The shim evaluates the comparison as follows:
 - When both operands are exact `int`s that fit a C `long`, it compares the two
   values directly. CPython's `int` comparison returns `True` or `False` for
   that pair, with no user code involved.
-- Any other pair goes through `PyObject_RichCompare`. A `True` or `False`
+- Any other pair goes through `PyObject_RichCompare`. The owned operands are
+  released before the result's truth is taken, as CPython's `COMPARE_OP`
+  releases its operands before the branch tests the result, so a `__bool__`
+  sees the reference counts it would see under CPython. A `True` or `False`
   result answers directly. Any other result is tested with `PyObject_IsTrue`,
   then released. So an `__eq__` that returns a non-`bool` object, one that
   raises, a result whose `__bool__` raises, NaN, a `bool` operand and an `int`

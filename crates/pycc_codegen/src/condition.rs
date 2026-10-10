@@ -1,6 +1,6 @@
-//! A branch condition: the `i1` an `if`, `while`, `assert` or comprehension
-//! filter branches on, and the truth a `not` or a truth-only `and`/`or`
-//! operand tests.
+//! A branch condition: the `i1` an `if`, `while`, `assert`, conditional
+//! expression or comprehension filter branches on, and the truth a `not` or
+//! a truth-only `and`/`or` operand tests.
 //!
 //! Every such site evaluates its expression, tests the value's truth and
 //! releases the value. A rich comparison with a CPython object operand

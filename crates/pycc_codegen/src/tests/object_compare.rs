@@ -176,7 +176,8 @@ fn a_function_body_comparison_bridges_its_failure_and_releases_an_int_temporary(
 }
 
 /// #1518: a rich comparison whose only use is a branch -- an `if` and a
-/// `while` test, a `not` operand and both operands of a truth-only `and` --
+/// `while` test, a `not` operand, both operands of a truth-only `and` and
+/// the test of a conditional expression --
 /// asks the shim for its truth and builds no result object, so neither
 /// `pycc_ext_obj_richcompare` nor `pycc_ext_obj_truthy` is called. An
 /// identity test in the same position stays a pointer compare, and a
@@ -222,13 +223,26 @@ fn a_comparison_that_only_feeds_a_branch_asks_the_shim_for_its_truth() {
                     body: vec![MirStmt::NoOp],
                     orelse: vec![],
                 },
+                // The test of a conditional expression.
+                MirStmt::ExprStmt(MirExpr::IfExp {
+                    test: Box::new(compare(CmpOpKind::Gt, numpy_pi(), MirExpr::IntLiteral(7))),
+                    body: Box::new(MirExpr::IntLiteral(1)),
+                    orelse: Box::new(MirExpr::IntLiteral(2)),
+                    ty: Ty::Int,
+                }),
                 MirStmt::ExprStmt(compare(CmpOpKind::GtE, numpy_pi(), numpy_pi())),
                 MirStmt::Return(None),
             ],
         }]),
         |ir| {
             // Selector, then the ownership mask, as for the value form.
-            for (selector, owned) in [(0, 2), (3, 2), (2, 0), (4, 1), (1, 0)] {
+            let truth_calls = ir
+                .lines()
+                .filter(|line| line.contains("call i32 @pycc_ext_obj_richcompare_truth("))
+                .count();
+            assert_eq!(truth_calls, 6, "{ir}");
+            assert!(ir.contains("ifexp_body"), "{ir}");
+            for (selector, owned) in [(0, 2), (3, 2), (2, 0), (4, 1), (1, 0), (4, 2)] {
                 let needle = format!("i32 {selector}, i32 {owned})");
                 assert!(
                     ir.lines().any(|line| line

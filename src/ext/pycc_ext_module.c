@@ -2623,8 +2623,9 @@ PyObject *pycc_ext_obj_richcompare(PyObject *l, PyObject *r, int op, int owned)
 
 /*
  * #1518 (Part 4 of #1514): the truth of `l op r` for a comparison whose only
- * use is a branch -- an `if`/`while`/`assert` test, a comprehension filter,
- * a `not` operand or an operand of a truth-only `and`/`or`
+ * use is a branch -- an `if`/`while`/`assert` or conditional-expression
+ * test, a comprehension filter, a `not` operand or an operand of a
+ * truth-only `and`/`or`
  * (`EXT_OBJ_RICHCOMPARE_TRUTH_SYMBOL` in
  * `crates/pycc_codegen/src/ext.rs`). Returns 1 or 0, or -1 with the CPython
  * exception set. `op` and `owned` are `pycc_ext_obj_richcompare`'s.
@@ -2665,7 +2666,7 @@ static int pycc_ext_compare_longs(long a, long b, int op)
 
 int pycc_ext_obj_richcompare_truth(PyObject *l, PyObject *r, int op, int owned)
 {
-    PyObject *result;
+    PyObject *result = NULL;
     int truth = -1;
     int l_overflow = 1;
     int r_overflow = 1;
@@ -2681,22 +2682,26 @@ int pycc_ext_obj_richcompare_truth(PyObject *l, PyObject *r, int op, int owned)
             truth = pycc_ext_compare_longs(a, b, op);
         } else {
             result = PyObject_RichCompare(l, r, op);
-            if (result == Py_True) {
-                truth = 1;
-            } else if (result == Py_False) {
-                truth = 0;
-            } else if (result != NULL) {
-                truth = PyObject_IsTrue(result);
-            }
-            Py_XDECREF(result);
         }
     }
+    /* The owned operands are released before the result's truth is taken,
+     * as CPython's `COMPARE_OP` releases its operands before the branch's
+     * `TO_BOOL`, so a `__bool__` sees the operands' reference counts it
+     * would see under CPython. */
     if (owned & 1) {
         Py_XDECREF(l);
     }
     if (owned & 2) {
         Py_XDECREF(r);
     }
+    if (result == Py_True) {
+        truth = 1;
+    } else if (result == Py_False) {
+        truth = 0;
+    } else if (result != NULL) {
+        truth = PyObject_IsTrue(result);
+    }
+    Py_XDECREF(result);
     return truth;
 }
 
