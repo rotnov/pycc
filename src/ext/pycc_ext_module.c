@@ -1899,20 +1899,45 @@ void pycc_ext_name_error(const unsigned char *name, long long len)
  * A NULL `obj` is still decided here. `a.b.c` lowers to nested
  * `ObjAttrGet` nodes, and although the caller's own NULL check now stops an
  * inner failure before the outer call is reached, this guard is what makes
- * that a defence in depth rather than the only line: `PyObject_GetAttrString`
+ * that a defence in depth rather than the only line: `PyObject_GetAttr`
  * dereferences `Py_TYPE(obj)` with no guard of its own, so any caller that
  * reaches here with NULL would crash the hosting interpreter instead of
  * raising. Returning NULL unchanged is also the *correct* CPython state --
  * the inner lookup already set its `AttributeError`, so propagating NULL
  * leaves exactly one exception set. Overwriting it with a second, synthetic
  * error would be worse.
+ *
+ * #1515 (Part 1 of #1514): the name arrives as an interned `str` cached in
+ * `*cache`, a per-name slot the compiled code owns -- one zero-initialised
+ * internal global per distinct attribute name in the module
+ * (`crates/pycc_codegen/src/foreign_attr.rs`'s `attr_name_slot`). The first
+ * load through a slot interns `name` and stores the result there; every
+ * later load passes the cached object straight to `PyObject_GetAttr`.
+ * `PyObject_GetAttrString` built a fresh `str` from the C string on every
+ * call, hashed it, and released it again, and a fresh string is never
+ * pointer-equal to the interned key in the type's or instance's dict, so
+ * every lookup also fell back to a full string comparison. On the lark
+ * `lalr_parser_state` subject (`docs/TESTING.md`, #1207) that conversion
+ * was the largest single cost of the hosted artifact's parse loop. The slot
+ * keeps its strong reference for the rest of the process, which the shim's
+ * refusal of subinterpreters licenses exactly as it licenses every other
+ * file-scope static here (`pycc_ext_carrier_types`). A failed intern (out
+ * of memory) leaves the slot NULL, so the next load retries it, and
+ * returns NULL with CPython's exception set -- the same failure protocol as
+ * a failed lookup.
  */
-PyObject *pycc_ext_obj_getattr(PyObject *obj, const char *name)
+PyObject *pycc_ext_obj_getattr(PyObject *obj, const char *name, PyObject **cache)
 {
     if (obj == NULL) {
         return NULL;
     }
-    return PyObject_GetAttrString(obj, name);
+    if (*cache == NULL) {
+        *cache = PyUnicode_InternFromString(name);
+        if (*cache == NULL) {
+            return NULL;
+        }
+    }
+    return PyObject_GetAttr(obj, *cache);
 }
 
 /*
@@ -2334,7 +2359,7 @@ int pycc_ext_obj_rebind_may_release(void)
  * The result is a *new* reference, owned as `pycc_ext_obj_call`'s result
  * is (released when an unbound temporary, Part 1 of #1092) --
  * `PyObject_GetItem` hands back a new reference exactly as
- * `PyObject_GetAttrString` does, and the result is the only thing that
+ * `PyObject_GetAttr` does, and the result is the only thing that
  * escapes into compiled code as an `object` value.
  *
  * A NULL `k` means the packer already failed with a CPython exception set
