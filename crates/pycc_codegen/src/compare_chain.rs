@@ -32,7 +32,7 @@
 use super::bigint_rc::{pop_pending_int_release, push_pending_int_release_if_scalar_temporary};
 use super::boolop::Emitter;
 use super::compare::emit_compare_values;
-use super::exception::guard_statement_effects;
+use super::exception_check::guard_statement_effects;
 use super::{
     Scalar, build_call_to_with_leading_args, expect_instance_pointer,
     release_scalar_if_int_temporary,

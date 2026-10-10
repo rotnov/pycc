@@ -997,10 +997,45 @@ call, which has no method lookup. The remaining `pycc_ext_obj_getattr` cost
 (65k) comes from the loop's attribute loads. The parity driver matched CPython
 on both #1517 artifacts, with the same set-order exception.
 
+**Re-measured after #1518 part A (2026-10-10; Part 4 of
+[#1514](https://github.com/rotnov/pycc/issues/1514)).** The setup matches the
+#1517 measurement: the same harness, machine, venvs and subject
+(`419d76a7...`), with `PYTHONHASHSEED=0`. Both artifacts were built with
+`--release` and a release build of `pycc`. Three arms alternated, five
+processes each:
+- CPython;
+- `main` `67029281`, which includes #1517;
+- the #1518 part A branch on top of `main`.
+
+The part A branch checks for a pending pycc exception by loading a byte
+through a per-function address, where `main` called
+`pycc_rt_exception_active()`. In this dlopen'd artifact that call reaches the
+thread-local through `__tls_get_addr` ("The pending-exception check" in
+`docs/RUNTIME.md`).
+
+| Arm | `parse(test_json)`, median of 55 samples | 50-fold input | Instructions per parse (callgrind) |
+|---|---|---|---|
+| CPython 3.14.7 | 226 µs | 10.7 ms | 2.144M |
+| `main` | 359 µs (1.59x) | 16.8 ms (1.57x) | 2.590M (1.21x) |
+| #1518 part A | 325 µs (1.44x) | 15.6 ms (1.46x) | 2.531M (1.18x) |
+
+How callgrind counted instructions per parse:
+- It ran the harness's `parse(test_json)` loop at 200 and at 600 parses.
+- The difference in total instructions was divided by 400.
+
+On `main`, `pycc_rt_exception_active` accounted for about 54k instructions per
+parse: about 2,800 calls at about 19 instructions each, `__tls_get_addr`
+included. The part A branch removes about 58k instructions per parse (2.3%),
+and `ParserState.feed_token`'s inclusive cost falls from 1.237M to 1.178M. The
+wall-clock gain is larger than the instruction count alone suggests. A likely
+reason is that the removed calls sat on the dependency chain of every check.
+The parity driver matched CPython on the part A artifact, with the same
+set-order exception.
+
 #1514 records the full attribution and the remaining parts:
 - #1516: an optimized shim and runtime in the default artifact;
 - #1517: a method call without a bound method (measured above);
-- #1518: the residual per-operation costs.
+- #1518: the residual per-operation costs (part A measured above).
 
 | Blocker in the subject module (line) | Diagnostic | Issue |
 |---|---|---|

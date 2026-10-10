@@ -89,6 +89,42 @@ mutable state across runtime tests and future generated threads; generated
 programs themselves remain single-threaded. The plain `extern "C"` ABI is
 unchanged and no native unwinding is used.
 
+**The pending-exception check ([#1518](https://github.com/rotnov/pycc/issues/1518), Part 4 of #1514).**
+Generated code tests the active flag after every operation that can set it:
+each `expression_can_set_exception` checkpoint, each `try` body and `finally`
+dispatch, and a `for` over a set. It does not call
+`pycc_rt_exception_active()` to do so. Instead, a compiled function calls
+`pycc_rt_exception_state()` once, at the top of its entry block, which returns
+the address of the calling thread's flag. Every check in that function is then
+a one-byte load from that address (`crates/pycc_codegen/src/exception_check.rs`).
+A function with no check makes no call.
+
+Why the address stays valid:
+- The state is `#[repr(C)]` with the flag at offset 0
+  (`crates/pycc_rt/src/exception/state.rs`).
+- Its thread-local has a constant initializer and no destructor, so the
+  address names the same thread's flag for as long as that thread runs.
+- An invocation never changes threads, so one lookup per invocation is enough.
+  Generators are not compiled yet: `yield` in a function is still `C0001`.
+  Once generator support lands, the intended behavior is that a resume
+  function is a function of its own and repeats the lookup on every resume,
+  because a generator can be resumed on another thread.
+
+Each check still reads memory, because the address comes from an external
+call: LLVM cannot assume the flag is unchanged across the runtime and C-API
+calls that set it.
+
+The indirection exists for the hosted `--ext` artifact. There the runtime is
+linked into a shared object that CPython loads at run time, so every access to
+a Rust `thread_local!` is a general-dynamic access through `__tls_get_addr`,
+and stable Rust cannot select a cheaper TLS model. On lark's compiled
+`feed_token`, calling `pycc_rt_exception_active()` at every check cost about
+54k instructions per parse (`docs/TESTING.md`).
+
+`pycc_rt_exception_active()` remains the runtime's own accessor and the C ABI
+for hand-written callers. Its result always agrees with the byte at the
+address.
+
 Supported builtin exception types: `Exception` (tag 0, catch-all),
 `ValueError` (1), `TypeError` (2), `KeyError` (3), `IndexError` (4),
 `ZeroDivisionError` (5), `RuntimeError` (6). That flat seven is not the whole
@@ -1218,7 +1254,7 @@ first and third of those are tracked as
 normally where a `panic!` did not, each site also returns a sentinel that is a
 *valid* value of its return type -- `tag_smallint(0)`, a fresh empty list, an
 empty `str`, never a raw `0` or `NULL` -- and `MirStmt::ForSet`'s loop-test
-gained a `pycc_rt_exception_active() == 0` conjunct, without which a `for x in
+gained a pending-flag `== 0` conjunct, without which a `for x in
 s: s.add(...)` loop would spin forever instead of reporting the error. That
 conjunct gives the loop a second exit edge, so the block after it ends in the
 same statement-effect guard every other fallible statement uses: the statement

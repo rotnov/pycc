@@ -48,6 +48,10 @@ pub(super) struct ExceptionCodegenState<'ctx> {
     /// `ext_thunk::emit_name_error_raise`). Set once, before any function
     /// body or export thunk is emitted.
     pub(super) host_bridge: Cell<bool>,
+    /// Each function's pending-exception flag address, read once in its
+    /// entry block by the first check emitted into it (#1518,
+    /// `exception_check::load_exception_active`).
+    pub(super) state_flags: RefCell<HashMap<FunctionValue<'ctx>, PointerValue<'ctx>>>,
 }
 
 impl ExceptionCodegenState<'_> {
@@ -60,6 +64,7 @@ impl ExceptionCodegenState<'_> {
             loop_iterators: RefCell::new(Vec::new()),
             module_exec_exit: Cell::new(None),
             host_bridge: Cell::new(false),
+            state_flags: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -336,79 +341,6 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
     }
 }
 
-/// Stops expression/statement evaluation before another effect can be
-/// committed when a Python exception is pending.
-///
-/// #638 (D-208): when `rt.exceptions.pending_int_releases` is non-empty, an
-/// enclosing node (never this call site's own operand -- see each push
-/// site's own comment) has already evaluated a fresh `Ty::Int` birth
-/// reference that a sibling's evaluation, reached from here, might orphan by
-/// raising before the enclosing node's own release call is textually
-/// reached. In that case the exception edge is routed through an
-/// intermediate `effect_exc_unwind` block that releases a *snapshot* of the
-/// stack before branching to `exception_target`, instead of branching there
-/// directly.
-///
-/// The `is_empty()` check below is a codegen-time (Rust-side) read of the
-/// `RefCell`'s current length while walking the MIR tree -- it costs nothing
-/// in the emitted binary either way, and it is what keeps this change from
-/// affecting the D-084/D-140 nbody hot loop's own codegen: that loop's
-/// arithmetic is entirely smallint, so it never pushes onto this stack, and
-/// every guard site it reaches takes the empty-stack branch below, emitting
-/// exactly the same two-block shape this function has always emitted. Do
-/// not simplify this to unconditionally emit `effect_exc_unwind`: doing so
-/// would add an extra empty block and an extra unconditional branch to
-/// every guard site in the program, including every one in that hot loop,
-/// which is precisely the throughput regression `bigint_rc.rs`'s own guard
-/// design exists to avoid.
-pub(super) fn guard_statement_effects<'ctx>(
-    context: &'ctx Context,
-    builder: &inkwell::builder::Builder<'ctx>,
-    rt: &RtFns<'ctx>,
-) {
-    let exception_target = rt
-        .exceptions
-        .targets
-        .borrow()
-        .last()
-        .copied()
-        .expect("expression emission always has an installed exception target");
-    let active = builder
-        .build_call(rt.exception_active, &[], "effect_exc_active")
-        .expect("build_call should not fail for exception_active")
-        .try_as_basic_value()
-        .expect_basic("pycc_rt_exception_active returns i8")
-        .into_int_value();
-    let has_exc = builder
-        .build_int_compare(
-            inkwell::IntPredicate::NE,
-            active,
-            context.i8_type().const_zero(),
-            "effect_has_exc",
-        )
-        .expect("build_int_compare should not fail");
-    let function = builder.get_insert_block().unwrap().get_parent().unwrap();
-    let continuation = context.append_basic_block(function, "effect_exc_cont");
-    // Part 1 of #1092: a held object temporary needs the unwind block
-    // exactly as a held bigint does; both empty keeps the two-block shape.
-    let nothing_pending = rt.exceptions.pending_int_releases.borrow().is_empty()
-        && rt.exceptions.pending_object_releases.borrow().is_empty();
-    if nothing_pending {
-        builder
-            .build_conditional_branch(has_exc, exception_target, continuation)
-            .expect("build_conditional_branch should guard a statement effect");
-        builder.position_at_end(continuation);
-        return;
-    }
-    let unwind_bb = context.append_basic_block(function, "effect_exc_unwind");
-    builder
-        .build_conditional_branch(has_exc, unwind_bb, continuation)
-        .expect("build_conditional_branch should guard a statement effect");
-    builder.position_at_end(unwind_bb);
-    jump_to_exception_target(context, builder, rt);
-    builder.position_at_end(continuation);
-}
-
 /// Terminates the current block with an unconditional branch to the
 /// innermost exception target, first releasing a snapshot of
 /// `rt.exceptions.pending_int_releases` (#638, D-208) and of
@@ -542,12 +474,7 @@ pub(super) fn emit_try<'ctx>(
         .get_terminator()
         .is_none();
     if body_falls_through {
-        let active = builder
-            .build_call(rt.exception_active, &[], "try_body_exc_active")
-            .expect("build_call should not fail for exception_active")
-            .try_as_basic_value()
-            .expect_basic("pycc_rt_exception_active returns i8")
-            .into_int_value();
+        let active = load_exception_active(context, builder, rt, "try_body_exc_active");
         let has_exc = builder
             .build_int_compare(
                 inkwell::IntPredicate::NE,
@@ -800,12 +727,7 @@ pub(super) fn emit_try<'ctx>(
         // pending state while the final body runs. Normal
         // completion restores it; a new exception or a return from
         // `finally` deliberately replaces/suppresses it.
-        let active = builder
-            .build_call(rt.exception_active, &[], "finally_pending_active")
-            .expect("build_call should not fail for exception_active")
-            .try_as_basic_value()
-            .expect_basic("pycc_rt_exception_active returns i8")
-            .into_int_value();
+        let active = load_exception_active(context, builder, rt, "finally_pending_active");
         let value = builder
             .build_call(rt.exception_value, &[], "finally_pending_value")
             .expect("build_call should not fail for exception_value")
@@ -1094,12 +1016,7 @@ pub(super) fn emit_try_star<'ctx>(
         .get_terminator()
         .is_none();
     if body_falls_through {
-        let active = builder
-            .build_call(rt.exception_active, &[], "trystar_body_exc_active")
-            .expect("build_call should not fail for exception_active")
-            .try_as_basic_value()
-            .expect_basic("pycc_rt_exception_active returns i8")
-            .into_int_value();
+        let active = load_exception_active(context, builder, rt, "trystar_body_exc_active");
         let has_exc = builder
             .build_int_compare(
                 inkwell::IntPredicate::NE,
@@ -1409,12 +1326,7 @@ pub(super) fn emit_try_star<'ctx>(
     let pending_exception = if finalbody.is_empty() {
         None
     } else {
-        let active = builder
-            .build_call(rt.exception_active, &[], "trystar_finally_pending_active")
-            .expect("build_call should not fail for exception_active")
-            .try_as_basic_value()
-            .expect_basic("pycc_rt_exception_active returns i8")
-            .into_int_value();
+        let active = load_exception_active(context, builder, rt, "trystar_finally_pending_active");
         let value = builder
             .build_call(rt.exception_value, &[], "trystar_finally_pending_value")
             .expect("build_call should not fail for exception_value")

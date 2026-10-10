@@ -45,6 +45,7 @@ use super::bigint_rc::{
     BigIntRefcount, emit_bigint_refcount_call, int_temporary_word, release_if_int_temporary,
     release_scalar_if_int_temporary,
 };
+use super::exception_check::load_exception_active;
 use super::rt_fns::RtFns;
 use super::set_instance::{SetEmitter, set_element_scalar};
 use super::{
@@ -636,12 +637,8 @@ fn open_indexed_loop<'ctx>(
         None => in_range,
         Some(initial_len) => {
             build_int_set_check_not_resized(builder, cx.rt, len, initial_len);
-            let exc_active = builder
-                .build_call(cx.rt.exception_active, &[], &format!("{prefix}_exc_active"))
-                .expect("build_call should not fail for exception_active")
-                .try_as_basic_value()
-                .expect_basic("pycc_rt_exception_active returns i8")
-                .into_int_value();
+            let exc_active =
+                load_exception_active(cx.context, builder, cx.rt, &format!("{prefix}_exc_active"));
             let no_exception = builder
                 .build_int_compare(
                     IntPredicate::EQ,
