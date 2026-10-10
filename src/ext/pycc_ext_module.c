@@ -1941,6 +1941,213 @@ PyObject *pycc_ext_obj_getattr(PyObject *obj, const char *name, PyObject **cache
 }
 
 /*
+ * #1517 (Part 3 of #1514): whether `o.<name>`, for any `o` of exact type
+ * `tp`, is fully decided by `tp` alone and resolves to a *method
+ * descriptor* -- and if so, that descriptor. Returns a new reference to it,
+ * or NULL (with no exception set) when the generic `PyObject_GetAttr` path
+ * must be taken instead.
+ *
+ * CPython's own `o.m(args)` (`LOAD_ATTR` with the method flag, then
+ * `CALL`) never builds a bound method when `_PyObject_GetMethod` finds a
+ * `Py_TPFLAGS_METHOD_DESCRIPTOR` descriptor on the type and no instance
+ * `__dict__` entry shadows it: it keeps the unbound descriptor and `o`, and
+ * calls the descriptor with `o` prepended. That function is private, and
+ * the shim is compiled against `Py_LIMITED_API`, which also hides
+ * `tp_mro`, `tp_dict` and `tp_dictoffset`. So this decides the same
+ * question only for an explicit allowlist of exact core builtin types, and
+ * answers "take the generic path" for every other one (a subclass, a user
+ * class, an extension type, an exception):
+ *
+ * - `tp` is exactly one of `list`, `dict`, `str`, `bytes`, `bytearray`,
+ *   `set`, `frozenset`, `tuple`, `int` or `float`. Each is a static,
+ *   immutable type whose metatype is exactly `type`, so the answer cannot
+ *   change for the life of the process (which is what lets the caller cache
+ *   it per call site); each uses `PyObject_GenericGetAttr`, so no
+ *   `__getattribute__` or `__getattr__` takes part; its instances have no
+ *   `__dict__` that could shadow a class attribute; and every method its
+ *   type dictionary defines is a plain `method_descriptor`.
+ * - `type.__getattribute__(tp, name)` yields an object whose type carries
+ *   `Py_TPFLAGS_METHOD_DESCRIPTOR`. On these types that is the
+ *   `_PyType_Lookup` result itself: a method descriptor's
+ *   `__get__(None, tp)` returns the descriptor. A class method
+ *   (`dict.fromkeys`, `int.from_bytes`) comes back bound to `tp`, a static
+ *   method (`str.maketrans`) as a builtin function, a getset (`int.real`) as
+ *   the getset descriptor itself, and `type`'s own attributes (`__name__`,
+ *   `mro`, ...) are data descriptors or come back bound to `tp` -- none of
+ *   them a method descriptor, so each keeps the generic path.
+ *
+ * Why an allowlist rather than a structural test (static, immutable,
+ * generic getattr, no `__dictoffset__`): `type.__getattribute__` runs the
+ * found attribute's `__get__` with a NULL instance, while the instance
+ * lookup runs it with the instance. For a method descriptor the two agree by
+ * construction, but a custom C descriptor on a static immutable extension
+ * type could answer differently for the class and for the instance -- or
+ * have side effects of its own -- and the limited API cannot read the type
+ * dictionary to tell such a descriptor apart before calling `__get__`. On
+ * the allowlisted types every attribute is one of CPython's own descriptor
+ * kinds listed above, so the probe has no side effect and the class and
+ * instance answers agree exactly (docs/RUNTIME.md, #1517).
+ *
+ * For such a descriptor `PyObject_GenericGetAttr(o, name)` is
+ * `descr.__get__(o, tp)`, and calling that bound method is calling `descr`
+ * with `o` prepended -- the contract `Py_TPFLAGS_METHOD_DESCRIPTOR` names,
+ * and the one CPython's own unbound-method call relies on. A failed type
+ * lookup (a missing name) is cleared: the caller's generic path repeats it
+ * on the instance and raises CPython's own `AttributeError`, with its
+ * `name` and `obj` set.
+ */
+static PyObject *pycc_ext_unbound_method(PyTypeObject *tp, PyObject *name)
+{
+    PyObject *descr;
+
+    if (tp != &PyList_Type && tp != &PyDict_Type && tp != &PyUnicode_Type
+        && tp != &PyBytes_Type && tp != &PyByteArray_Type && tp != &PySet_Type
+        && tp != &PyFrozenSet_Type && tp != &PyTuple_Type && tp != &PyLong_Type
+        && tp != &PyFloat_Type) {
+        return NULL;
+    }
+    descr = PyObject_GetAttr((PyObject *)tp, name);
+    if (descr == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+    if (!(PyType_GetFlags(Py_TYPE(descr)) & Py_TPFLAGS_METHOD_DESCRIPTOR)) {
+        Py_DECREF(descr);
+        return NULL;
+    }
+    return descr;
+}
+
+/*
+ * #1517 (Part 3 of #1514): the callable lookup of a positional
+ * `o.<name>(args)` call (`EXT_OBJ_METHOD_LOOKUP_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`). Like `pycc_ext_obj_getattr` it runs
+ * *before* the arguments are evaluated, which is CPython's order (the
+ * `LOAD_ATTR` precedes every argument), so `o.missing(f())` raises
+ * `AttributeError` without calling `f`, and an argument that rebinds the
+ * method cannot change which callable is called. That order is why this is
+ * not `PyObject_VectorcallMethod`: that function looks the method up only
+ * once every argument already exists.
+ *
+ * Returns a new reference to the callable, or NULL with CPython's
+ * exception set. When the callable is an *unbound* method descriptor
+ * (`pycc_ext_unbound_method`), `*self_out` receives a new reference to
+ * `obj`, which `pycc_ext_obj_method_call` prepends to the arguments;
+ * otherwise `*self_out` is NULL and the callable is whatever
+ * `PyObject_GetAttr` returned -- a bound method, an instance attribute, a
+ * property's value, a `__getattr__` result -- called as it is. The
+ * reference to `obj` stands in for the one the bound method held: an
+ * argument may drop the caller's own reference to the receiver.
+ *
+ * `site` is two pointers of per-call-site state the compiled code owns (one
+ * zero-initialised internal global per call site): the exact receiver type
+ * last seen there, and `pycc_ext_unbound_method`'s answer for it (NULL:
+ * take the generic path). They are replaced only when a different receiver
+ * type reaches the site, so a hit costs one pointer comparison and two
+ * reference-count increments -- no bound-method allocation and no release
+ * of one, which was the cost #1517 removes.
+ *
+ * Only a positive entry owns references: the descriptor and its static,
+ * immutable type, whose answer cannot change and whose address cannot be
+ * reused while the site holds it. A negative entry (`site[1]` NULL) only
+ * *names* its type and holds no reference, so a site never keeps a heap
+ * class (a user class, a subclass of `list`) alive or moves its reference
+ * count. A negative entry whose type has died and whose address now names
+ * another type is harmless: a negative answer only selects
+ * `PyObject_GetAttr`, which is correct for every receiver. The slots are
+ * written before the old references are released, so a finalizer that
+ * re-enters the site sees a consistent pair. Like the name cache, the state
+ * lives for the process, which the shim's refusal of subinterpreters
+ * licenses.
+ */
+PyObject *pycc_ext_obj_method_lookup(PyObject *obj, const char *name,
+                                     PyObject **cache, PyObject **site,
+                                     PyObject **self_out)
+{
+    PyTypeObject *tp;
+
+    *self_out = NULL;
+    if (obj == NULL) {
+        return NULL;
+    }
+    if (*cache == NULL) {
+        *cache = PyUnicode_InternFromString(name);
+        if (*cache == NULL) {
+            return NULL;
+        }
+    }
+    tp = Py_TYPE(obj);
+    if (site[0] != (PyObject *)tp) {
+        PyObject *old_descr = site[1];
+        PyObject *old_type = old_descr != NULL ? site[0] : NULL;
+        PyObject *descr = pycc_ext_unbound_method(tp, *cache);
+
+        site[0] = descr != NULL ? Py_NewRef((PyObject *)tp) : (PyObject *)tp;
+        site[1] = descr;
+        Py_XDECREF(old_descr);
+        Py_XDECREF(old_type);
+    }
+    if (site[1] != NULL) {
+        *self_out = Py_NewRef(obj);
+        return Py_NewRef(site[1]);
+    }
+    return PyObject_GetAttr(obj, *cache);
+}
+
+/*
+ * #1517: the call half of a positional `o.<name>(args)`
+ * (`EXT_OBJ_METHOD_CALL_SYMBOL`), taking what `pycc_ext_obj_method_lookup`
+ * returned.
+ *
+ * `args` has `nargs + 1` slots: slot 0 is reserved, never written by the
+ * compiled code (this function initializes it before every call), and
+ * slots 1..nargs hold the packed arguments. With a
+ * `self` (an unbound method descriptor) slot 0 receives it and the call is
+ * `callable(self, *args)`, CPython's own unbound-method call. Without one
+ * the call is `callable(*args)` with `PY_VECTORCALL_ARGUMENTS_OFFSET`,
+ * which lets the callee use slot 0 itself (a bound Python method then
+ * prepends its `__self__` without copying the array).
+ *
+ * Ownership is `pycc_ext_obj_call`'s: `callable`, `self` and every packed
+ * argument are consumed on every path, a failed packer's NULL slot
+ * included, whose exception is propagated unchanged. A NULL `callable` is
+ * defence in depth: the caller routed a failed lookup to its failure edge
+ * before this call is reached.
+ */
+PyObject *pycc_ext_obj_method_call(PyObject *callable, PyObject *self,
+                                   PyObject **args, long long nargs)
+{
+    PyObject *result = NULL;
+    long long i;
+    int packed = 1;
+
+    for (i = 1; i <= nargs; i++) {
+        if (args[i] == NULL) {
+            packed = 0;
+        }
+    }
+    if (callable != NULL && packed) {
+        if (self != NULL) {
+            args[0] = self;
+            result = PyObject_Vectorcall(callable, args, (size_t)nargs + 1, NULL);
+        } else {
+            /* The offset flag lets the callee save and temporarily replace
+             * slot 0, so it must hold a defined value. */
+            args[0] = NULL;
+            result = PyObject_Vectorcall(callable, args + 1,
+                                         (size_t)nargs | PY_VECTORCALL_ARGUMENTS_OFFSET,
+                                         NULL);
+        }
+    }
+    Py_XDECREF(callable);
+    Py_XDECREF(self);
+    for (i = 1; i <= nargs; i++) {
+        Py_XDECREF(args[i]);
+    }
+    return result;
+}
+
+/*
  * Part 2 of #1026, PR 2b of #1081: argument marshalling for
  * `pycc_ext_obj_call` below.
  *

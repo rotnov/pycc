@@ -271,8 +271,8 @@ fn a_for_loop_body_failure_unwinds_through_its_cleanup_blocks() {
 }
 
 /// A comprehension evaluated while an outer operand is held -- here as the
-/// argument of a method call, whose bound method is held across its
-/// arguments -- releases that outer operand on every one of its own
+/// argument of a method call, whose callable and receiver (#1517) are held
+/// across its arguments -- releases that outer operand on every one of its own
 /// failure edges, beside its own iterator and result:
 /// `copy.m([x for x in copy.a])`.
 #[test]
@@ -296,22 +296,23 @@ fn a_comprehension_failure_releases_an_outer_held_operand() {
         },
     );
     for (label, held) in [
-        ("objcomp_result_fail", 2),
-        ("foreign_iter_next_fail", 3),
-        ("objcomp_collect_fail", 4),
+        ("objcomp_result_fail", 3),
+        ("foreign_iter_next_fail", 4),
+        ("objcomp_collect_fail", 5),
     ] {
         let found = blocks(&ir, label);
         assert_eq!(found.len(), 1, "{label}\n{ir}");
         assert_eq!(
             releases(found[0]),
             held,
-            "{label} releases the bound method and what the comprehension holds\n{ir}"
+            "{label} releases the callable, the receiver and what the comprehension holds\n{ir}"
         );
     }
-    // `iter()`'s failure releases the produced source and the bound method.
+    // `iter()`'s failure releases the produced source, the callable and the
+    // receiver.
     let get_iter_fail = blocks(&ir, "foreign_iter_get_fail");
     assert_eq!(get_iter_fail.len(), 1, "{ir}");
-    assert_eq!(releases(get_iter_fail[0]), 2, "{ir}");
+    assert_eq!(releases(get_iter_fail[0]), 3, "{ir}");
 }
 
 /// A native comprehension (`[i for i in range(2) if copy.a]`) holds a
