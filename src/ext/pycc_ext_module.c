@@ -2622,6 +2622,85 @@ PyObject *pycc_ext_obj_richcompare(PyObject *l, PyObject *r, int op, int owned)
 }
 
 /*
+ * #1518 (Part 4 of #1514): the truth of `l op r` for a comparison whose only
+ * use is a branch -- an `if`/`while`/`assert` test, a comprehension filter,
+ * a `not` operand or an operand of a truth-only `and`/`or`
+ * (`EXT_OBJ_RICHCOMPARE_TRUTH_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`). Returns 1 or 0, or -1 with the CPython
+ * exception set. `op` and `owned` are `pycc_ext_obj_richcompare`'s.
+ *
+ * The answer is CPython's `COMPARE_OP` followed by its truth test:
+ * `PyObject_RichCompare`, then `PyObject_IsTrue` of the result, so a
+ * non-`bool` result (a NumPy array, a user `__eq__` returning a list) has
+ * its own truth taken, and that truth test may raise. As for
+ * `pycc_ext_obj_richcompare`, there is no identity shortcut: a NaN is not
+ * equal to itself.
+ *
+ * Two operands that are both *exact* `int`s whose values fit a C `long` are
+ * compared as `long`s without calling `PyObject_RichCompare`. That is
+ * exactly `int`'s own comparison: an exact `int`'s `tp_richcompare` is
+ * `int`'s, which no program can replace, it never raises, and it orders by
+ * value. An `int` subclass may override its comparison methods, so it, a
+ * `bool` and any value outside a `long` take the general path.
+ * `PyLong_AsLongAndOverflow` reports a value outside a `long` through its
+ * overflow flag and never raises for an `int`.
+ */
+static int pycc_ext_compare_longs(long a, long b, int op)
+{
+    switch (op) {
+    case Py_LT:
+        return a < b;
+    case Py_LE:
+        return a <= b;
+    case Py_EQ:
+        return a == b;
+    case Py_NE:
+        return a != b;
+    case Py_GT:
+        return a > b;
+    default:
+        return a >= b;
+    }
+}
+
+int pycc_ext_obj_richcompare_truth(PyObject *l, PyObject *r, int op, int owned)
+{
+    PyObject *result;
+    int truth = -1;
+    int l_overflow = 1;
+    int r_overflow = 1;
+    long a = 0;
+    long b = 0;
+
+    if (l != NULL && r != NULL) {
+        if (PyLong_CheckExact(l) && PyLong_CheckExact(r)) {
+            a = PyLong_AsLongAndOverflow(l, &l_overflow);
+            b = PyLong_AsLongAndOverflow(r, &r_overflow);
+        }
+        if (l_overflow == 0 && r_overflow == 0) {
+            truth = pycc_ext_compare_longs(a, b, op);
+        } else {
+            result = PyObject_RichCompare(l, r, op);
+            if (result == Py_True) {
+                truth = 1;
+            } else if (result == Py_False) {
+                truth = 0;
+            } else if (result != NULL) {
+                truth = PyObject_IsTrue(result);
+            }
+            Py_XDECREF(result);
+        }
+    }
+    if (owned & 1) {
+        Py_XDECREF(l);
+    }
+    if (owned & 2) {
+        Py_XDECREF(r);
+    }
+    return truth;
+}
+
+/*
  * Part 1 of #1371: a *borrowed* pointer to CPython's `None` singleton, the
  * operand compiled code compares an object against for `o is None`
  * (`EXT_OBJ_NONE_SYMBOL`). `None` is immortal, so the borrow never dangles.

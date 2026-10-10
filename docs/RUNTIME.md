@@ -2492,6 +2492,39 @@ CPython's own static type object instead, so it adds nothing to
 the leaked set either. An out-of-range selector or a `NULL` operand raises
 `SystemError` rather than reading undefined memory.
 
+**A comparison that only feeds a branch builds no result object
+([#1518](https://github.com/rotnov/pycc/issues/1518), Part 4 of
+[#1514](https://github.com/rotnov/pycc/issues/1514)).** Some rich comparisons
+are used only for their truth:
+- an `if`, `while` or `assert` test;
+- a comprehension filter;
+- the operand of `not`;
+- an operand of an `and`/`or` whose value is only tested.
+
+Such a comparison calls `pycc_ext_obj_richcompare_truth(l, r, op, owned)`
+instead of `pycc_ext_obj_richcompare` followed by `pycc_ext_obj_truthy`
+(`crates/pycc_codegen/src/condition.rs`). Its operands, selector and `owned`
+mask follow the value form's contract exactly, and it releases the owned
+operands on every path. It answers a C `int`: `1` true, `0` false, `-1` with
+an exception set. A `-1` routes to the operation's failure edge as a `NULL`
+does for the value form.
+
+The shim evaluates the comparison as follows:
+- When both operands are exact `int`s that fit a C `long`, it compares the two
+  values directly. CPython's `int` comparison returns `True` or `False` for
+  that pair, with no user code involved.
+- Any other pair goes through `PyObject_RichCompare`. A `True` or `False`
+  result answers directly. Any other result is tested with `PyObject_IsTrue`,
+  then released. So an `__eq__` that returns a non-`bool` object, one that
+  raises, a result whose `__bool__` raises, NaN, a `bool` operand and an `int`
+  subclass behave exactly as under CPython.
+
+The shim takes no identity shortcut. An identity test (`is`, `is not`) stays
+the pointer comparison above. A comparison used as a value (bound, returned,
+passed, or the result of an `and`/`or` used as a value) still builds its
+result object. `tests/issue_1518_compare_truth.rs` compares each case with
+CPython.
+
 **`type(o)` is one more producer.** Part 11 of
 [#1371](https://github.com/rotnov/pycc/issues/1371) adds
 `pycc_ext_obj_type(o)`, which wraps `PyObject_Type`: it borrows the operand

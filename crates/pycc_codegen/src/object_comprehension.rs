@@ -62,7 +62,7 @@ use super::foreign_call;
 use super::foreign_fail::{ForeignFailEdge, route_negative, route_null};
 use super::foreign_pack::{emit_pack, shim_fn};
 use super::{EXT_OBJ_COLLECT_SYMBOL, EXT_OBJ_NEW_COLLECTION_SYMBOL, ObjCollectionKind};
-use super::{Scalar, emit_expr, truthy};
+use super::{Scalar, emit_expr};
 use inkwell::values::PointerValue;
 use pycc_mir::MirExpr;
 
@@ -145,11 +145,15 @@ pub(super) fn emit_object_comprehension<'ctx>(
     let trip_end = context.append_basic_block(edge.function(), "objcomp_trip_end");
 
     if let Some(cond) = cond {
-        let scalar = emit(cond);
-        let held = crate::object_release::hold(context, module, rt, cond, &scalar);
-        let test = truthy(context, builder, module, rt, scalar);
-        held.release(builder, rt);
-        release_scalar_if_int_temporary(context, builder, rt, cond, &scalar);
+        let test = crate::condition::emit_condition(
+            context,
+            builder,
+            module,
+            rt,
+            cx.user_functions,
+            cx.locals,
+            cond,
+        );
         let function = edge.function();
         let keep_bb = context.append_basic_block(function, "objcomp_keep");
         builder

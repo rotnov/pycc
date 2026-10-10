@@ -997,10 +997,48 @@ call, which has no method lookup. The remaining `pycc_ext_obj_getattr` cost
 (65k) comes from the loop's attribute loads. The parity driver matched CPython
 on both #1517 artifacts, with the same set-order exception.
 
+**Re-measured after #1518 part B (2026-10-10; Part 4 of
+[#1514](https://github.com/rotnov/pycc/issues/1514)).** The same harness,
+venvs and subject were used. Each artifact was built with
+`pycc build lalr_parser_state.py -o lalr_parser_state.abi3.so --ext
+--foreign-relative-imports --release`, using a release build of `pycc`.
+
+Two methods were used:
+- Wall clock: three arms (CPython, `main` `67029281`, and the part B branch on
+  top of it) alternated over five processes each, with `PYTHONHASHSEED=0`.
+  Each figure is the median of 55 samples.
+- callgrind: instructions per parse are `(Ir(600 parses) − Ir(200 parses)) /
+  400`, from `valgrind --tool=callgrind` runs of the same parse loop at the
+  two counts.
+
+Part B asks a branch-only rich comparison for its truth instead of building
+and testing a `bool` ("A comparison that only feeds a branch" in
+`docs/RUNTIME.md`).
+
+| Arm | `parse(test_json)` | 50-fold input | Instructions per parse |
+|---|---|---|---|
+| CPython 3.14.7 | 222 µs | 11.1 ms | 2.144M |
+| `main` | 337 µs (1.52x) | 15.9 ms (1.44x) | 2.590M (1.21x) |
+| part B | 322 µs (1.45x) | 15.9 ms (1.43x) | 2.583M (1.20x) |
+
+The wall-clock difference is within run-to-run noise. callgrind shows a saving
+of about 7.4k instructions (0.3%) per parse:
+- On `main`, `pycc_ext_obj_richcompare` cost about 103k per parse.
+  `pycc_ext_obj_truthy` cost about 5.1k, and some of that was not spent on
+  comparisons.
+- With part B, the truth shim costs about 111k, and `pycc_ext_obj_truthy`
+  costs about 3.0k.
+- `ParserState.feed_token`'s inclusive cost falls from 1.237M to 1.231M per
+  parse.
+
+Most of the comparison cost is CPython's own `do_richcompare` and
+`slot_tp_richcompare`, about 330k per parse. Both run in either arm. The parity
+driver matched CPython, with the same set-order exception.
+
 #1514 records the full attribution and the remaining parts:
 - #1516: an optimized shim and runtime in the default artifact;
 - #1517: a method call without a bound method (measured above);
-- #1518: the residual per-operation costs.
+- #1518: the residual per-operation costs (part B measured above).
 
 | Blocker in the subject module (line) | Diagnostic | Issue |
 |---|---|---|

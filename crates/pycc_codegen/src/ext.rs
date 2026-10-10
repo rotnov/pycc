@@ -396,6 +396,18 @@ pub const EXT_OBJ_GETITEM_SYMBOL: &str = "pycc_ext_obj_getitem";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_RICHCOMPARE_SYMBOL: &str = "pycc_ext_obj_richcompare";
 
+/// The fixed C shim's rich-comparison truth helper (#1518): the same
+/// operands, selector and ownership mask as [`EXT_OBJ_RICHCOMPARE_SYMBOL`],
+/// but it returns the truth of `PyObject_RichCompare(l, r, op)` as `1`/`0`,
+/// or `-1` with the CPython exception already set, and keeps no result
+/// object. Code generation calls it for a comparison whose only use is a
+/// branch. Two exact `int`s that fit a C `long` are compared without
+/// `PyObject_RichCompare`, which is `int`'s own comparison
+/// (`docs/RUNTIME.md`'s "A comparison that only feeds a branch").
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_RICHCOMPARE_TRUTH_SYMBOL: &str = "pycc_ext_obj_richcompare_truth";
+
 /// The fixed C shim's membership helper (Part 2b of #1371): it takes a
 /// borrowed container and a *packed* item, and returns
 /// `PySequence_Contains(container, item)`'s `1`/`0`, or `-1` with the
