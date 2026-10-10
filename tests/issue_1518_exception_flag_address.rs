@@ -14,8 +14,8 @@
 //! check. It also covers an exception raised by a host callable and caught
 //! in compiled code, a `finally` that runs a host call while an exception is
 //! pending, and a compiled raise caught by the host. Every result is
-//! compared with CPython running the same source. (Generators are refused in
-//! `--ext` builds, so no resume function is exercised here; the codegen unit
+//! compared with CPython running the same source. (Generators are not
+//! compiled yet, so there is no resume function to exercise; the codegen unit
 //! test pins that every function looks the address up in its own entry
 //! block.)
 //!

@@ -105,8 +105,10 @@ Why the address stays valid:
 - Its thread-local has a constant initializer and no destructor, so the
   address names the same thread's flag for as long as that thread runs.
 - An invocation never changes threads, so one lookup per invocation is enough.
-  A generator's resume function is a function of its own and repeats the
-  lookup on every resume.
+  Generators are not compiled yet: `yield` in a function is still `C0001`.
+  Once generator support lands, the intended behavior is that a resume
+  function is a function of its own and repeats the lookup on every resume,
+  because a generator can be resumed on another thread.
 
 Each check still reads memory, because the address comes from an external
 call: LLVM cannot assume the flag is unchanged across the runtime and C-API
