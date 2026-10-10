@@ -983,7 +983,10 @@ measured as for #1515, shows the saving:
 | #1517, debug-built artifact | 2.989M |
 
 The subject's only positional method calls are the four `list.append` calls
-in `ParserState.feed_token`, and each one now takes the descriptor path. Their
+in `ParserState.feed_token`, and each one now takes the descriptor path
+(`list` is on the fast path's exact-type allowlist; re-measured with the
+allowlist in place, the release-built artifact executes 2.586M instructions per
+parse, so the restriction costs this subject nothing). Their
 lookup and call cost about 86k instructions per parse. On `main` the same calls
 cost about 128k, spent in `pycc_ext_obj_getattr` and `pycc_ext_obj_call`. The
 saving is therefore about 42k instructions (1.6%) per parse. It is small
