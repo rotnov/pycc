@@ -214,7 +214,7 @@ pub(super) fn route_negative<'ctx>(
 
 /// Declares `void pycc_ext_name_error(const unsigned char *, long long)`
 /// once per module.
-fn name_error_fn<'ctx>(
+pub(super) fn name_error_fn<'ctx>(
     context: &'ctx Context,
     module: &inkwell::module::Module<'ctx>,
 ) -> FunctionValue<'ctx> {
