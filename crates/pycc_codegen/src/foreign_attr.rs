@@ -33,9 +33,9 @@ use inkwell::builder::Builder;
 /// once per module, returning the existing declaration on every later call
 /// -- `foreign_import.rs`'s `obj_import_fn` pattern exactly, and for the
 /// same reason: a second declaration of one name is an LLVM module-verifier
-/// error. The attribute load here and `foreign_call.rs`'s method lookup
-/// both declare it through this one function, so the two can never
-/// disagree about its signature.
+/// error. The attribute load here and `foreign_call.rs`'s keyword method
+/// call lookup both declare it through this one function, so the two can
+/// never disagree about its signature.
 fn obj_getattr_fn<'ctx>(
     context: &'ctx Context,
     module: &inkwell::module::Module<'ctx>,
@@ -55,7 +55,8 @@ fn obj_getattr_fn<'ctx>(
 ///
 /// One slot per distinct name per module (#1515, Part 1 of #1514): an
 /// attribute load and a method lookup of the same name share it, because
-/// both pass the same interned `str` to `PyObject_GetAttr`.
+/// both pass the same interned `str` to CPython -- a positional method
+/// call's lookup (`pycc_ext_obj_method_lookup`, #1517) included.
 fn attr_name_slot_symbol(attr: &str) -> String {
     format!("pycc_foreign_attr_slot.{attr}")
 }
@@ -65,7 +66,7 @@ fn attr_name_slot_symbol(attr: &str) -> String {
 /// the first load through it and reads on every later one
 /// (`pycc_ext_obj_getattr` in `src/ext/pycc_ext_module.c`). Created on the
 /// first request for a name and returned as-is on every later one.
-fn attr_name_slot<'ctx>(
+pub(super) fn attr_name_slot<'ctx>(
     context: &'ctx Context,
     module: &inkwell::module::Module<'ctx>,
     attr: &str,
@@ -365,9 +366,16 @@ mod tests {
         let symbol = attr_name_slot_symbol("pi");
         assert_eq!(occurrences(&whole, &slot_definition("pi")), 1, "{whole}");
         assert!(!whole.contains(&format!("@{symbol}.1")), "{whole}");
+        // The two loads pass the slot last; the method lookup (#1517)
+        // passes it before its call-site cache and out-parameter.
         assert_eq!(
             occurrences(&whole, &format!("ptr @{symbol})")),
-            3,
+            2,
+            "{whole}"
+        );
+        assert_eq!(
+            occurrences(&whole, &format!("ptr @{symbol},")),
+            1,
             "{whole}"
         );
     }

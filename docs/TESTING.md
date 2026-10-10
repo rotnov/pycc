@@ -945,14 +945,62 @@ instructions per parse. Before the change it was the largest single cost of
 `ParserState.feed_token`: building, hashing and releasing a fresh `str` for
 each of the loop's attribute loads and method lookups.
 
-#1514 records the full attribution and the remaining parts:
-- #1516: an optimized shim and runtime in the default artifact;
-- #1517: a method call without a bound method;
-- #1518: the residual per-operation costs.
-
 The parity driver above matched CPython on the #1515 artifact, error paths
 and `accepts` included. The one exception is the order in which `str(e)` lists
 a set's members, which differs between two CPython runs as well.
+
+**Re-measured after #1517 (2026-10-10; Part 3 of
+[#1514](https://github.com/rotnov/pycc/issues/1514)).** The same harness,
+machine, venvs and subject (`419d76a7...`) were used, with
+`PYTHONHASHSEED=0`. Each artifact was built by the same
+`--ext --foreign-relative-imports` command, once without and once with
+`--release`, with a release build of `pycc`. Five arms alternated, five
+processes each: CPython; `main` `38a2eb3a`, which includes #1515; and the
+#1517 branch on top of it. The #1517 branch calls a positional method on a
+builtin receiver through its unbound method descriptor, where `main` built and
+released a bound method ("A positional method call builds no bound method" in
+`docs/RUNTIME.md`).
+
+| Arm | `parse(test_json)`, median of 55 samples | 50-fold input |
+|---|---|---|
+| CPython 3.14.7 | 230 µs | 10.9 ms |
+| `main`, artifact built without `--release` | 383 µs (1.66x) | 18.6 ms (1.71x) |
+| #1517, artifact built without `--release` | 379 µs (1.65x) | 18.3 ms (1.68x) |
+| `main`, artifact built with `--release` | 333 µs (1.45x) | 16.1 ms (1.47x) |
+| #1517, artifact built with `--release` | 338 µs (1.47x) | 16.2 ms (1.49x) |
+
+The wall-clock difference is within run-to-run noise. A second alternating run
+of the five arms, with a variant of the harness that times both inputs in one
+process, gave 318 µs for both release-built artifacts. callgrind,
+measured as for #1515, shows the saving:
+
+| Arm | Instructions per parse |
+|---|---|
+| CPython 3.14.7 | 2.145M |
+| `main`, release-built artifact | 2.630M |
+| #1517, release-built artifact | 2.588M |
+| `main`, debug-built artifact | 3.028M |
+| #1517, debug-built artifact | 2.989M |
+
+The subject's only positional method calls are the four `list.append` calls
+in `ParserState.feed_token`, and each one now takes the descriptor path
+(`list` is on the fast path's exact-type allowlist; re-measured with the
+allowlist in place, the release-built artifact executes 2.586M instructions per
+parse, so the restriction costs this subject nothing). Their
+lookup and call cost about 86k instructions per parse. On `main` the same calls
+cost about 128k, spent in `pycc_ext_obj_getattr` and `pycc_ext_obj_call`. The
+saving is therefore about 42k instructions (1.6%) per parse. It is small
+because CPython's bound builtin method is itself cheap: it comes from a free
+list, and its call is a direct `METH_O` call. Most of the remaining
+`pycc_ext_obj_call` cost (173k per parse) is the `callbacks[token.type](token)`
+call, which has no method lookup. The remaining `pycc_ext_obj_getattr` cost
+(65k) comes from the loop's attribute loads. The parity driver matched CPython
+on both #1517 artifacts, with the same set-order exception.
+
+#1514 records the full attribution and the remaining parts:
+- #1516: an optimized shim and runtime in the default artifact;
+- #1517: a method call without a bound method (measured above);
+- #1518: the residual per-operation costs.
 
 | Blocker in the subject module (line) | Diagnostic | Issue |
 |---|---|---|

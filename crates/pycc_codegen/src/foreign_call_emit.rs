@@ -15,10 +15,13 @@
 //! positional `o.missing(1 // 0)` does (`foreign_call.rs`'s module doc).
 //!
 //! **Temporaries** (Part 1 of #1092, `object_release.rs`): a produced
-//! receiver is released once the method lookup is done; the bound method,
-//! or a produced callee, is held across the arguments and then consumed by
-//! the call; a produced argument is held from its evaluation until after
-//! the call, because the packer gives the call a reference of its own.
+//! receiver is released once the method lookup is done; a positional method
+//! call's looked-up callable and its owned receiver (#1517: an unbound
+//! method descriptor plus `self`, or a plain attribute and no receiver), a
+//! keyword call's bound method, or a produced callee, are held across the
+//! arguments and then consumed by the call; a produced argument is held
+//! from its evaluation until after the call, because the packer gives the
+//! call a reference of its own.
 
 use super::*;
 use crate::foreign_attr::expect_object_pointer;
@@ -91,7 +94,12 @@ pub(super) fn emit_object_args<'ctx>(
 /// Emits `base.method(args)` on a CPython object (Part 2 of #1026, PR 2b of
 /// #1081): the receiver, the method lookup, then each argument -- CPython's
 /// own order, which is why the lookup is a step of its own
-/// (`foreign_call.rs`'s module doc).
+/// (`foreign_call.rs`'s module doc). Since #1517 the lookup may answer an
+/// unbound method descriptor plus a reference to the receiver instead of a
+/// bound method (`foreign_call::emit_method_lookup`); both are held across
+/// the arguments, so an argument that raises releases them, and the call
+/// consumes them. A produced receiver is released once the lookup is done:
+/// the lookup took its own reference when the call needs one.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_method_call<'ctx>(
     context: &'ctx Context,
@@ -104,20 +112,18 @@ pub(super) fn emit_method_call<'ctx>(
     method: &str,
     args: &[MirExpr],
 ) -> Scalar<'ctx> {
-    let bound = emit_bound_method(
-        context,
-        builder,
-        module,
-        rt,
-        user_functions,
-        locals,
-        base,
-        method,
-    );
-    let held_bound = object_release::hold_new_reference(context, module, rt, bound);
+    let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+    let held_base = object_release::hold(context, module, rt, base, &base_scalar);
+    let callee =
+        foreign_call::emit_method_lookup(context, builder, module, rt, base_scalar, method);
+    held_base.release(builder, rt);
+    let held_callable = object_release::hold_new_reference(context, module, rt, callee.callable);
+    let held_receiver = object_release::hold_new_reference(context, module, rt, callee.receiver);
     let args = emit_object_args(context, builder, module, rt, user_functions, locals, args);
-    held_bound.consumed(rt);
-    let result = foreign_call::emit_call(context, builder, module, rt, bound, &args.scalars);
+    held_receiver.consumed(rt);
+    held_callable.consumed(rt);
+    let result =
+        foreign_call::emit_method_call(context, builder, module, rt, callee, &args.scalars);
     args.release(builder, rt);
     result
 }
@@ -154,9 +160,10 @@ pub(super) fn emit_direct_call<'ctx>(
     result
 }
 
-/// The receiver and lookup half of a method call: evaluates `base`, holds
-/// it across the lookup when it is produced, and releases it once the
-/// bound method exists.
+/// The receiver and lookup half of a keyword method call: evaluates `base`,
+/// holds it across the lookup when it is produced, and releases it once the
+/// bound method exists. A positional call does the same through
+/// `foreign_call::emit_method_lookup` ([`emit_method_call`]).
 #[allow(clippy::too_many_arguments)]
 fn emit_bound_method<'ctx>(
     context: &'ctx Context,

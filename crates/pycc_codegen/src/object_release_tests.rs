@@ -293,12 +293,13 @@ fn a_failure_inside_a_module_level_try_releases_before_the_handler() {
     assert!(!outer.contains("ret "), "{ir}");
 }
 
-/// `copy.m(copy.a)`: the bound method is held across the argument (so the
-/// argument's failure releases it) and then consumed by the call (so the
-/// call's failure does not release it); the produced argument is held
+/// `copy.m(copy.a)`: the looked-up callable and its receiver (#1517: the
+/// pair that replaced the bound method) are held across the argument (so
+/// the argument's failure releases both) and then consumed by the call (so
+/// the call's failure releases neither); the produced argument is held
 /// across the call and released after it.
 #[test]
-fn a_method_call_holds_its_bound_method_and_its_produced_argument() {
+fn a_method_call_holds_its_callable_its_receiver_and_its_produced_argument() {
     let ir = discard_ir(
         "release_method_call",
         MirExpr::ObjMethodCall {
@@ -312,13 +313,13 @@ fn a_method_call_holds_its_bound_method_and_its_produced_argument() {
     assert_eq!(releases(lookup[0]), 0, "a borrowed receiver: {ir}");
     let arg = blocks(&ir, "foreign_attr_fail");
     assert_eq!(arg.len(), 1, "{ir}");
-    assert_eq!(releases(arg[0]), 1, "the bound method: {ir}");
+    assert_eq!(releases(arg[0]), 2, "the callable and the receiver: {ir}");
     let call = blocks(&ir, "foreign_call_fail");
     assert_eq!(call.len(), 1, "{ir}");
     assert_eq!(
         releases(call[0]),
         1,
-        "only the argument; the call consumed the bound method: {ir}"
+        "only the argument; the call consumed the callable and the receiver: {ir}"
     );
 }
 
@@ -341,11 +342,11 @@ fn a_method_call_releases_a_produced_receiver_after_the_lookup() {
 }
 
 /// Borrowed operands only: a borrowed name is never released, and the
-/// consumed bound method is released only where the call never runs -- the
-/// argument read's own `NameError` exit (`global_unbound`). The one other
-/// release is the discarded result's.
+/// consumed callable and receiver (#1517) are released only where the call
+/// never runs -- the argument read's own `NameError` exit
+/// (`global_unbound`). The one other release is the discarded result's.
 #[test]
-fn borrowed_operands_and_a_consumed_bound_method_are_never_released() {
+fn borrowed_operands_and_a_consumed_callable_are_never_released() {
     let ir = discard_ir(
         "release_borrowed_only",
         MirExpr::ObjMethodCall {
@@ -359,8 +360,11 @@ fn borrowed_operands_and_a_consumed_bound_method_are_never_released() {
         .iter()
         .map(|block| releases(block))
         .sum();
-    assert_eq!(unbound, 1, "the bound method, on the argument's exit: {ir}");
-    assert_eq!(releases(&ir), 2, "{ir}");
+    assert_eq!(
+        unbound, 2,
+        "the callable and the receiver, on the argument's exit: {ir}"
+    );
+    assert_eq!(releases(&ir), 3, "{ir}");
 }
 
 /// A produced value that is bound or returned is not a temporary: it is
@@ -668,13 +672,14 @@ fn z() -> MirExpr {
 
 /// #1486: a *native* raise in a method call's argument (`copy.m(1 // z)`)
 /// leaves through `guard_statement_effects`' `effect_exc_unwind` block,
-/// which releases the held bound method -- and every produced argument
-/// evaluated before it -- before the branch to the exception target. The
-/// call's own failure edge still releases only the produced arguments: the
-/// call consumed the bound method. The keyword path holds the bound method
-/// across its keyword values the same way.
+/// which releases the held callable and receiver (#1517; a keyword call's
+/// bound method) -- and every produced argument evaluated before it --
+/// before the branch to the exception target. The call's own failure edge
+/// still releases only the produced arguments: the call consumed the
+/// callable. The keyword path holds its bound method across its keyword
+/// values the same way.
 #[test]
-fn a_native_raise_in_an_argument_releases_the_bound_method() {
+fn a_native_raise_in_an_argument_releases_the_held_callee() {
     let method_call = |args: Vec<MirExpr>| MirExpr::ObjMethodCall {
         base: boxed(copy_name()),
         method: "m".to_string(),
@@ -687,29 +692,45 @@ fn a_native_raise_in_an_argument_releases_the_bound_method() {
             values: vec![native_raise(z())],
         }))
     };
-    // (label, call, releases on the native unwind, on the call's failure).
+    let positional: &[&str] = &["%foreign_call_callable)", "%foreign_call_receiver)"];
+    let keyword: &[&str] = &["%foreign_call_bound)"];
+    // (label, call, the held callee operands, unwind guards, releases on the
+    // native unwind, on the call's failure).
     let cases = [
         (
             "release_native_arg",
             method_call(vec![native_raise(z())]),
+            positional,
             1,
+            2,
             0,
         ),
         (
             "release_native_later_arg",
             method_call(vec![attr("a"), native_raise(z())]),
+            positional,
             2,
+            3,
             1,
         ),
-        ("release_native_keyword", keyword_call(Vec::new()), 1, 0),
+        (
+            "release_native_keyword",
+            keyword_call(Vec::new()),
+            keyword,
+            1,
+            1,
+            0,
+        ),
         (
             "release_native_keyword_after_arg",
             keyword_call(vec![attr("a")]),
+            keyword,
+            2,
             2,
             1,
         ),
     ];
-    for (label, call, unwind_releases, call_releases) in cases {
+    for (label, call, callee, guards, unwind_releases, call_releases) in cases {
         let ir = functions_ir(
             label,
             vec![MirItem::Function {
@@ -722,13 +743,15 @@ fn a_native_raise_in_an_argument_releases_the_bound_method() {
         )
         .remove(0);
         // A produced earlier argument has a guard of its own; every guard
-        // taken while the bound method is held releases it, and the
-        // native raise's guard is the last one before the call.
+        // taken while the callee is held releases it, and the native
+        // raise's guard is the last one before the call.
         let unwind = blocks(&ir, "effect_exc_unwind");
-        assert_eq!(unwind.len(), unwind_releases, "{label}\n{ir}");
+        assert_eq!(unwind.len(), guards, "{label}\n{ir}");
         for block in &unwind {
-            let bound = format!("{RELEASE}ptr %foreign_call_bound)");
-            assert_eq!(block.matches(&bound).count(), 1, "{label}\n{ir}");
+            for operand in callee {
+                let held = format!("{RELEASE}ptr {operand}");
+                assert_eq!(block.matches(&held).count(), 1, "{label}\n{ir}");
+            }
         }
         let native = unwind.last().expect("the native raise's guard");
         let release = native.find(RELEASE).unwrap_or_else(|| panic!("{ir}"));
@@ -773,9 +796,9 @@ fn a_native_raise_in_an_argument_releases_a_produced_callee() {
 
 /// #1486 at module level: outside every `try`, the native raise's unwind
 /// branches to the module's top exception exit, and still releases the
-/// held bound method first.
+/// held callable and receiver first.
 #[test]
-fn a_module_level_native_raise_in_an_argument_releases_the_bound_method() {
+fn a_module_level_native_raise_in_an_argument_releases_the_callable() {
     let ir = entry_ir(
         "release_native_arg_module",
         vec![MirStmt::ExprStmt(MirExpr::ObjMethodCall {
@@ -786,7 +809,11 @@ fn a_module_level_native_raise_in_an_argument_releases_the_bound_method() {
     );
     let unwind = blocks(&ir, "effect_exc_unwind");
     assert_eq!(unwind.len(), 1, "{ir}");
-    assert_eq!(releases(unwind[0]), 1, "the bound method\n{ir}");
+    assert_eq!(
+        releases(unwind[0]),
+        2,
+        "the callable and the receiver\n{ir}"
+    );
 }
 
 #[path = "object_release_iteration_tests.rs"]

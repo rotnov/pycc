@@ -1786,6 +1786,10 @@ of [#1081](https://github.com/rotnov/pycc/issues/1081) added
 evaluation order: `pycc_ext_obj_getattr` resolves the method *before* the
 argument expressions are evaluated, then the packed arguments and the resolved
 callable go to `pycc_ext_obj_call`, which does the `PyObject_Vectorcall`.
+Since [#1517](https://github.com/rotnov/pycc/issues/1517) a positional call
+uses the pair `pycc_ext_obj_method_lookup` / `pycc_ext_obj_method_call`
+instead, in the same order ("A positional method call builds no bound method"
+below); a keyword call keeps the pair described here.
 Resolving first is observable and required — `obj.missing(1 // 0)` must raise
 `AttributeError`, not `ZeroDivisionError`. Either shim call returns `NULL` with
 CPython's error indicator set, and
@@ -2034,6 +2038,111 @@ returns `NULL` with CPython's exception set, the ordinary failure protocol.
 CPython-identical behaviour, failure paths included; the unit tests in
 `foreign_attr.rs` pin the slot argument and one slot per name.
 
+**A positional method call builds no bound method
+([#1517](https://github.com/rotnov/pycc/issues/1517), Part 3 of
+[#1514](https://github.com/rotnov/pycc/issues/1514)).** Until #1517,
+`o.m(args)` resolved `getattr(o, "m")` and called the result. For the common
+case, a method defined on the receiver's type, that result is a freshly
+allocated bound method which the call released straight away. CPython's own
+`LOAD_ATTR` (method form) followed by `CALL` avoids that allocation: when
+`_PyObject_GetMethod` finds a `Py_TPFLAGS_METHOD_DESCRIPTOR` descriptor on the
+type, and no instance `__dict__` entry shadows it, it keeps the unbound
+descriptor and calls it with `o` prepended. A positional object method call
+now does the same through two shim calls
+(`crates/pycc_codegen/src/foreign_call.rs`, `src/ext/pycc_ext_module.c`):
+
+- **The lookup runs first, as before.** `pycc_ext_obj_method_lookup(o, name,
+  name_slot, site, &self)` runs before any argument is evaluated, exactly where
+  `pycc_ext_obj_getattr` ran. It reuses #1515's interned-name slot. It returns
+  a new reference to the callable. When that callable is an unbound method
+  descriptor, it also writes a new reference to `o` to `self`; otherwise
+  `self` is `NULL`.
+- **The call prepends the receiver.** `pycc_ext_obj_method_call(callable, self,
+  args, nargs)` takes an argument array with one leading reserved slot. With a
+  `self`, it stores `self` in that slot and calls `callable(self, *args)`.
+  Without one, it calls `callable(*args)` with `PY_VECTORCALL_ARGUMENTS_OFFSET`.
+  It consumes the callable, `self` and every packed argument on every path.
+  Like `pycc_ext_obj_call`, it skips the call when a packer failed.
+- **Each call site caches its answer.** Each call site owns an internal,
+  zero-initialised `[2 x ptr]` global, `pycc_foreign_method_site.<name>`. It
+  holds the exact receiver type last seen at that site and the unbound
+  descriptor resolved for it, or `NULL` for "take the generic path". The pair
+  is replaced only when another receiver type reaches the site. A hit
+  therefore costs one pointer comparison and two reference-count increments,
+  with no allocation and no release of a bound method. Only a positive entry
+  owns references (to the descriptor and to its static type). A negative entry
+  only names its type, so a site never keeps a user class alive or moves its
+  reference count (`tests/issue_1092_object_temp_release.rs` pins the counts).
+  A stale negative entry whose address now names another type is harmless,
+  because a negative answer only selects `PyObject_GetAttr`.
+
+The shim is compiled against `Py_LIMITED_API`, which hides
+`_PyObject_GetMethod`, `_PyType_Lookup`, `tp_dict` and `tp_dictoffset`. It
+therefore answers the descriptor question only where the public API decides
+it exactly, and every other receiver keeps `PyObject_GetAttr(o, name)` (the
+bound method, an instance attribute, a property's value, a `__getattr__`
+result), called as it is. The fast path requires both of the following:
+
+- the receiver's exact type is one of an explicit allowlist of core builtin
+  types: `list`, `dict`, `str`, `bytes`, `bytearray`, `set`, `frozenset`,
+  `tuple`, `int` and `float` (a subclass of one of them is not on it);
+- `type.__getattribute__(tp, name)` returns an object whose type carries
+  `Py_TPFLAGS_METHOD_DESCRIPTOR`.
+
+Each allowlisted type is static and immutable, uses `PyObject_GenericGetAttr`,
+gives its instances no `__dict__`, and defines its methods as plain
+`method_descriptor`s. On such a type the second test's result is the
+`_PyType_Lookup` result itself, the answer cannot change for the life of the
+process, and calling the descriptor with `o` prepended is what calling the
+bound method does. A class method (`dict.fromkeys`), a static method
+(`str.maketrans`), a getset (`int.real`) and `type`'s own attributes (`mro`,
+`__name__`) are not method descriptors when read from the class, so they keep
+the generic path.
+
+**Why an allowlist rather than a structural test.** The first version of
+#1517 accepted any static, immutable type with `PyObject_GenericGetAttr` and a
+zero `__dictoffset__`. Review (Codex thread 4236426010 on PR #1521) pointed
+out that probing with `PyObject_GetAttr(tp, name)` runs the found attribute's
+`__get__` with no instance, where `_PyObject_GetMethod` does a raw MRO lookup.
+A custom C descriptor on a static immutable extension type can answer
+differently for the class and for an instance, or have a side effect, and the
+limited API cannot read the type dictionary to rule that out before the probe.
+The decision recorded here restricts the fast path to the exact core types
+above, whose attributes are all CPython's own descriptor kinds, so the probe is
+side-effect free and the class and instance answers agree by construction.
+Every other receiver (a builtin subclass, `range`, `memoryview`, an
+`OrderedDict`, a `deque`, any extension type) takes the generic path. Adding a
+type to the allowlist needs the same argument for every attribute it defines.
+
+Everything a user can observe is unchanged:
+
+- a heap class's method, a `staticmethod` or `classmethod`, an instance
+  attribute that shadows a method, a callable in a slot, a property, a
+  `__getattr__`, and every method of a non-allowlisted type all keep the
+  generic path;
+- a missing method raises CPython's own `AttributeError`, because the failed
+  type lookup is cleared and repeated on the instance;
+- an argument that rebinds the method does not change what is called;
+- the `self` reference keeps the receiver alive when an argument drops every
+  other reference to it.
+
+**Why not `PyObject_VectorcallMethod`.** That function, which #1517 first
+proposed, looks the method up only after every argument already exists.
+CPython 3.14 compiles `o.m(f())` to `LOAD_ATTR` before `f()`. So with
+`VectorcallMethod`, `o.missing(f())` would call `f` before raising
+`AttributeError`, and a `__getattr__` or property with side effects would run
+after the arguments instead of before them. The call would also release the
+receiver early, and an argument could rebind the method.
+
+`tests/issue_1517_method_call_without_bound_method.rs` compares all of these
+shapes with CPython 3.14, including the side-effect order, shadowing,
+descriptors, errors, a site that sees several receiver types, a call in a loop
+and one in the module body. `foreign_call/tests/method_tests.rs` pins the IR:
+neither `pycc_ext_obj_getattr` nor `pycc_ext_obj_call` appears on the
+positional path, each site has its own zeroed state, and the argument array
+reserves its leading slot. A keyword call (`o.m(x, k=v)`) still builds the
+bound method and goes through `pycc_ext_obj_call_kw`.
+
 **An unbound temporary is released by its consumer (Part 1 of
 [#1092](https://github.com/rotnov/pycc/issues/1092)).** Every rule above
 describes the original leak-only policy; Part 1 of #1092 narrows it, and Parts
@@ -2059,8 +2168,9 @@ an enclosing handler and the direct module-exec failure return -- and the
 fallthrough releases it after the operation. The failure may equally be a
 *native* raise in an operand: `o.m(1 // z)` raises `ZeroDivisionError` through
 pycc's own exception state, and the post-node guard's unwind
-(`exception::guard_statement_effects`) releases the held bound method, and
-any produced argument evaluated before it, on the way to the exception target
+(`exception::guard_statement_effects`) releases the held callable and
+receiver (#1517; a keyword call's bound method), and any produced argument
+evaluated before them, on the way to the exception target
 ([#1486](https://github.com/rotnov/pycc/issues/1486)). A result that is bound is not a
 temporary: since Part 1 of [#1499](https://github.com/rotnov/pycc/issues/1499) a
 module global owns it and releases it on rebind (below); since Part 2 a
@@ -2921,7 +3031,9 @@ Everything the call creates *internally* is released, so before #1499 the leak
 was exactly one reference per call -- the result -- rather than one per
 argument plus two; since #1499 the result's receiver owns it too.
 `pycc_ext_obj_call` owns the bound method object `pycc_ext_obj_getattr`
-produced and `Py_XDECREF`s it on every path, and it consumes the packed
+produced and `Py_XDECREF`s it on every path (since #1517 a positional method
+call builds no bound method, and `pycc_ext_obj_method_call` releases the
+callable and the receiver reference in its place), and it consumes the packed
 argument array — releasing each element on every path, including the early one
 where a packer failed. That release is measured, not merely asserted: one
 million calls passing a *named* `str` grow the resident set no faster than one
