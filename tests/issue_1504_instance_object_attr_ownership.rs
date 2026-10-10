@@ -32,7 +32,8 @@
 //! #1367) -- the one `object`-typed attribute an embedded build admits, a
 //! bare `object` annotation being `C0001` there -- owns its reference too:
 //! `an_embedded_executable_instance_attribute_owns_its_reference` pins it.
-//! A native build has no `object` value at all.
+//! A native build has no `object` value at all: its type check refuses
+//! every boxing seam with `I0406` (#1508).
 //!
 //! The hosted tests are `#[ignore]`d and contribute no line coverage; the
 //! Tier-1 `native-build-test` leg runs them with `cargo test --workspace --
@@ -582,8 +583,9 @@ fn a_native_generic_attribute_links_without_the_shim() {
 /// A generic class whose `T` fields are stored from a parameter, rebound,
 /// bound to a local, discarded, returned, selected by a conditional
 /// expression and passed to a generic function and a constructor. Nothing
-/// calls them with a native value, whose boxing needs the shim's packers in
-/// any build: the build links every emitted body, which is what is pinned.
+/// calls them with a native value, whose boxing needs the shim's packers
+/// and is `I0406` in a native build (#1508): the build links every emitted
+/// body, which is what is pinned.
 #[cfg(not(windows))]
 const NATIVE_GENERIC: &str = "\
 from typing import Generic, TypeVar

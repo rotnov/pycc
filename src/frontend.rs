@@ -489,6 +489,12 @@ pub(crate) fn resolve_frontend_native(
     // mean never running it at all.
     let producer_gaps = crate::memoryview_mode::refuse_buffer_producers_in_native_mode(&hir);
     let mut keyed: Vec<(usize, Diagnostic)> = Vec::new();
+    // #1508: a program every one of whose imports is native links no
+    // CPython host, so its check refuses every boxing seam with `I0406`
+    // (`pycc_types::check_without_host`). A program with an import gap is
+    // refused anyway; it keeps the ordinary check, so its type errors and
+    // gaps are reported exactly as before.
+    let hostless = matches!(import_gaps, Ok(NeedsInterpreter(false)));
     // `Ok` carries the embed verdict for the `Ok(resolved)` tail; an import
     // gap only ever reaches a path that returns `Err`, so the placeholder
     // below is never observed.
@@ -566,7 +572,13 @@ pub(crate) fn resolve_frontend_native(
     // itself. A surviving gap is reported *beside* the type errors rather
     // than swallowed by them, so a clean allocating function is still named
     // when some other function in the same program fails to check.
-    let resolved = match pycc_types::check_and_resolve_all_keyed(&hir) {
+    let check = || pycc_types::check_and_resolve_all_keyed(&hir);
+    let checked = if hostless {
+        pycc_types::check_without_host(check)
+    } else {
+        check()
+    };
+    let resolved = match checked {
         Ok(resolved) => resolved,
         Err(check_keyed) => {
             // The import gaps collected above are dropped on this path,

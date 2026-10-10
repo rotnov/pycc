@@ -58,9 +58,10 @@ use inkwell::builder::Builder;
 /// (`CompileOptions::ext`: an `--ext` artifact or an embedded executable,
 /// both of which link the shim): a fully native executable has no host to
 /// provide `pycc_ext_obj_retain`/`pycc_ext_obj_release`, and no
-/// `object` value ever reaches one of its frames (a type-variable parameter
-/// is never handed a native value, `docs/TYPE_SYSTEM.md`, "Generics"), so
-/// there every helper below keeps the pass-through it had before this part.
+/// `object` value ever reaches one of its frames (its type check refuses
+/// boxing a native value into a type-variable slot with `I0406`, #1508,
+/// `docs/TYPE_SYSTEM.md`, "Generics"), so there every helper below keeps
+/// the pass-through it had before this part.
 pub(super) fn enable(rt: &RtFns<'_>) {
     rt.object_slots.frame_owned.set(true);
 }

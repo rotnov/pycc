@@ -67,6 +67,7 @@ mod foreign_unpack;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
 mod hash;
+mod native_host_stubs;
 mod object_attr;
 mod object_box;
 mod object_comprehension;
@@ -6995,6 +6996,13 @@ fn compile_to_object_with_observer(
                 }
             }
         }
+    }
+
+    // #1508: a fully native module links no `pycc_ext` shim, so every host
+    // helper its `object`-typed code declared becomes an internal trap
+    // (`native_host_stubs`).
+    if !options.ext {
+        native_host_stubs::define_as_traps(&context, &module);
     }
 
     verify_module(&module);
