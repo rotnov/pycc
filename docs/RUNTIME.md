@@ -1732,7 +1732,8 @@ reuses the first one's text where CPython calls `__str__` again (the accessor's
 result is borrowed, so it cannot be replaced while an earlier read is live); a
 `__str__` that raises renders the pycc class name instead of propagating; and an
 exception rendered after its host call returned -- when the watermark has
-released the original -- renders the class name too. So `except ValueError` around
+released the original -- renders the class name too. [D-260](./decisions/D-260-render-a-bridged-exception-message-lazily-once.md)
+records these divergences and the alternatives rejected. So `except ValueError` around
 `int(o)` catches the host's `ValueError`, `except AttributeError` (or
 `except Exception`) catches a missing attribute, and an exception that escapes the compiled code unchanged reaches
 the host as the *original* object, keeping its class, `.name` and traceback.
