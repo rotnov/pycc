@@ -17,7 +17,9 @@
 //! arguments, a missing method whose arguments must not be evaluated, an
 //! argument that rebinds the method, an argument that drops the last other
 //! reference to the receiver, CPython's own error text, and a user class
-//! that stays collectable after a call site has seen it.
+//! that stays collectable after a call site has seen it. A second test pins
+//! that the fast path is an explicit allowlist of exact core builtin types:
+//! `range` and `memoryview` receivers take the generic path.
 //!
 //! Every test here is hosted, so `#[ignore]`d and contributing no line
 //! coverage; the Tier-1 `native-build-test` leg runs them with `cargo test
@@ -67,16 +69,12 @@ fn run_in(dir: &Path, script: &str) -> Output {
         .expect("python3 should spawn")
 }
 
-/// Builds `body` as the extension `m`, runs `script` against it and against
-/// CPython importing the same source, and asserts both succeed with the same
-/// stdout, which is returned.
-fn assert_matches_cpython(tag: &str, body: &str, script: &str) -> String {
-    let compiled_dir = ScratchDir::new(tag).expect("scratch");
-    let source_dir = ScratchDir::new(&format!("{tag}_src")).expect("scratch");
-    let source = write(&source_dir, "m.py", body);
+/// Builds `body` (already written to `source`) as the extension `m` in
+/// `compiled_dir`.
+fn build_ext(source: &Path, compiled_dir: &Path) {
     let build = pycc()
         .arg("build")
-        .arg(&source)
+        .arg(source)
         .arg("-o")
         .arg(compiled_dir.join("m"))
         .arg("--ext")
@@ -89,6 +87,16 @@ fn assert_matches_cpython(tag: &str, body: &str, script: &str) -> String {
         stderr_of(&build)
     );
     assert!(compiled_dir.join(artifact_name()).is_file());
+}
+
+/// Builds `body` as the extension `m`, runs `script` against it and against
+/// CPython importing the same source, and asserts both succeed with the same
+/// stdout, which is returned.
+fn assert_matches_cpython(tag: &str, body: &str, script: &str) -> String {
+    let compiled_dir = ScratchDir::new(tag).expect("scratch");
+    let source_dir = ScratchDir::new(&format!("{tag}_src")).expect("scratch");
+    let source = write(&source_dir, "m.py", body);
+    build_ext(&source, &compiled_dir);
     let compiled = run_in(&compiled_dir, script);
     let oracle = run_in(&source_dir, script);
     for (what, run) in [("pycc", &compiled), ("cpython", &oracle)] {
@@ -234,4 +242,55 @@ fn a_positional_method_call_without_a_bound_method_behaves_as_in_cpython() {
     // A call site's cached negative answer only names a heap class, so the
     // class stays collectable once the site has seen it.
     assert!(stdout.ends_with("w\nclass collected True\n"), "{stdout}");
+}
+
+/// The fast path is an explicit allowlist of exact core builtin types
+/// (`docs/RUNTIME.md`, #1517): every other receiver type -- here `range`
+/// and `memoryview`, static immutable types with generic attribute access
+/// and no instance `__dict__`, which a structural test would have admitted
+/// -- takes the generic `getattr(o, name)` path.
+///
+/// The path taken is observable through the descriptor's reference count:
+/// only a call site's positive (fast-path) entry owns a reference to the
+/// unbound descriptor, and keeps it for the life of the process, so after
+/// one call `list.count` gains exactly one reference while `range.count` and
+/// `memoryview.tolist` gain none (their bound method is released after each
+/// call). The results themselves are compared with CPython's.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_receiver_type_outside_the_allowlist_takes_the_generic_path() {
+    let body = "from typing import Any\n\
+def lcount(o: Any, x: Any) -> Any:\n    return o.count(x)\n\
+def rcount(o: Any, x: Any) -> Any:\n    return o.count(x)\n\
+def tolist(o: Any) -> Any:\n    return o.tolist()\n";
+    let script = "import sys, m\n\
+def delta(descr, thunk):\n\
+\x20   before = sys.getrefcount(descr)\n\
+\x20   result = [thunk() for _ in range(3)]\n\
+\x20   return result, sys.getrefcount(descr) - before\n\
+print('range', *delta(range.__dict__['count'], lambda: m.rcount(range(5), 3)))\n\
+print('memoryview', *delta(memoryview.__dict__['tolist'], lambda: m.tolist(memoryview(b'ab'))))\n\
+print('list', *delta(list.__dict__['count'], lambda: m.lcount([3, 3], 3)))\n";
+    let compiled_dir = ScratchDir::new("1517_allowlist").expect("scratch");
+    let source_dir = ScratchDir::new("1517_allowlist_src").expect("scratch");
+    let source = write(&source_dir, "m.py", body);
+    build_ext(&source, &compiled_dir);
+    let compiled = run_in(&compiled_dir, script);
+    let oracle = run_in(&source_dir, script);
+    for (what, run) in [("pycc", &compiled), ("cpython", &oracle)] {
+        assert!(
+            run.status.success(),
+            "{what}: {}{}",
+            stdout_of(run),
+            stderr_of(run)
+        );
+    }
+    assert_eq!(
+        stdout_of(&oracle),
+        "range [1, 1, 1] 0\nmemoryview [[97, 98], [97, 98], [97, 98]] 0\nlist [2, 2, 2] 0\n"
+    );
+    assert_eq!(
+        stdout_of(&compiled),
+        "range [1, 1, 1] 0\nmemoryview [[97, 98], [97, 98], [97, 98]] 0\nlist [2, 2, 2] 1\n"
+    );
 }

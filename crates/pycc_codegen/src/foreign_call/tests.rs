@@ -52,7 +52,7 @@ fn compiled_ir(label: &str, items: Vec<MirItem>) -> (String, String) {
     let mut observer = |module: &inkwell::module::Module<'_>, _: Option<&'static str>| {
         if let Some(entry) = module.get_function(EXT_MODULE_EXEC_SYMBOL) {
             ir = crate::llvm_string_to_owned(entry.print_to_string());
-            whole = module.print_to_string().to_string();
+            whole = crate::llvm_string_to_owned(module.print_to_string());
         }
     };
     compile_to_object_with_observer(

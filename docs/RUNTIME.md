@@ -2063,26 +2063,45 @@ The shim is compiled against `Py_LIMITED_API`, which hides
 therefore answers the descriptor question only where the public API decides
 it exactly, and every other receiver keeps `PyObject_GetAttr(o, name)` (the
 bound method, an instance attribute, a property's value, a `__getattr__`
-result), called as it is. The fast path requires all of the following:
+result), called as it is. The fast path requires both of the following:
 
-- the receiver's exact type is a static (non-heap), immutable type whose
-  metatype is exactly `type`;
-- the type's `tp_getattro` is `PyObject_GenericGetAttr`;
-- its `__dictoffset__` is 0, so an instance has no `__dict__` that could
-  shadow the method;
+- the receiver's exact type is one of an explicit allowlist of core builtin
+  types: `list`, `dict`, `str`, `bytes`, `bytearray`, `set`, `frozenset`,
+  `tuple`, `int` and `float` (a subclass of one of them is not on it);
 - `type.__getattribute__(tp, name)` returns an object whose type carries
   `Py_TPFLAGS_METHOD_DESCRIPTOR`.
 
-On such a type, that result is the `_PyType_Lookup` result itself, the answer
-cannot change for the life of the process, and calling the descriptor with `o`
-prepended is what calling the bound method does. In practice this covers the
-methods of `list`, `dict`, `str`, `tuple`, `set`, `bytes` and `int`.
+Each allowlisted type is static and immutable, uses `PyObject_GenericGetAttr`,
+gives its instances no `__dict__`, and defines its methods as plain
+`method_descriptor`s. On such a type the second test's result is the
+`_PyType_Lookup` result itself, the answer cannot change for the life of the
+process, and calling the descriptor with `o` prepended is what calling the
+bound method does. A class method (`dict.fromkeys`), a static method
+(`str.maketrans`), a getset (`int.real`) and `type`'s own attributes (`mro`,
+`__name__`) are not method descriptors when read from the class, so they keep
+the generic path.
+
+**Why an allowlist rather than a structural test.** The first version of
+#1517 accepted any static, immutable type with `PyObject_GenericGetAttr` and a
+zero `__dictoffset__`. Review (Codex thread 4236426010 on PR #1521) pointed
+out that probing with `PyObject_GetAttr(tp, name)` runs the found attribute's
+`__get__` with no instance, where `_PyObject_GetMethod` does a raw MRO lookup.
+A custom C descriptor on a static immutable extension type can answer
+differently for the class and for an instance, or have a side effect, and the
+limited API cannot read the type dictionary to rule that out before the probe.
+The decision recorded here restricts the fast path to the exact core types
+above, whose attributes are all CPython's own descriptor kinds, so the probe is
+side-effect free and the class and instance answers agree by construction.
+Every other receiver (a builtin subclass, `range`, `memoryview`, an
+`OrderedDict`, a `deque`, any extension type) takes the generic path. Adding a
+type to the allowlist needs the same argument for every attribute it defines.
 
 Everything a user can observe is unchanged:
 
 - a heap class's method, a `staticmethod` or `classmethod`, an instance
-  attribute that shadows a method, a callable in a slot, a property, and a
-  `__getattr__` all keep the generic path;
+  attribute that shadows a method, a callable in a slot, a property, a
+  `__getattr__`, and every method of a non-allowlisted type all keep the
+  generic path;
 - a missing method raises CPython's own `AttributeError`, because the failed
   type lookup is cleared and repeated on the instance;
 - an argument that rebinds the method does not change what is called;

@@ -1954,25 +1954,39 @@ PyObject *pycc_ext_obj_getattr(PyObject *obj, const char *name, PyObject **cache
  * calls the descriptor with `o` prepended. That function is private, and
  * the shim is compiled against `Py_LIMITED_API`, which also hides
  * `tp_mro`, `tp_dict` and `tp_dictoffset`. So this decides the same
- * question only for the receiver types where the limited API can decide it
- * exactly, and answers "take the generic path" for every other one:
+ * question only for an explicit allowlist of exact core builtin types, and
+ * answers "take the generic path" for every other one (a subclass, a user
+ * class, an extension type, an exception):
  *
- * - `tp` is a static (non-heap), immutable type whose metatype is exactly
- *   `type`. Its attributes cannot be set or deleted and its bases are
- *   static types too, so the answer cannot change for the life of the
- *   process, which is what lets the caller cache it per call site.
- * - `tp` uses `PyObject_GenericGetAttr`, so no `__getattribute__` or
- *   `__getattr__` takes part in the lookup.
- * - `tp.__dictoffset__` is 0: its instances have no `__dict__` that could
- *   shadow the class attribute (an exception instance has one, so
- *   `e.with_traceback(tb)` keeps the generic path).
+ * - `tp` is exactly one of `list`, `dict`, `str`, `bytes`, `bytearray`,
+ *   `set`, `frozenset`, `tuple`, `int` or `float`. Each is a static,
+ *   immutable type whose metatype is exactly `type`, so the answer cannot
+ *   change for the life of the process (which is what lets the caller cache
+ *   it per call site); each uses `PyObject_GenericGetAttr`, so no
+ *   `__getattribute__` or `__getattr__` takes part; its instances have no
+ *   `__dict__` that could shadow a class attribute; and every method its
+ *   type dictionary defines is a plain `method_descriptor`.
  * - `type.__getattribute__(tp, name)` yields an object whose type carries
- *   `Py_TPFLAGS_METHOD_DESCRIPTOR`. On such a type that is the
+ *   `Py_TPFLAGS_METHOD_DESCRIPTOR`. On these types that is the
  *   `_PyType_Lookup` result itself: a method descriptor's
- *   `__get__(None, tp)` returns the descriptor, and none of `type`'s own
- *   data descriptors (`__name__`, `__doc__`, `__dict__`, ...) or non-data
- *   fallbacks (`mro`, which comes back bound to `tp`) is a method
- *   descriptor, so neither can be mistaken for one.
+ *   `__get__(None, tp)` returns the descriptor. A class method
+ *   (`dict.fromkeys`, `int.from_bytes`) comes back bound to `tp`, a static
+ *   method (`str.maketrans`) as a builtin function, a getset (`int.real`) as
+ *   the getset descriptor itself, and `type`'s own attributes (`__name__`,
+ *   `mro`, ...) are data descriptors or come back bound to `tp` -- none of
+ *   them a method descriptor, so each keeps the generic path.
+ *
+ * Why an allowlist rather than a structural test (static, immutable,
+ * generic getattr, no `__dictoffset__`): `type.__getattribute__` runs the
+ * found attribute's `__get__` with a NULL instance, while the instance
+ * lookup runs it with the instance. For a method descriptor the two agree by
+ * construction, but a custom C descriptor on a static immutable extension
+ * type could answer differently for the class and for the instance -- or
+ * have side effects of its own -- and the limited API cannot read the type
+ * dictionary to tell such a descriptor apart before calling `__get__`. On
+ * the allowlisted types every attribute is one of CPython's own descriptor
+ * kinds listed above, so the probe has no side effect and the class and
+ * instance answers agree exactly (docs/RUNTIME.md, #1517).
  *
  * For such a descriptor `PyObject_GenericGetAttr(o, name)` is
  * `descr.__get__(o, tp)`, and calling that bound method is calling `descr`
@@ -1984,25 +1998,12 @@ PyObject *pycc_ext_obj_getattr(PyObject *obj, const char *name, PyObject **cache
  */
 static PyObject *pycc_ext_unbound_method(PyTypeObject *tp, PyObject *name)
 {
-    unsigned long flags = PyType_GetFlags(tp);
-    PyObject *offset;
-    Py_ssize_t dictoffset;
     PyObject *descr;
 
-    if ((flags & Py_TPFLAGS_HEAPTYPE) || !(flags & Py_TPFLAGS_IMMUTABLETYPE)
-        || !Py_IS_TYPE((PyObject *)tp, &PyType_Type)
-        || PyType_GetSlot(tp, Py_tp_getattro) != (void *)PyObject_GenericGetAttr) {
-        return NULL;
-    }
-    offset = PyObject_GetAttrString((PyObject *)tp, "__dictoffset__");
-    if (offset == NULL) {
-        PyErr_Clear();
-        return NULL;
-    }
-    dictoffset = PyLong_AsSsize_t(offset);
-    Py_DECREF(offset);
-    if (dictoffset != 0) {
-        PyErr_Clear();
+    if (tp != &PyList_Type && tp != &PyDict_Type && tp != &PyUnicode_Type
+        && tp != &PyBytes_Type && tp != &PyByteArray_Type && tp != &PySet_Type
+        && tp != &PyFrozenSet_Type && tp != &PyTuple_Type && tp != &PyLong_Type
+        && tp != &PyFloat_Type) {
         return NULL;
     }
     descr = PyObject_GetAttr((PyObject *)tp, name);
