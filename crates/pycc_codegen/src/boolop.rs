@@ -216,20 +216,22 @@ fn emit_truth_only<'ctx>(
     Scalar::Bool(as_bool)
 }
 
-/// Emits `operand`, tests its truth and releases its int temporary.
-fn operand_truth<'ctx>(emitter: &Emitter<'_, 'ctx>, operand: &MirExpr) -> IntValue<'ctx> {
-    let scalar = emitter.emit(operand);
-    let held = emitter.hold(operand, &scalar);
-    let truth = emitter.truth(scalar);
-    held.release(emitter.builder, emitter.rt);
-    release_scalar_if_int_temporary(
+/// Emits `operand`, tests its truth and releases it
+/// (`condition::emit_condition`). A conditional expression's test goes
+/// through here too (`if_exp.rs`).
+pub(super) fn operand_truth<'ctx>(
+    emitter: &Emitter<'_, 'ctx>,
+    operand: &MirExpr,
+) -> IntValue<'ctx> {
+    super::condition::emit_condition(
         emitter.context,
         emitter.builder,
+        emitter.module,
         emitter.rt,
+        emitter.user_functions,
+        emitter.locals,
         operand,
-        &scalar,
-    );
-    truth
+    )
 }
 
 fn emit_value<'ctx>(

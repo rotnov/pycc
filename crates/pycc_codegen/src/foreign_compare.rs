@@ -19,8 +19,17 @@
 //! *new* reference: its consumer releases it when it is an unbound
 //! temporary (`object_release.rs`, Part 1 of #1092), a module global that
 //! binds it owns it (`object_slot.rs`, Part 1 of #1499), and it is
-//! otherwise leaked on the rule `docs/RUNTIME.md` records for this boundary; a truth
-//! context tests it through `foreign_len::emit_truthy` like any other object.
+//! otherwise leaked on the rule `docs/RUNTIME.md` records for this boundary.
+//!
+//! **A rich comparison whose only use is a branch** (#1518) -- the test of
+//! an `if`, `while`, `assert` or comprehension filter, a `not` operand, or
+//! an operand of a truth-only `and`/`or` (`condition.rs`) -- builds no
+//! result object: [`EXT_OBJ_RICHCOMPARE_TRUTH_SYMBOL`] answers the result's
+//! truth as `1`/`0`, or `-1` on the same single failure edge. It is CPython's
+//! `PyObject_RichCompare` followed by `PyObject_IsTrue`, except that two
+//! exact `int`s that fit a C `long` are compared natively, which is `int`'s
+//! own comparison (`docs/RUNTIME.md`'s "A comparison that only feeds a
+//! branch").
 //!
 //! **`isinstance`** is `PyObject_IsInstance` behind
 //! [`EXT_OBJ_ISINSTANCE_SYMBOL`], whose `-1` takes the same failure edge.
@@ -41,7 +50,7 @@ use crate::foreign_fail::{ForeignFailEdge, route_negative, route_null};
 use crate::foreign_pack::{emit_pack, none_pointer, shim_fn};
 use inkwell::builder::Builder;
 use inkwell::values::PointerValue;
-use pycc_mir::CmpOpKind;
+use pycc_mir::{CmpOpKind, MirExpr};
 
 /// CPython's rich-comparison selector (`Py_LT` .. `Py_GE`) for `op`, or
 /// `None` for an identity test, which is no rich comparison at all.
@@ -61,6 +70,66 @@ fn rich_compare_selector(op: CmpOpKind) -> Option<u64> {
              pycc_mir lowers it to `ObjContains`"
         ),
     }
+}
+
+/// Whether `op` is a rich comparison, as opposed to an identity test.
+pub(super) fn is_rich_compare(op: CmpOpKind) -> bool {
+    rich_compare_selector(op).is_some()
+}
+
+/// Evaluates an `ObjCompare`'s operands and hands them to `finish`, which
+/// emits the comparison itself.
+///
+/// Left, then right -- CPython's own order -- with the `Compare` arm's #638
+/// protection of an `int` temporary across the right operand's evaluation;
+/// a `None` literal operand of an identity test is not evaluated at all
+/// ([`emit_compare`] names CPython's `None` instead). A produced object
+/// operand is held across the comparison and released after it, and an
+/// `int` temporary is released after it.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_operands_then<'ctx, T>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    left: &MirExpr,
+    right: &MirExpr,
+    finish: impl FnOnce(Option<Scalar<'ctx>>, Option<Scalar<'ctx>>) -> T,
+) -> T {
+    let operand = |expr: &MirExpr| {
+        (!matches!(expr, MirExpr::NoneLiteral)).then(|| {
+            crate::object_unbox::emit_pack_operand(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                expr,
+            )
+        })
+    };
+    let hold = |expr: &MirExpr, scalar: Option<Scalar<'ctx>>| {
+        scalar.map(|scalar| crate::object_release::hold(context, module, rt, expr, &scalar))
+    };
+    let l = operand(left);
+    let held_l = hold(left, l);
+    let pending_l = l.and_then(|l| push_pending_int_release_if_scalar_temporary(rt, left, &l));
+    let r = operand(right);
+    let held_r = hold(right, r);
+    pop_pending_int_release(rt, pending_l);
+    let result = finish(l, r);
+    for held in [held_r, held_l].into_iter().flatten() {
+        held.release(builder, rt);
+    }
+    for (expr, scalar) in [(left, l), (right, r)] {
+        if let Some(scalar) = scalar {
+            release_scalar_if_int_temporary(context, builder, rt, expr, &scalar);
+        }
+    }
+    result
 }
 
 /// The `PyObject *` for one operand, and whether a packer produced it (and
@@ -148,6 +217,64 @@ pub(super) fn emit_compare<'ctx>(
         "foreign_compare",
     );
     Scalar::Object(result)
+}
+
+/// Emits the truth of the rich comparison `left op right`, once both
+/// operands are evaluated, as the `i1` a branch consumes. Builds no result
+/// object (the module documentation's "A rich comparison whose only use is a
+/// branch").
+pub(super) fn emit_compare_truth<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    op: CmpOpKind,
+    left: Option<Scalar<'ctx>>,
+    right: Option<Scalar<'ctx>>,
+) -> IntValue<'ctx> {
+    let selector = rich_compare_selector(op)
+        .expect("pycc_codegen: internal error: an identity test has no rich-comparison truth");
+    let edge = ForeignFailEdge::for_current(builder);
+    let (l, l_owned) = operand_pointer(context, builder, module, left);
+    let (r, r_owned) = operand_pointer(context, builder, module, right);
+    let owned = u64::from(l_owned) | (u64::from(r_owned) << 1);
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let i32_type = context.i32_type();
+    let truth_fn = shim_fn(
+        module,
+        EXT_OBJ_RICHCOMPARE_TRUTH_SYMBOL,
+        i32_type.fn_type(
+            &[ptr.into(), ptr.into(), i32_type.into(), i32_type.into()],
+            false,
+        ),
+    );
+    let status = builder
+        .build_call(
+            truth_fn,
+            &[
+                l.into(),
+                r.into(),
+                i32_type.const_int(selector, false).into(),
+                i32_type.const_int(owned, false).into(),
+            ],
+            "foreign_compare_truth",
+        )
+        .expect("build_call should not fail for pycc_ext_obj_richcompare_truth")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_richcompare_truth returns int")
+        .into_int_value();
+    route_negative(
+        context,
+        builder,
+        module,
+        rt,
+        edge,
+        status,
+        "foreign_compare_truth",
+    );
+    builder
+        .build_int_truncate(status, context.bool_type(), "foreign_compare_truth_bit")
+        .expect("build_int_truncate should not fail")
 }
 
 /// Emits `item in container` (or `item not in container` when `negate`)

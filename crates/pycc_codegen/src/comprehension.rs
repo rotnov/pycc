@@ -43,7 +43,6 @@
 
 use super::bigint_rc::{
     BigIntRefcount, emit_bigint_refcount_call, int_temporary_word, release_if_int_temporary,
-    release_scalar_if_int_temporary,
 };
 use super::rt_fns::RtFns;
 use super::set_instance::{SetEmitter, set_element_scalar};
@@ -53,7 +52,7 @@ use super::{
     build_int_set_check_not_resized, build_int_set_get, build_int_set_len, build_untag_checked,
     emit_assign, emit_dict_name_read, emit_expr, emit_list_name_read,
     emit_range_operands_with_exception_safety, emit_set_name_read, guard_statement_effects,
-    incref_if_str_duplicate, to_encoded_int, truthy, ty_to_basic_type,
+    incref_if_str_duplicate, to_encoded_int, ty_to_basic_type,
 };
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
@@ -159,7 +158,7 @@ pub(super) fn emit_comprehension<'ctx>(
     // the join point; without it, the element step runs unconditionally.
     match cond {
         Some(cond_expr) => {
-            let cond_scalar = emit_expr(
+            let cond_i1 = super::condition::emit_condition(
                 cx.context,
                 cx.builder,
                 cx.module,
@@ -168,15 +167,6 @@ pub(super) fn emit_comprehension<'ctx>(
                 cx.locals,
                 cond_expr,
             );
-            // A produced CPython-object filter (`if o.ready()`) is held across
-            // its truth test and released after it (Part 1 of #1092).
-            let held =
-                crate::object_release::hold(cx.context, cx.module, cx.rt, cond_expr, &cond_scalar);
-            let cond_i1 = truthy(cx.context, cx.builder, cx.module, cx.rt, cond_scalar);
-            held.release(cx.builder, cx.rt);
-            // #146 Part 2 (D-181): released after `truthy`, which reads a
-            // bigint operand's limbs.
-            release_scalar_if_int_temporary(cx.context, cx.builder, cx.rt, cond_expr, &cond_scalar);
             let if_taken_bb = cx
                 .context
                 .append_basic_block(function, &format!("{prefix}_if_taken"));

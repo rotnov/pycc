@@ -174,3 +174,92 @@ fn a_function_body_comparison_bridges_its_failure_and_releases_an_int_temporary(
         },
     );
 }
+
+/// #1518: a rich comparison whose only use is a branch -- an `if` and a
+/// `while` test, a `not` operand, both operands of a truth-only `and` and
+/// the test of a conditional expression --
+/// asks the shim for its truth and builds no result object, so neither
+/// `pycc_ext_obj_richcompare` nor `pycc_ext_obj_truthy` is called. An
+/// identity test in the same position stays a pointer compare, and a
+/// comparison used as a value still builds its result.
+#[test]
+fn a_comparison_that_only_feeds_a_branch_asks_the_shim_for_its_truth() {
+    let lt_one = || compare(CmpOpKind::Lt, numpy_pi(), MirExpr::IntLiteral(1));
+    let both = MirExpr::BoolOp {
+        op: pycc_mir::BoolOpKind::And,
+        left: Box::new(compare(CmpOpKind::Gt, MirExpr::IntLiteral(2), numpy_pi())),
+        right: Box::new(compare(CmpOpKind::LtE, numpy_pi(), numpy_pi())),
+        ty: Ty::Bool,
+        truth_only: true,
+    };
+    compile_ext_items_checking_ir(
+        "obj_compare_truth",
+        with_foreign_numpy(vec![MirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::If {
+                    test: lt_one(),
+                    body: vec![MirStmt::NoOp],
+                    orelse: vec![],
+                },
+                MirStmt::While {
+                    test: compare(CmpOpKind::NotEq, numpy_pi(), MirExpr::FloatLiteral(0.5)),
+                    body: vec![MirStmt::Return(None)],
+                },
+                MirStmt::ExprStmt(MirExpr::Not(Box::new(compare(
+                    CmpOpKind::Eq,
+                    numpy_pi(),
+                    numpy_pi(),
+                )))),
+                MirStmt::If {
+                    test: both,
+                    body: vec![MirStmt::NoOp],
+                    orelse: vec![],
+                },
+                MirStmt::If {
+                    test: compare(CmpOpKind::Is, numpy_pi(), MirExpr::NoneLiteral),
+                    body: vec![MirStmt::NoOp],
+                    orelse: vec![],
+                },
+                // The test of a conditional expression.
+                MirStmt::ExprStmt(MirExpr::IfExp {
+                    test: Box::new(compare(CmpOpKind::Gt, numpy_pi(), MirExpr::IntLiteral(7))),
+                    body: Box::new(MirExpr::IntLiteral(1)),
+                    orelse: Box::new(MirExpr::IntLiteral(2)),
+                    ty: Ty::Int,
+                }),
+                MirStmt::ExprStmt(compare(CmpOpKind::GtE, numpy_pi(), numpy_pi())),
+                MirStmt::Return(None),
+            ],
+        }]),
+        |ir| {
+            // Selector, then the ownership mask, as for the value form.
+            let truth_calls = ir
+                .lines()
+                .filter(|line| line.contains("call i32 @pycc_ext_obj_richcompare_truth("))
+                .count();
+            assert_eq!(truth_calls, 6, "{ir}");
+            assert!(ir.contains("ifexp_body"), "{ir}");
+            for (selector, owned) in [(0, 2), (3, 2), (2, 0), (4, 1), (1, 0), (4, 2)] {
+                let needle = format!("i32 {selector}, i32 {owned})");
+                assert!(
+                    ir.lines().any(|line| line
+                        .contains("call i32 @pycc_ext_obj_richcompare_truth(")
+                        && line.contains(&needle)),
+                    "{needle}: {ir}"
+                );
+            }
+            assert!(ir.contains("foreign_compare_truth_failed"), "{ir}");
+            assert!(!ir.contains("@pycc_ext_obj_truthy("), "{ir}");
+            assert!(ir.contains("icmp eq ptr"), "{ir}");
+            // Only the value form at the end builds a result object.
+            let value_calls = ir
+                .lines()
+                .filter(|line| line.contains("call ptr @pycc_ext_obj_richcompare("))
+                .count();
+            assert_eq!(value_calls, 1, "{ir}");
+        },
+    );
+}

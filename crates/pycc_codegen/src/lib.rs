@@ -30,6 +30,7 @@ mod callee;
 mod compare;
 mod compare_chain;
 mod comprehension;
+mod condition;
 mod copy_slots;
 mod if_exp;
 use bigint_rc::{
@@ -125,11 +126,11 @@ use ext::{
     EXT_OBJ_NONE_SYMBOL, EXT_OBJ_NOT_IMPLEMENTED_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
     EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INSTANCE_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL,
     EXT_OBJ_PACK_OBJECT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RAISE_SYMBOL,
-    EXT_OBJ_RICHCOMPARE_SYMBOL, EXT_OBJ_SETATTR_SYMBOL, EXT_OBJ_TO_FLOAT_SYMBOL,
-    EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL, EXT_OBJ_TYPE_SYMBOL,
-    EXT_OBJ_UNBOX_BOOL_SYMBOL, EXT_OBJ_UNBOX_FLOAT_SYMBOL, EXT_OBJ_UNBOX_INSTANCE_SYMBOL,
-    EXT_OBJ_UNBOX_INT_SYMBOL, EXT_OBJ_UNBOX_STR_SYMBOL, EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL,
-    ObjCollectionKind, entry_fn_name, is_module_entry_symbol,
+    EXT_OBJ_RICHCOMPARE_SYMBOL, EXT_OBJ_RICHCOMPARE_TRUTH_SYMBOL, EXT_OBJ_SETATTR_SYMBOL,
+    EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
+    EXT_OBJ_TYPE_SYMBOL, EXT_OBJ_UNBOX_BOOL_SYMBOL, EXT_OBJ_UNBOX_FLOAT_SYMBOL,
+    EXT_OBJ_UNBOX_INSTANCE_SYMBOL, EXT_OBJ_UNBOX_INT_SYMBOL, EXT_OBJ_UNBOX_STR_SYMBOL,
+    EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, ObjCollectionKind, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
 mod tests;
@@ -2683,7 +2684,7 @@ fn emit_expr_unchecked<'ctx>(
             ty,
         ),
         MirExpr::Not(operand) => {
-            let operand_scalar = emit_expr(
+            let truthy_cond = condition::emit_condition(
                 context,
                 builder,
                 module,
@@ -2692,10 +2693,6 @@ fn emit_expr_unchecked<'ctx>(
                 locals,
                 operand,
             );
-            let held = object_release::hold(context, module, rt, operand, &operand_scalar);
-            let truthy_cond = truthy(context, builder, module, rt, operand_scalar);
-            held.release(builder, rt);
-            release_scalar_if_int_temporary(context, builder, rt, operand, &operand_scalar);
             let inverted = builder
                 .build_not(truthy_cond, "not_truthy")
                 .expect("build_not should not fail inverting a well-formed i1");
@@ -3915,46 +3912,20 @@ fn emit_expr_unchecked<'ctx>(
             result
         }
         // Part 1 of #1371: a comparison or identity test with a CPython
-        // object operand. Left, then right -- CPython's own order -- with
-        // the `Compare` arm's #638 protection of an `int` temporary across
-        // the right operand's evaluation; a `None` literal operand of an
-        // identity test is not evaluated at all (`foreign_compare` names
-        // CPython's `None` instead). `foreign_compare` carries the rest.
-        MirExpr::ObjCompare { op, left, right } => {
-            let operand = |expr: &MirExpr| {
-                (!matches!(expr, MirExpr::NoneLiteral)).then(|| {
-                    object_unbox::emit_pack_operand(
-                        context,
-                        builder,
-                        module,
-                        rt,
-                        user_functions,
-                        locals,
-                        expr,
-                    )
-                })
-            };
-            let hold = |expr: &MirExpr, scalar: Option<Scalar<'ctx>>| {
-                scalar.map(|scalar| object_release::hold(context, module, rt, expr, &scalar))
-            };
-            let l = operand(left);
-            let held_l = hold(left, l);
-            let pending_l =
-                l.and_then(|l| push_pending_int_release_if_scalar_temporary(rt, left, &l));
-            let r = operand(right);
-            let held_r = hold(right, r);
-            pop_pending_int_release(rt, pending_l);
-            let result = foreign_compare::emit_compare(context, builder, module, rt, *op, l, r);
-            for held in [held_r, held_l].into_iter().flatten() {
-                held.release(builder, rt);
-            }
-            for (expr, scalar) in [(left, l), (right, r)] {
-                if let Some(scalar) = scalar {
-                    release_scalar_if_int_temporary(context, builder, rt, expr, &scalar);
-                }
-            }
-            result
-        }
+        // object operand, as a value. `foreign_compare::emit_operands_then`
+        // records the operands' order and lifetimes; a comparison whose only
+        // use is a branch is `condition::emit_condition`'s instead (#1518).
+        MirExpr::ObjCompare { op, left, right } => foreign_compare::emit_operands_then(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            left,
+            right,
+            |l, r| foreign_compare::emit_compare(context, builder, module, rt, *op, l, r),
+        ),
         // Part 2b of #1371: `item in container`. Item, then container --
         // CPython's own order -- with the `ObjCompare` arm's #638
         // protection of an `int` temporary item across the container's
@@ -7334,17 +7305,15 @@ fn emit_stmt<'ctx>(
         }
         MirStmt::If { test, body, orelse } => {
             let function = builder.get_insert_block().unwrap().get_parent().unwrap();
-            let cond = {
-                let scalar = emit_expr(context, builder, module, rt, user_functions, locals, test);
-                let held = object_release::hold(context, module, rt, test, &scalar);
-                let cond = truthy(context, builder, module, rt, scalar);
-                held.release(builder, rt);
-                // #146 Part 2 (D-181): released *after* `truthy`, which
-                // reads a bigint operand's limbs -- releasing first could
-                // free the very word being tested.
-                release_scalar_if_int_temporary(context, builder, rt, test, &scalar);
-                cond
-            };
+            let cond = condition::emit_condition(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                test,
+            );
             let then_bb = context.append_basic_block(function, "if_then");
             let merge_bb = context.append_basic_block(function, "if_merge");
             let else_bb = if orelse.is_empty() {
@@ -7406,17 +7375,15 @@ fn emit_stmt<'ctx>(
                 .build_unconditional_branch(test_bb)
                 .expect("build_unconditional_branch should not fail entering the loop test");
             builder.position_at_end(test_bb);
-            let cond = {
-                let scalar = emit_expr(context, builder, module, rt, user_functions, locals, test);
-                let held = object_release::hold(context, module, rt, test, &scalar);
-                let cond = truthy(context, builder, module, rt, scalar);
-                held.release(builder, rt);
-                // #146 Part 2 (D-181): released *after* `truthy`, which
-                // reads a bigint operand's limbs -- releasing first could
-                // free the very word being tested.
-                release_scalar_if_int_temporary(context, builder, rt, test, &scalar);
-                cond
-            };
+            let cond = condition::emit_condition(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                test,
+            );
             builder
                 .build_conditional_branch(cond, body_bb, after_bb)
                 .expect("build_conditional_branch should not fail for a well-formed i1 condition");
