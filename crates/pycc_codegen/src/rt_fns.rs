@@ -230,10 +230,11 @@ pub(super) struct RtFns<'ctx> {
     pub(super) instance_get_slot: FunctionValue<'ctx>,
     pub(super) instance_get_slot_checked: FunctionValue<'ctx>,
     pub(super) instance_set_slot: FunctionValue<'ctx>,
-    /// Issue #22: runtime NameError for call-before-`def`. Takes a
-    /// null-terminated C string (the function name) and panics -- which
-    /// becomes a process abort at the `extern "C"` boundary, matching every
-    /// other runtime error in `pycc_rt`.
+    /// Issue #22: runtime NameError for call-before-`def`. Takes the
+    /// name's UTF-8 bytes and their length, sets a pending `NameError`
+    /// (#1490) and returns; the caller branches to its exception target.
+    /// A module compiled for a CPython host calls the shim's
+    /// `pycc_ext_name_error` instead (`ext_thunk::emit_name_error_raise`).
     pub(super) name_error: FunctionValue<'ctx>,
     /// #382 (PR-22 Part 1): Exception runtime functions.
     /// `exception_active` returns i8 (non-zero if an exception is pending).
@@ -626,7 +627,7 @@ pub(super) fn declare_rt_functions<'ctx>(
         ),
         name_error: declare(
             "pycc_rt_name_error",
-            void_type.fn_type(&[ptr_type.into()], false),
+            void_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
         ),
         // #382 (PR-22 Part 1): Exception runtime function declarations.
         exception_active: declare(

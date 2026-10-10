@@ -373,7 +373,7 @@ struct UserFunction<'ctx> {
     /// Initialized to null; set to the current definition's address when
     /// the `def` executes at module level. Calls load from this slot and
     /// dispatch indirectly, so a call before the `def` has executed sees
-    /// null and aborts with `pycc_rt_name_error`, and a redefinition
+    /// null and raises `NameError` (#1490), and a redefinition
     /// updates the slot so later calls see the new function.
     /// `None` for monomorphized generic specializations (`0gen_...` names),
     /// which are compiler-generated, not user-defined: they have no
@@ -386,8 +386,8 @@ struct UserFunction<'ctx> {
     /// type the indirect call through `fn_ptr_global`.
     fn_type: inkwell::types::FunctionType<'ctx>,
     /// Issue #22: a global string constant holding the function name as a
-    /// null-terminated C string, passed to `pycc_rt_name_error` on the
-    /// null-pointer (call-before-`def`) path. Created once per function
+    /// null-terminated C string, whose bytes the `NameError` on the
+    /// null-pointer (call-before-`def`) path reports. Created once per function
     /// name in the declaration pass and reused at every call site, rather
     /// than recreating a duplicate-named global on each call.
     /// `None` for monomorphized specializations (no call-before-`def`
@@ -3725,6 +3725,24 @@ fn emit_expr_unchecked<'ctx>(
                 args,
                 ..
             } = inst.as_ref();
+            let ctor_function = user_functions.get(ctor.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "pycc_codegen: internal error: constructor `{ctor}` should have been \
+                     registered as an ordinary user function -- pycc_hir::class::lower_class \
+                     mangles every method, including `__init__`, into HirModule::items"
+                )
+            });
+            // #1490: the constructor's slot is checked before the instance
+            // is allocated or any argument evaluated, and an unbound one
+            // reports the class, as CPython's `C()` above `class C` does.
+            let callee = resolve_user_callee(
+                context,
+                builder,
+                module,
+                rt,
+                ctor_function,
+                Some(class_name),
+            );
             let count = context.i64_type().const_int(slot_names.len() as u64, false);
             let (layout, layout_len) =
                 attr_slot::instance_layout_constant(context, module, class_name, slot_names);
@@ -3738,14 +3756,7 @@ fn emit_expr_unchecked<'ctx>(
                 .try_as_basic_value()
                 .expect_basic("pycc_rt_instance_new returns a non-void pointer")
                 .into_pointer_value();
-            let ctor_function = user_functions.get(ctor.as_str()).unwrap_or_else(|| {
-                panic!(
-                    "pycc_codegen: internal error: constructor `{ctor}` should have been \
-                     registered as an ordinary user function -- pycc_hir::class::lower_class \
-                     mangles every method, including `__init__`, into HirModule::items"
-                )
-            });
-            build_call_to_with_leading_args(
+            build_resolved_call(
                 context,
                 builder,
                 module,
@@ -3753,7 +3764,7 @@ fn emit_expr_unchecked<'ctx>(
                 user_functions,
                 locals,
                 ctor_function,
-                ctor,
+                callee,
                 &[instance_ptr.into()],
                 args,
             );
@@ -4594,6 +4605,82 @@ fn build_call_to_with_leading_args<'ctx>(
     leading_args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
     args: &[MirExpr],
 ) -> inkwell::values::CallSiteValue<'ctx> {
+    let callee = resolve_user_callee(context, builder, module, rt, user_function, None);
+    build_resolved_call(
+        context,
+        builder,
+        module,
+        rt,
+        user_functions,
+        locals,
+        user_function,
+        callee,
+        leading_args,
+        args,
+    )
+}
+
+/// A user function's call target once its function-pointer slot has been
+/// checked: the slot's loaded pointer, or a monomorphized specialization's
+/// own function.
+#[derive(Clone, Copy)]
+enum ResolvedCallee<'ctx> {
+    Indirect(PointerValue<'ctx>),
+    Direct(FunctionValue<'ctx>),
+}
+
+/// Resolves `user_function`'s call target *before* any argument is
+/// evaluated, as CPython looks a callee name up before evaluating the
+/// arguments: `g(h())` above `def g` raises `NameError` without calling
+/// `h` (#1490).
+///
+/// Issue #22: dispatch is indirect through the function-pointer slot, which
+/// is null until the `def` executes. The load, the null check and its
+/// `NameError` path are shared with #1050's `ext` export thunks, which
+/// dispatch through the same slot: see `ext_thunk::emit_fnptr_dispatch_guard`.
+/// Here the null path branches to the innermost exception target, releasing
+/// the live temporaries on the way exactly as a failing operation does, and
+/// the builder is left on the non-null path. `unbound_name` overrides the
+/// reported name (a constructor reports its class). Monomorphized generic
+/// specializations (`0gen_...` names) have no `fn_ptr_global` -- they are
+/// compiler-generated, not user-defined, and dispatch directly.
+fn resolve_user_callee<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    user_function: &UserFunction<'ctx>,
+    unbound_name: Option<&str>,
+) -> ResolvedCallee<'ctx> {
+    if let Some(direct_value) = user_function.direct_value {
+        return ResolvedCallee::Direct(direct_value);
+    }
+    ResolvedCallee::Indirect(ext_thunk::emit_fnptr_dispatch_guard(
+        context,
+        builder,
+        module,
+        rt,
+        user_function,
+        unbound_name,
+        || exception::jump_to_exception_target(context, builder, rt),
+    ))
+}
+
+/// [`build_call_to_with_leading_args`] past callee resolution: marshals
+/// `args` and emits the call to the already-resolved `callee`.
+#[allow(clippy::too_many_arguments)]
+fn build_resolved_call<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    user_function: &UserFunction<'ctx>,
+    callee: ResolvedCallee<'ctx>,
+    leading_args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
+    args: &[MirExpr],
+) -> inkwell::values::CallSiteValue<'ctx> {
     let mut arg_values: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = leading_args.to_vec();
     // #638 (D-208): a fresh (non-duplicate) `Ty::Int` argument's ownership
     // *transfers* to the callee's parameter slot on the normal path --
@@ -4744,33 +4831,22 @@ fn build_call_to_with_leading_args<'ctx>(
         .borrow_mut()
         .truncate(mark);
     // Part 2 of #1499 (#1502): likewise for the owned `object` arguments.
-    // The dispatch guard below cannot unwind -- its null branch ends in
-    // `pycc_rt_name_error` and `unreachable` -- so the parameter slots own
-    // them from here on, and the callee releases them on every exit.
+    // The callee was resolved before any argument was evaluated
+    // ([`resolve_user_callee`]), so nothing between here and the call can
+    // unwind, and the parameter slots own them from here on; the callee
+    // releases them on every exit.
     for held in object_holds {
         held.consumed(rt);
     }
     arg_values.extend(marshalled_args);
-    // Issue #22: dispatch indirectly through the function-pointer slot.
-    // Load the current binding; if null, the function hasn't been defined
-    // yet at this point in execution -- abort with a runtime NameError.
-    // Otherwise, call through the loaded pointer.
-    // Monomorphized generic specializations (`0gen_...` names) have no
-    // `fn_ptr_global` -- they dispatch directly through `direct_value`
-    // since they are compiler-generated, not user-defined.
-    if let Some(ref direct_value) = user_function.direct_value {
-        return builder
-            .build_call(*direct_value, &arg_values, "call_user_fn")
-            .expect("build_call should not fail for a well-formed direct call");
+    match callee {
+        ResolvedCallee::Direct(direct_value) => builder
+            .build_call(direct_value, &arg_values, "call_user_fn")
+            .expect("build_call should not fail for a well-formed direct call"),
+        ResolvedCallee::Indirect(fn_ptr) => builder
+            .build_indirect_call(user_function.fn_type, fn_ptr, &arg_values, "call_user_fn")
+            .expect("build_indirect_call should not fail for a well-formed indirect call"),
     }
-    // The load, the null check and its `NameError` path are shared with
-    // #1050's `ext` export thunks, which dispatch through the same slot:
-    // see `ext_thunk::emit_fnptr_dispatch_guard`. It returns with the
-    // builder positioned on the non-null path.
-    let fn_ptr = ext_thunk::emit_fnptr_dispatch_guard(context, builder, rt, user_function);
-    builder
-        .build_indirect_call(user_function.fn_type, fn_ptr, &arg_values, "call_user_fn")
-        .expect("build_indirect_call should not fail for a well-formed indirect call")
 }
 
 /// Turns any supported `Scalar` into an LLVM `i1` for use as a `br`
@@ -5980,6 +6056,7 @@ fn compile_to_object_with_observer(
     let builder = context.create_builder();
     let i64_type = context.i64_type();
     let rt = declare_rt_functions(&context, &module);
+    rt.exceptions.host_bridge.set(options.ext);
 
     // First pass: declare every user-defined function -- with its real
     // parameter types and return type (Task 5), instead of Task 3/4's
@@ -6117,7 +6194,7 @@ fn compile_to_object_with_observer(
                     // Deliberately *not* mangled, on both counts. The symbol
                     // is internal-linkage and never declared from C, so it
                     // needs no C-legal spelling; and its contents are the
-                    // string `pycc_rt_name_error` prints, so the array size
+                    // name the `NameError` reports, so the array size
                     // and initializer stay on the source dotted name --
                     // mangling them would make a method's `NameError` read
                     // `0m4_Grid5_scale6_static`.
@@ -6188,7 +6265,7 @@ fn compile_to_object_with_observer(
     // represents a `def` statement's runtime binding effect: store the
     // function's address into the global function-pointer slot so calls
     // after this point dispatch to it. A call before the `def` (the slot
-    // is still null) aborts with `pycc_rt_name_error` -- matching
+    // is still null) raises a catchable `NameError` (#1490) -- matching
     // CPython's `NameError: name 'foo' is not defined`.
     let mut def_iter = function_defs_in_order.iter().peekable();
     let copy_slots = copy_slots::CopySlots::new(mir);

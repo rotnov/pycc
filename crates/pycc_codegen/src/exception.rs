@@ -41,6 +41,13 @@ pub(super) struct ExceptionCodegenState<'ctx> {
     /// directly": `foreign_fail::emit_failure` then keeps the direct
     /// `EXT_MODULE_EXEC_FAILED` return instead of bridging a foreign failure.
     pub(super) module_exec_exit: Cell<Option<inkwell::basic_block::BasicBlock<'ctx>>>,
+    /// Whether the module is compiled for a CPython host -- an `--ext`
+    /// artifact or an embedded executable, both `CompileOptions::ext` --
+    /// so a runtime `NameError` is raised through the C shim, which gives
+    /// the host CPython's own class (#1490,
+    /// `ext_thunk::emit_name_error_raise`). Set once, before any function
+    /// body or export thunk is emitted.
+    pub(super) host_bridge: Cell<bool>,
 }
 
 impl ExceptionCodegenState<'_> {
@@ -52,6 +59,7 @@ impl ExceptionCodegenState<'_> {
             pending_object_releases: RefCell::new(Vec::new()),
             loop_iterators: RefCell::new(Vec::new()),
             module_exec_exit: Cell::new(None),
+            host_bridge: Cell::new(false),
         }
     }
 }

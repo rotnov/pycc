@@ -613,15 +613,26 @@ and
 generated wrapper and `tp_init` now opens with a null guard on its
 `fnptr_` slot, so a call that still reaches an unbound slot raises a
 catchable `NameError: name '<item>' is not defined` instead of calling
-through a null pointer. That can happen only through an instance that
-escaped before its class statement ran -- a published `def make() ->
-object: return D(1)` called mid-body before `class D` -- and there pycc
-diverges from CPython twice: CPython raises `NameError` for `D` inside
-`make`, while pycc constructs the instance and raises at the later method
-call. [#1490](https://github.com/rotnov/pycc/issues/1490) tracks the
-construction itself, whose own `NameError` aborts the host when the
-missing slot is the constructor's. `tests/issue_1199_ext_reentrant_init.rs`
-pins these shapes against CPython and the guard's divergence on its own.
+through a null pointer. Compiled code reaching an unbound slot raises the
+same way since [#1490](https://github.com/rotnov/pycc/issues/1490): a
+function body calling a sibling whose `def` has not run, or constructing a
+class above its class statement, raises `NameError` through the shim's
+`pycc_ext_name_error` -- CPython's own class, bridged into pycc's pending
+state, so compiled `except Exception` catches it and the host receives the
+original -- where it used to call a panicking runtime function that aborted
+the host. As in CPython the callee is checked before its arguments are
+evaluated and before a constructed instance is allocated, and a
+construction reports the class name (`name 'C' is not defined`). The
+guard sees only the constructor's slot, though, so one divergence remains:
+a class that inherits `__init__` from an already-bound base (`class D(Real)`
+constructed by a published `def make() -> object: return D(1)` called
+mid-body before `class D`) constructs successfully where CPython raises
+`NameError` for `D` inside `make`, and pycc raises at the later method call
+instead. `tests/issue_1199_ext_reentrant_init.rs` pins these shapes against
+CPython and that divergence on its own;
+`tests/issue_1490_unbound_slot_name_error.rs` pins the compiled-code raise
+against CPython under `--ext`, an embedded executable and a native build
+(which raises a pycc exception of `Exception`'s tag named `NameError`).
 
 [#1143](https://github.com/rotnov/pycc/issues/1143) extends that export set
 past module-level functions: a public `@staticmethod` and a public

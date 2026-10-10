@@ -20,7 +20,10 @@
 //! [`an_instance_escaping_before_its_class_statement_raises_name_error`]:
 //! the null guard every generated wrapper now opens with turns what
 //! CPython reports inside the constructor's caller into a catchable
-//! `NameError` at the method call (the construction itself is #1490).
+//! `NameError` at the method call: `D` inherits `Real`'s constructor, whose
+//! slot is already bound, so the construction itself succeeds (a
+//! construction whose own `__init__` slot is unbound raises `NameError`
+//! since #1490).
 //! [`a_name_redefined_after_the_cycle_is_hidden_until_its_last_definition`]:
 //! a redefined function stays absent until its last definition runs,
 //! where CPython would show the earlier one.
@@ -379,8 +382,9 @@ import cb
 }
 
 /// The guard, not a CPython comparison: `make` builds a `D` before the
-/// class statement has run (#1490 tracks refusing that), and the instance
-/// escapes to the host. Calling `D.m` on it raises a catchable `NameError`
+/// class statement has run -- `D` inherits `Real.__init__`, whose slot is
+/// bound, so #1490's constructor-slot `NameError` does not fire -- and the
+/// instance escapes to the host. Calling `D.m` on it raises a catchable `NameError`
 /// instead of calling through the null slot.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
