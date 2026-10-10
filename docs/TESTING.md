@@ -945,8 +945,10 @@ instructions per parse. Before the change it was the largest single cost of
 `ParserState.feed_token`: building, hashing and releasing a fresh `str` for
 each of the loop's attribute loads and method lookups.
 
-#1514 records the full attribution and the remaining parts:
-- #1516: an optimized shim and runtime in the default artifact;
+#1514 records the full attribution and the parts that remained after #1515:
+- #1516: an optimized shim (delivered with a narrower scope than first
+  planned: the shim is optimized in every profile, while the runtime and IR
+  follow `--release`; see the next paragraph);
 - #1517: a method call without a bound method;
 - #1518: the residual per-operation costs.
 
