@@ -321,3 +321,56 @@ fn a_str_that_calls_a_compiled_export_while_rendering_sees_nothing_pending() {
     assert_ok(&cpython, "CPython");
     assert_eq!(stdout_of(&cpython), "msg [1] []\n", "CPython");
 }
+
+/// The compiled side of the render-then-reraise case: an inner handler
+/// prints the bridged exception, filling its message cache, then re-raises
+/// it into an outer `except*` that prints the group it binds.
+const RENDERED_STAR_BODY: &str = "import counting\n\n\n\
+     def run() -> None:\n\
+     \x20   try:\n\
+     \x20       try:\n\
+     \x20           counting.fail()\n\
+     \x20       except ValueError as err:\n\
+     \x20           print(err)\n\
+     \x20           raise\n\
+     \x20   except* ValueError as eg:\n\
+     \x20       print(f'[{eg}]')\n";
+
+/// Rendering a bridged exception fills its message cache but does not change
+/// where it came from: re-raised into an `except*`, the group the handler
+/// binds is CPython's `ExceptionGroup('', [exc])`, never one carrying the
+/// leaf's text, and `__str__` runs only for the one rendering.
+///
+/// pycc renders a group as its message alone, without CPython's
+/// ` (1 sub-exception)` suffix -- a divergence of every group, not of this
+/// change -- so each run is pinned on its own; both show an empty message.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_rendered_exception_reraised_into_except_star_binds_an_empty_group_message() {
+    let script = "import pycc_lazy1511_rendered_star as m\n\
+                  from counting import Counting\n\
+                  m.run()\n\
+                  print(Counting.calls)\n";
+
+    let hosted = ScratchDir::new("lazy1511_rendered_star").expect("scratch");
+    write_helpers(&hosted, &[("counting", COUNTING)]);
+    build_ext(&hosted, "pycc_lazy1511_rendered_star", RENDERED_STAR_BODY);
+    let run = python(&hosted, script);
+    assert_ok(&run, "pycc");
+    assert_eq!(stdout_of(&run), "counted\n[]\n1\n", "pycc");
+
+    let reference = ScratchDir::new("lazy1511_rendered_star_cpython").expect("scratch");
+    write_helpers(&reference, &[("counting", COUNTING)]);
+    std::fs::write(
+        reference.join("pycc_lazy1511_rendered_star.py"),
+        RENDERED_STAR_BODY,
+    )
+    .expect("write the oracle source");
+    let cpython = python(&reference, script);
+    assert_ok(&cpython, "CPython");
+    assert_eq!(
+        stdout_of(&cpython),
+        "counted\n[ (1 sub-exception)]\n1\n",
+        "CPython"
+    );
+}

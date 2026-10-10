@@ -74,6 +74,13 @@ pub struct PyExceptionObj {
     pub(crate) name: *const u8,
     pub(crate) name_len: usize,
     pub(crate) message: *mut PyStrObj,
+    /// Whether this exception's message is produced lazily (#1511): a
+    /// bridged exception, allocated without one, or the rest group
+    /// `except*` derives from one. Set at allocation and never changed.
+    /// `message` is only a cache for such an exception, filled by the first
+    /// rendering, so whether it is null says nothing about where the
+    /// exception came from; this flag does.
+    pub(crate) lazy_message: bool,
     /// The enclosing function's source name (`"<module>"` at top level)
     /// where this exception was raised (#707), as a pointer to UTF-8 bytes
     /// with no terminator, plus `frame_function_len`. Null means "not
@@ -175,6 +182,7 @@ pub extern "C" fn pycc_rt_exception_alloc(
         name,
         name_len,
         message,
+        lazy_message: message.is_null(),
         frame_function: std::ptr::null(),
         frame_function_len: 0,
         cause: std::ptr::null_mut(),
@@ -264,6 +272,7 @@ fn build_group_or_null(
         name: group_name,
         name_len: group_name_len,
         message,
+        lazy_message: message.is_null(),
         frame_function: std::ptr::null(),
         frame_function_len: 0,
         cause: std::ptr::null_mut(),
@@ -301,6 +310,7 @@ pub unsafe extern "C" fn pycc_rt_exception_group_alloc(
         name,
         name_len,
         message,
+        lazy_message: message.is_null(),
         frame_function: std::ptr::null(),
         frame_function_len: 0,
         cause: std::ptr::null_mut(),
@@ -375,14 +385,17 @@ pub unsafe extern "C" fn pycc_rt_exception_group_partition(
             rest.push(member);
         }
     }
-    // Only a bridged exception carries no message (#1511), and it is never a
-    // group, so partitioning it must not call the original's `__str__`, which
-    // CPython never does here. The matched group a handler binds is CPython's
-    // `ExceptionGroup('', [exc])`, message `''`. The rest group re-raised in
-    // place of the naked original (the recorded `except*` deviation) stays
-    // message-less: it renders as its sole member's own message, produced
-    // only if something renders it.
-    let (matched_message, rest_message) = if obj.message.is_null() {
+    // A lazily messaged exception (#1511) -- a bridged one, or the rest group
+    // an earlier `except*` derived from one -- must not have its message
+    // copied: that would call the original's `__str__`, which CPython never
+    // does here, or, once a handler has rendered it, put the leaf's text on
+    // the wrapper. Provenance comes from `lazy_message`, never from whether
+    // the message cache is still empty. The matched group a handler binds is
+    // CPython's `ExceptionGroup('', [exc])`, message `''`. The rest group
+    // re-raised in place of the naked original (the recorded `except*`
+    // deviation) stays lazily messaged: it renders as its sole member's own
+    // message, produced only if something renders it.
+    let (matched_message, rest_message) = if obj.lazy_message {
         (alloc_exception_message(""), std::ptr::null_mut())
     } else {
         (obj.message, obj.message)

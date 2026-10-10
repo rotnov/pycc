@@ -1729,6 +1729,9 @@ rendered, never runs `__str__`, and neither does `except*`: the matched group
 it derives from a bridged exception carries CPython's `''` wrapper message, and
 the unmatched rest group it re-raises (the recorded `except*` deviation) stays
 message-less until rendered, then renders as its sole member's own message.
+That holds even when a handler printed the exception before re-raising it into
+the `except*`: lazy provenance is recorded at allocation, not read from the
+message cache the rendering filled.
 Three divergences remain: a second rendering of the same caught exception
 reuses the first one's text where CPython calls `__str__` again (the accessor's
 result is borrowed, so it cannot be replaced while an earlier read is live); a

@@ -375,6 +375,67 @@ mod tests {
         pycc_rt_exception_set_message_resolver(None);
     }
 
+    fn partition_by(
+        obj: *mut PyExceptionObj,
+        tag: u8,
+    ) -> (*mut PyExceptionObj, *mut PyExceptionObj) {
+        let tags = [tag];
+        let group_name = "ExceptionGroup";
+        let mut matched = std::ptr::null_mut();
+        let mut rest = std::ptr::null_mut();
+        unsafe {
+            pycc_rt_exception_group_partition(
+                obj,
+                tags.as_ptr(),
+                tags.len(),
+                EXCEPTION_TYPE_EXCEPTION,
+                group_name.as_ptr(),
+                group_name.len(),
+                &raw mut matched,
+                &raw mut rest,
+            );
+        }
+        (matched, rest)
+    }
+
+    /// Rendering fills the message cache but never changes where the
+    /// exception came from: a bridged exception a handler has already
+    /// printed, then re-raised into an `except*`, still gives the matched
+    /// group CPython's `''`, not the leaf's text -- and so does a rest group
+    /// that was rendered before being partitioned again.
+    #[test]
+    fn a_rendered_lazy_exception_still_partitions_as_lazy() {
+        let _guard = RESOLVER_REGISTRATION
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        pycc_rt_exception_set_message_resolver(Some(failing_for_groups));
+        CALLS.store(0, Ordering::SeqCst);
+        let obj = lazy_value_error();
+        assert_eq!(
+            text(unsafe { pycc_rt_exception_message(obj) }),
+            b"from the resolver"
+        );
+        let (matched, rest) = partition_by(obj, EXCEPTION_TYPE_VALUE_ERROR);
+        assert!(rest.is_null());
+        assert_eq!(text(unsafe { pycc_rt_exception_message(matched) }), b"");
+
+        let (none, rest) = partition_by(obj, EXCEPTION_TYPE_TYPE_ERROR);
+        assert!(none.is_null());
+        assert!(unsafe { (*rest).message }.is_null(), "the rest stays lazy");
+        assert_eq!(
+            text(unsafe { pycc_rt_exception_message(rest) }),
+            b"from the resolver"
+        );
+        let (matched, again) = partition_by(rest, EXCEPTION_TYPE_VALUE_ERROR);
+        assert!(again.is_null());
+        assert_eq!(text(unsafe { pycc_rt_exception_message(matched) }), b"");
+        let (none, again) = partition_by(rest, EXCEPTION_TYPE_TYPE_ERROR);
+        assert!(none.is_null());
+        assert!(unsafe { (*again).message }.is_null());
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1, "`__str__` ran once");
+        pycc_rt_exception_set_message_resolver(None);
+    }
+
     /// The C shim's answer: a group `except*` built is never in the bridge
     /// table, its naked member is.
     unsafe extern "C" fn failing_for_groups(obj: *mut PyExceptionObj) -> *mut PyStrObj {

@@ -38,7 +38,11 @@ status: accepted
      is left to call `__str__` on.
   5. `except*` never resolves a message. The matched group it derives gets
      CPython's `''` wrapper message. The unmatched rest group stays
-     message-less and renders as its sole member's message.
+     message-less and renders as its sole member's message. Whether an
+     exception's message is lazy is recorded when it is allocated
+     (`PyExceptionObj::lazy_message`), never inferred from the message
+     cache, so this holds even after a handler has rendered the exception
+     and re-raised it into the `except*`.
   `docs/RUNTIME.md` (the `--ext` exception-bridge paragraph) states the
   observable behavior. Rules 2-4 are the deliberate CPython deviations this
   entry records.
