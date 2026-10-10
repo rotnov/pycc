@@ -11,8 +11,10 @@
 //!
 //! None of that code can run in a native build. An `object` value enters
 //! compiled code only from the host (a foreign import, which makes the
-//! build embedded, or an `--ext` caller) or by boxing a native value, and
-//! the type check of a fully native build refuses every boxing seam with
+//! build embedded, or an `--ext` caller), by boxing a native value, or as a
+//! list display built as a CPython `list` (`HirExpr::ObjectList`); every
+//! other `object` operation consumes an existing value. The type check of a
+//! fully native build refuses every boxing seam and every such display with
 //! `I0406` (`pycc_types::check_without_host`). So [`define_as_traps`] turns
 //! every `pycc_ext_*` declaration the module still holds into an internal
 //! definition whose body traps: the module then references no host symbol

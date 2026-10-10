@@ -111,10 +111,12 @@ fn a_native_typevar_program_that_boxes_nothing_links_and_runs() {
 
 const TYPE_VAR: &str = "from typing import Generic, TypeVar\n\nT = TypeVar(\"T\")\n\n";
 
-/// Each program boxes a native value (or `None`) into a `T` slot: an
+/// Each program boxes a native value (or `None`) into a `T` slot -- an
 /// argument, a constructor argument, a returned value, `return None` and a
-/// bare `return`. A native build refuses each with `I0406` before codegen,
-/// never with a link error.
+/// bare `return` -- or builds a CPython `list` in one from a list display
+/// (annotated, empty, in a conditional, rebound, or stored into an
+/// attribute). A native build refuses each with `I0406` before codegen,
+/// never with a link error or a trap at run time.
 #[test]
 fn a_native_build_refuses_boxing_into_a_typevar_slot_with_i0406() {
     for (shape, body) in [
@@ -137,6 +139,33 @@ fn a_native_build_refuses_boxing_into_a_typevar_slot_with_i0406() {
         (
             "bare return",
             "def nothing() -> T:\n    return\n\nnothing()\n",
+        ),
+        // A list display bound to a `T` slot is built as a CPython `list`
+        // (`HirExpr::ObjectList`); before the fix these built, linked and
+        // then hit the trap stub at run time.
+        (
+            "annotated list display",
+            "def f() -> None:\n    x: T = [1]\n\nf()\nprint(1)\n",
+        ),
+        (
+            "empty list display",
+            "def f() -> None:\n    x: T = []\n\nf()\nprint(1)\n",
+        ),
+        (
+            "list display in a conditional",
+            "def f(c: bool) -> None:\n    x: T = [1] if c else []\n\nf(True)\nprint(1)\n",
+        ),
+        (
+            "rebinding to a list display",
+            "def f(k: T) -> None:\n    s = k\n    s = []\n\nprint(1)\n",
+        ),
+        (
+            "attribute store of a list display",
+            "class B(Generic[T]):\n    v: T\n\n    def __init__(self, v: T) -> None:\n        self.v = v\n\n    def reset(self) -> None:\n        self.v = [1]\n\nprint(1)\n",
+        ),
+        (
+            "attribute store of an `or` with a list display",
+            "class B(Generic[T]):\n    v: T\n\n    def __init__(self, v: T) -> None:\n        self.v = v\n\n    def fill(self) -> None:\n        self.v = self.v or []\n\nprint(1)\n",
         ),
     ] {
         let source = format!("{TYPE_VAR}{body}");
@@ -194,9 +223,15 @@ def three() -> T:
 
 def nothing() -> T:
     return None
+
+
+def listed() -> T:
+    x: T = [1, \"a\"]
+    return x
 ";
 
-/// An `--ext` module boxes native values into its `T` slots and CPython
+/// An `--ext` module boxes native values into its `T` slots, builds a
+/// CPython `list` from a display bound to one, and CPython
 /// reads them back, as importing the same source does.
 #[test]
 #[ignore = "needs CPython 3.14.7 as python3.14 or PYCC_PYTHON; run with --include-ignored"]
@@ -220,7 +255,7 @@ fn an_ext_module_still_boxes_into_a_typevar_slot() {
             .arg("-c")
             .arg(format!(
                 "import sys; sys.path.insert(0, '.'); import {module} as m\n\
-                 print(m.ident(3), m.ident('s'), m.ident([1]), m.three(), m.nothing())"
+                 print(m.ident(3), m.ident('s'), m.ident([1]), m.three(), m.nothing(), m.listed())"
             ))
             .current_dir(&*dir)
             .output()
@@ -230,7 +265,7 @@ fn an_ext_module_still_boxes_into_a_typevar_slot() {
     };
     let compiled = probe("pycc_t1508_m");
     assert_eq!(compiled, probe("pycc_t1508_py"), "against CPython");
-    assert_eq!(compiled, "3 s [1] 3 None\n");
+    assert_eq!(compiled, "3 s [1] 3 None [1, 'a']\n");
 }
 
 /// An embedded executable links the shim, so a foreign import makes the

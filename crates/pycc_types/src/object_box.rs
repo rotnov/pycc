@@ -96,9 +96,11 @@ pub const NATIVE_BOXING_CODE: &str = "I0406";
 /// Runs `check` as the type check of a fully native build (#1508): one
 /// that is neither an `--ext` artifact nor an embedded executable, and so
 /// links no CPython host. Every boxing seam (`admits_value`, and the bare
-/// `return`/`return None` of `crate::object_none`) is then refused with
-/// [`NATIVE_BOXING_CODE`] instead of admitted: its packer
-/// (`pycc_ext_obj_pack_*`, `pycc_ext_obj_none`) lives in the host shim,
+/// `return`/`return None` of `crate::object_none`), and every list display
+/// built as a CPython `list` (`crate::foreign::list_display`), is then
+/// refused with [`NATIVE_BOXING_CODE`] instead of admitted: its helper
+/// (`pycc_ext_obj_pack_*`, `pycc_ext_obj_none`,
+/// `pycc_ext_obj_build_list`) lives in the host shim,
 /// which such a build does not link, so no `object` value can exist in it.
 ///
 /// The mode is a scoped thread-local rather than an `Environment` field
@@ -184,6 +186,23 @@ mod tests {
             ("None argument", "def f(k: T) -> None:\n    pass\nf(None)\n"),
             ("return value", "def f() -> T:\n    return 3\n"),
             ("bare return", "def f() -> T:\n    return\n"),
+            // The empty-container pre-pass rewrites a list display bound to
+            // an object slot into `HirExpr::ObjectList` before the check, so
+            // it reaches no `admits_value` seam (`foreign::list_display`).
+            ("list display", "def f() -> None:\n    x: T = [1]\n"),
+            ("empty list display", "def f() -> None:\n    x: T = []\n"),
+            (
+                "list display in a value position",
+                "def f(c: bool) -> None:\n    x: T = [1] if c else []\n",
+            ),
+            (
+                "rebound to a list display",
+                "def f(k: T) -> None:\n    s = k\n    s = []\n",
+            ),
+            (
+                "list display stored into an attribute",
+                "from typing import Generic\nclass B(Generic[T]):\n    v: T\n    def __init__(self, v: T) -> None:\n        self.v = v\n    def reset(self) -> None:\n        self.v = self.v or [1]\n",
+            ),
             ("return None", "def f() -> T:\n    return None\n"),
             (
                 "constructor",
@@ -196,6 +215,12 @@ mod tests {
             let errors = check_without_host(|| crate::check_and_resolve_all(&hir)).expect_err(seam);
             assert_eq!(errors[0].code, NATIVE_BOXING_CODE, "{seam}: {errors:?}");
             assert!(errors[0].message.contains("native build"), "{seam}");
+            if seam.contains("list display") {
+                assert!(
+                    errors[0].message.contains("list display"),
+                    "{seam}: {errors:?}"
+                );
+            }
         }
     }
 

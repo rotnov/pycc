@@ -29,6 +29,13 @@ pub(crate) fn object_list_ty(
     local_names: &[&str],
     elements: &[HirExpr],
 ) -> Result<Ty, Diagnostic> {
+    // #1508: the display is built by the host shim's
+    // `pycc_ext_obj_build_list`, which a fully native build does not link.
+    if crate::object_box::hostless() {
+        return Err(crate::object_box::boxing_without_host(
+            "a list display built as a CPython `list`",
+        ));
+    }
     for element in elements {
         let element_ty = infer_expr_in(env, local_names, element)?;
         refuse_classmethod_cls(

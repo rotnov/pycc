@@ -2702,11 +2702,16 @@ every `pycc_ext_*` helper, live in the CPython host shim, which only a
 (`CompileOptions::ext`). A fully native build still compiles `object`-typed
 code -- a legacy `T = TypeVar("T")` annotation lowers to `object`
 (`docs/TYPE_SYSTEM.md`, "Generics") -- so two rules keep it linkable. Its
-type check refuses every boxing seam with `I0406`
-(`pycc_types::check_without_host`, entered by `src/frontend.rs` only when the
-build is neither `--ext` nor embedded): with no packer there is no way to put
-a native value into an `object` slot, and no host to hand one in, so no
-`object` value exists at run time. And `pycc_codegen`'s `native_host_stubs`
+type check refuses every boxing seam, and every list display built as a
+CPython `list` (`HirExpr::ObjectList`, `pycc_ext_obj_build_list`), with
+`I0406` (`pycc_types::check_without_host`, entered by `src/frontend.rs` only
+when the build is neither `--ext` nor embedded): those are the only ways
+compiled code creates an `object` value, and with no host there is none to
+hand one in, so no `object` value exists at run time. Every other `object`
+operation (an attribute, call, comparison, `len`, subscript, unpack or
+`isinstance`) consumes an existing one, and a slot that is never filled is
+refused before codegen (an unassigned declared attribute is `C0001`, an
+unbound name `T0021`/`T0041`). And `pycc_codegen`'s `native_host_stubs`
 pass gives every `pycc_ext_*` declaration a non-`ext` module still holds an
 internal definition whose body is `llvm.trap`: the `object` bodies that
 reference them are unreachable, the module references no host symbol, and a

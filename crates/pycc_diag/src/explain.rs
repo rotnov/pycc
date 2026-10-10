@@ -1663,8 +1663,10 @@ boxes the `int` into a CPython object. Every boxing seam is refused: a call \
 argument (a function, method, constructor or `super()` call), an annotated \
 binding or a rebinding of an `object` name, a `return` of a value, a bare \
 `return` or `return None` from a function declared to return the type \
-variable, and an attribute store into an `object` attribute. Boxing is done \
-by the CPython host's packers, and a native executable links no host, so no \
+variable, and an attribute store into an `object` attribute. So is a list \
+display bound to such a slot (`x: T = [1]`, `self.v = self.v or []`), which \
+is built as a CPython `list`. Boxing and that list are done by the CPython \
+host's helpers, and a native executable links no host, so no \
 `object` value can exist in it; before #1508 such a program failed in the \
 linker with undefined `pycc_ext_*` symbols. A program that only defines \
 type-variable functions or `Generic[T]` classes, and never boxes a value \
