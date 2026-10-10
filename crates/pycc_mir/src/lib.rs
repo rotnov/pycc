@@ -433,7 +433,7 @@ pub enum MirExpr {
     /// part that learns an attribute's type (a typed stub, say) needs no
     /// shape change here.
     ///
-    /// The load can fail: a missing attribute makes `PyObject_GetAttrString`
+    /// The load can fail: a missing attribute makes `PyObject_GetAttr`
     /// return `NULL` with a CPython exception set, which is why
     /// `pycc_codegen::exception::expression_can_set_exception` answers
     /// `true` for this node.

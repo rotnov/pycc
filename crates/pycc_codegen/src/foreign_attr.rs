@@ -2,7 +2,8 @@
 //!
 //! The counterpart to `foreign_import.rs`: that module knows how a foreign
 //! `import numpy` becomes a module object in a global, this one knows how
-//! `numpy.pi` becomes a `PyObject_GetAttrString` call on it. Carved out of
+//! `numpy.pi` becomes a `PyObject_GetAttr` call on it, with the name
+//! interned once per module (#1515). Carved out of
 //! `lib.rs` for the same reason (AGENTS.md's "Keep source files
 //! decomposable"; the tracker for the rest of `lib.rs` is #545), and kept
 //! separate from `foreign_import.rs` because the two sit at different
@@ -28,11 +29,13 @@ use crate::foreign_fail::{ForeignFailEdge, route_null};
 use inkwell::builder::Builder;
 
 /// Declares the shim's
-/// `PyObject *pycc_ext_obj_getattr(PyObject *, const char *)` once per
-/// module, returning the existing declaration on every later call --
-/// `foreign_import.rs`'s `obj_import_fn` pattern exactly, and for the same
-/// reason: a second declaration of one name is an LLVM module-verifier
-/// error.
+/// `PyObject *pycc_ext_obj_getattr(PyObject *, const char *, PyObject **)`
+/// once per module, returning the existing declaration on every later call
+/// -- `foreign_import.rs`'s `obj_import_fn` pattern exactly, and for the
+/// same reason: a second declaration of one name is an LLVM module-verifier
+/// error. The attribute load here and `foreign_call.rs`'s method lookup
+/// both declare it through this one function, so the two can never
+/// disagree about its signature.
 fn obj_getattr_fn<'ctx>(
     context: &'ctx Context,
     module: &inkwell::module::Module<'ctx>,
@@ -43,9 +46,68 @@ fn obj_getattr_fn<'ctx>(
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
     module.add_function(
         EXT_OBJ_GETATTR_SYMBOL,
-        ptr.fn_type(&[ptr.into(), ptr.into()], false),
+        ptr.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
         None,
     )
+}
+
+/// The LLVM name of the interned-name cache slot for attribute `attr`.
+///
+/// One slot per distinct name per module (#1515, Part 1 of #1514): an
+/// attribute load and a method lookup of the same name share it, because
+/// both pass the same interned `str` to `PyObject_GetAttr`.
+fn attr_name_slot_symbol(attr: &str) -> String {
+    format!("pycc_foreign_attr_slot.{attr}")
+}
+
+/// The module's cache slot for attribute name `attr`: an internal,
+/// zero-initialised `ptr` global the shim fills with the interned `str` on
+/// the first load through it and reads on every later one
+/// (`pycc_ext_obj_getattr` in `src/ext/pycc_ext_module.c`). Created on the
+/// first request for a name and returned as-is on every later one.
+fn attr_name_slot<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+    attr: &str,
+) -> PointerValue<'ctx> {
+    let symbol = attr_name_slot_symbol(attr);
+    if let Some(existing) = module.get_global(&symbol) {
+        return existing.as_pointer_value();
+    }
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let slot = module.add_global(ptr, None, &symbol);
+    slot.set_linkage(inkwell::module::Linkage::Internal);
+    slot.set_initializer(&ptr.const_null());
+    slot.as_pointer_value()
+}
+
+/// Emits one `pycc_ext_obj_getattr(base, "attr", &slot)` call and returns
+/// its (possibly `NULL`) result, leaving the failure routing to the caller.
+///
+/// Shared by [`emit`] (an attribute load) and `foreign_call.rs`'s method
+/// lookup. `string_symbol` names the global holding the UTF-8 spelling the
+/// shim interns on a slot's first use; `label` names the call's result.
+pub(super) fn emit_getattr_call<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    base_ptr: PointerValue<'ctx>,
+    attr: &str,
+    string_symbol: &str,
+    label: &str,
+) -> PointerValue<'ctx> {
+    let getattr = obj_getattr_fn(context, module);
+    let name = builder
+        .build_global_string_ptr(attr, string_symbol)
+        .expect("build_global_string_ptr should not fail")
+        .as_pointer_value();
+    let slot = attr_name_slot(context, module, attr);
+    builder
+        .build_call(getattr, &[base_ptr.into(), name.into(), slot.into()], label)
+        .expect("build_call should not fail for pycc_ext_obj_getattr")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_getattr returns PyObject *")
+        .into_pointer_value()
 }
 
 /// The object operand of a foreign-object operation -- for example an
@@ -120,18 +182,16 @@ pub(super) fn emit<'ctx>(
     attr: &str,
 ) -> Scalar<'ctx> {
     let edge = ForeignFailEdge::for_current(builder);
-    let getattr = obj_getattr_fn(context, module);
     let base_ptr = expect_object_pointer(base);
-    let name = builder
-        .build_global_string_ptr(attr, &format!("pycc_foreign_attr_{attr}"))
-        .expect("build_global_string_ptr should not fail")
-        .as_pointer_value();
-    let loaded = builder
-        .build_call(getattr, &[base_ptr.into(), name.into()], "foreign_attr")
-        .expect("build_call should not fail for pycc_ext_obj_getattr")
-        .try_as_basic_value()
-        .expect_basic("pycc_ext_obj_getattr returns PyObject *")
-        .into_pointer_value();
+    let loaded = emit_getattr_call(
+        context,
+        builder,
+        module,
+        base_ptr,
+        attr,
+        &format!("pycc_foreign_attr_{attr}"),
+        "foreign_attr",
+    );
     route_null(context, builder, module, rt, edge, loaded, "foreign_attr");
     Scalar::Object(loaded)
 }
@@ -204,11 +264,26 @@ mod tests {
     /// where the rationale for compiling all the way to an object file
     /// (LLVM's verifier runs before any assertion is believed) lives.
     fn entry_ir(label: &str, items: Vec<MirItem>) -> String {
+        compile_ir(label, items).0
+    }
+
+    /// The LLVM text of the whole module -- globals included -- after
+    /// compiling `items` as an `ext` object, for the assertions about the
+    /// interned-name cache slots (#1515), which are module-level globals the
+    /// entry point's own text names but does not define.
+    fn module_ir(label: &str, items: Vec<MirItem>) -> String {
+        compile_ir(label, items).1
+    }
+
+    /// `(entry point IR, whole-module IR)` for [`entry_ir`] and [`module_ir`].
+    fn compile_ir(label: &str, items: Vec<MirItem>) -> (String, String) {
         let dir = pycc_scratch::ScratchDir::new(label).expect("failed to create scratch dir");
         let mut ir = String::new();
+        let mut whole = String::new();
         let mut observer = |module: &inkwell::module::Module<'_>, _: Option<&'static str>| {
             if let Some(entry) = module.get_function(EXT_MODULE_EXEC_SYMBOL) {
                 ir = crate::llvm_string_to_owned(entry.print_to_string());
+                whole = crate::llvm_string_to_owned(module.print_to_string());
             }
         };
         compile_to_object_with_observer(
@@ -225,7 +300,88 @@ mod tests {
         )
         .expect("ext codegen should succeed");
         assert!(!ir.is_empty(), "no {EXT_MODULE_EXEC_SYMBOL} was emitted");
-        ir
+        (ir, whole)
+    }
+
+    /// One discarded `<module>.<method>()` call with no arguments -- the
+    /// method-lookup half of the shared helper (`foreign_call.rs`).
+    fn method_call(module: &str, method: &str) -> Vec<MirItem> {
+        vec![
+            MirItem::ForeignImport {
+                local_name: module.to_string(),
+                module_path: module.to_string(),
+                from: None,
+            },
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ObjMethodCall {
+                base: Box::new(MirExpr::Name {
+                    name: module.to_string(),
+                    ty: Ty::Object,
+                }),
+                method: method.to_string(),
+                args: Vec::new(),
+            })),
+        ]
+    }
+
+    /// How many times `needle` occurs in `haystack`.
+    fn occurrences(haystack: &str, needle: &str) -> usize {
+        haystack.matches(needle).count()
+    }
+
+    /// The definition line LLVM prints for `attr`'s cache slot.
+    fn slot_definition(attr: &str) -> String {
+        format!(
+            "@{} = internal global ptr null",
+            attr_name_slot_symbol(attr)
+        )
+    }
+
+    /// #1515: the shim receives the attribute's cache slot as its third
+    /// argument, and the slot is an internal, null-initialised pointer
+    /// global -- the state the shim's first-use intern expects. The
+    /// regression this pins is the hot-path shape itself: with no slot
+    /// argument the shim can only build a fresh `str` per load
+    /// (`PyObject_GetAttrString`), which was the largest single cost of the
+    /// #1207 subject's parse loop (`docs/TESTING.md`).
+    #[test]
+    fn an_attribute_load_passes_its_interned_name_slot_to_the_shim() {
+        let (entry, whole) = compile_ir("foreign_attr_slot", load("numpy", "pi"));
+        let slot = format!("ptr @{})", attr_name_slot_symbol("pi"));
+        assert!(entry.contains(&slot), "{entry}");
+        assert_eq!(occurrences(&whole, &slot_definition("pi")), 1, "{whole}");
+    }
+
+    /// Two loads of one name, and a method lookup of that same name, share
+    /// one slot: the slot is fetched back from the module on every request
+    /// after the first, so the name is interned once per module rather than
+    /// once per site. A second `add_global` of the same name would have
+    /// been renamed by LLVM (`....1`), which the second assertion excludes.
+    #[test]
+    fn every_lookup_of_one_name_shares_one_slot() {
+        let mut items = load("numpy", "pi");
+        items.extend(load("scipy", "pi"));
+        items.extend(method_call("math", "pi"));
+        let whole = module_ir("foreign_attr_slot_shared", items);
+        let symbol = attr_name_slot_symbol("pi");
+        assert_eq!(occurrences(&whole, &slot_definition("pi")), 1, "{whole}");
+        assert!(!whole.contains(&format!("@{symbol}.1")), "{whole}");
+        assert_eq!(
+            occurrences(&whole, &format!("ptr @{symbol})")),
+            3,
+            "{whole}"
+        );
+    }
+
+    /// Different names get different slots: a slot caches exactly one
+    /// interned `str`, so two names sharing one would make the second load
+    /// read the first name's attribute.
+    #[test]
+    fn different_names_get_different_slots() {
+        let mut items = load("numpy", "pi");
+        items.extend(method_call("numpy", "e"));
+        let whole = module_ir("foreign_attr_slot_distinct", items);
+        assert_eq!(occurrences(&whole, &slot_definition("pi")), 1, "{whole}");
+        assert_eq!(occurrences(&whole, &slot_definition("e")), 1, "{whole}");
     }
 
     /// The call goes to the shared constant's symbol, and the attribute
