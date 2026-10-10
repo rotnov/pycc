@@ -26,6 +26,7 @@ mod binop;
 /// `and`/`or` short circuit and join (#1211).
 mod boolop;
 mod call_result;
+mod callee;
 mod compare;
 mod compare_chain;
 mod comprehension;
@@ -47,6 +48,7 @@ use exception_render::emit_exception_message;
 mod str_rc;
 use str_rc::{decref_str_slot_before_store, incref_if_str_duplicate};
 mod rt_fns;
+use callee::{CallTarget, ResolvedCallee, receiver_leads, resolve_user_callee, unbound_name};
 use rt_fns::{RtFns, declare_rt_functions};
 mod ext;
 mod ext_publish;
@@ -373,7 +375,7 @@ struct UserFunction<'ctx> {
     /// Initialized to null; set to the current definition's address when
     /// the `def` executes at module level. Calls load from this slot and
     /// dispatch indirectly, so a call before the `def` has executed sees
-    /// null and aborts with `pycc_rt_name_error`, and a redefinition
+    /// null and raises `NameError` (#1490), and a redefinition
     /// updates the slot so later calls see the new function.
     /// `None` for monomorphized generic specializations (`0gen_...` names),
     /// which are compiler-generated, not user-defined: they have no
@@ -386,8 +388,8 @@ struct UserFunction<'ctx> {
     /// type the indirect call through `fn_ptr_global`.
     fn_type: inkwell::types::FunctionType<'ctx>,
     /// Issue #22: a global string constant holding the function name as a
-    /// null-terminated C string, passed to `pycc_rt_name_error` on the
-    /// null-pointer (call-before-`def`) path. Created once per function
+    /// null-terminated C string, whose bytes the `NameError` on the
+    /// null-pointer (call-before-`def`) path reports. Created once per function
     /// name in the declaration pass and reused at every call site, rather
     /// than recreating a duplicate-named global on each call.
     /// `None` for monomorphized specializations (no call-before-`def`
@@ -3725,6 +3727,24 @@ fn emit_expr_unchecked<'ctx>(
                 args,
                 ..
             } = inst.as_ref();
+            let ctor_function = user_functions.get(ctor.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "pycc_codegen: internal error: constructor `{ctor}` should have been \
+                     registered as an ordinary user function -- pycc_hir::class::lower_class \
+                     mangles every method, including `__init__`, into HirModule::items"
+                )
+            });
+            // #1490: the constructor's slot is checked before the instance
+            // is allocated or any argument evaluated, and an unbound one
+            // reports the class, as CPython's `C()` above `class C` does.
+            let callee = resolve_user_callee(
+                context,
+                builder,
+                module,
+                rt,
+                ctor_function,
+                Some(class_name),
+            );
             let count = context.i64_type().const_int(slot_names.len() as u64, false);
             let (layout, layout_len) =
                 attr_slot::instance_layout_constant(context, module, class_name, slot_names);
@@ -3738,14 +3758,7 @@ fn emit_expr_unchecked<'ctx>(
                 .try_as_basic_value()
                 .expect_basic("pycc_rt_instance_new returns a non-void pointer")
                 .into_pointer_value();
-            let ctor_function = user_functions.get(ctor.as_str()).unwrap_or_else(|| {
-                panic!(
-                    "pycc_codegen: internal error: constructor `{ctor}` should have been \
-                     registered as an ordinary user function -- pycc_hir::class::lower_class \
-                     mangles every method, including `__init__`, into HirModule::items"
-                )
-            });
-            build_call_to_with_leading_args(
+            build_resolved_call(
                 context,
                 builder,
                 module,
@@ -3753,7 +3766,7 @@ fn emit_expr_unchecked<'ctx>(
                 user_functions,
                 locals,
                 ctor_function,
-                ctor,
+                CallTarget::Resolved(callee),
                 &[instance_ptr.into()],
                 args,
             );
@@ -4590,10 +4603,59 @@ fn build_call_to_with_leading_args<'ctx>(
     user_functions: &HashMap<&str, UserFunction<'ctx>>,
     locals: &HashMap<String, StorageSlot<'ctx>>,
     user_function: &UserFunction<'ctx>,
-    _callee_name: &str,
+    callee_name: &str,
     leading_args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
     args: &[MirExpr],
 ) -> inkwell::values::CallSiteValue<'ctx> {
+    // #1490: a method call checks its slot after its receiver, `args[0]`,
+    // and a function call before any argument; an unbound method reports
+    // its class (`callee`'s module doc).
+    let unbound_name = unbound_name(callee_name);
+    let target = if leading_args.is_empty() && !args.is_empty() && receiver_leads(callee_name) {
+        CallTarget::AfterReceiver { unbound_name }
+    } else {
+        CallTarget::Resolved(resolve_user_callee(
+            context,
+            builder,
+            module,
+            rt,
+            user_function,
+            unbound_name,
+        ))
+    };
+    build_resolved_call(
+        context,
+        builder,
+        module,
+        rt,
+        user_functions,
+        locals,
+        user_function,
+        target,
+        leading_args,
+        args,
+    )
+}
+
+/// [`build_call_to_with_leading_args`] past callee resolution: marshals
+/// `args` and emits the call to the already-resolved `callee`.
+#[allow(clippy::too_many_arguments)]
+fn build_resolved_call<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    user_function: &UserFunction<'ctx>,
+    target: CallTarget<'ctx, '_>,
+    leading_args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
+    args: &[MirExpr],
+) -> inkwell::values::CallSiteValue<'ctx> {
+    let (mut callee, receiver_led_name) = match target {
+        CallTarget::Resolved(callee) => (Some(callee), None),
+        CallTarget::AfterReceiver { unbound_name } => (None, unbound_name),
+    };
     let mut arg_values: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = leading_args.to_vec();
     // #638 (D-208): a fresh (non-duplicate) `Ty::Int` argument's ownership
     // *transfers* to the callee's parameter slot on the normal path --
@@ -4613,123 +4675,144 @@ fn build_call_to_with_leading_args<'ctx>(
     // `object_frame.rs`), held across the later arguments' evaluation and
     // retired without a release just before the call.
     let mut object_holds: Vec<object_release::Held<'ctx>> = Vec::new();
+    let mut marshal = |a: &MirExpr,
+                       param_ty: &pycc_mir::Ty|
+     -> inkwell::values::BasicMetadataValueEnum<'ctx> {
+        // Part 2 of #1387: a native argument to an `object` parameter
+        // is boxed (`object_box`). The packer borrows the value and the
+        // box is a new `PyObject *` reference (a boxed `None` excepted,
+        // which `object_frame::owned_argument` retains), so none of the
+        // `str`/`int` ownership steps below applies to it.
+        if object_box::boxes_into(a, param_ty) {
+            let pointer =
+                object_box::emit_boxed(context, builder, module, rt, user_functions, locals, a);
+            object_holds.push(object_frame::owned_argument(
+                context, builder, module, rt, a, pointer, true,
+            ));
+            return pointer.into();
+        }
+        let scalar = emit_expr(context, builder, module, rt, user_functions, locals, a);
+        let scalar = incref_if_str_duplicate(builder, rt, a, scalar);
+        let scalar =
+            retain_if_int_duplicate_and_track_for_exception_edge(context, builder, rt, a, scalar);
+        // Push *after* the retain-and-track call: `int_temporary_word`
+        // (via `push_pending_int_release_if_scalar_temporary`)
+        // excludes a duplicate reference by construction, so this is
+        // a no-op for that case regardless of ordering -- the
+        // retain-and-track call above already pushed a *duplicate*
+        // argument's retained word itself, if any. #834 is closed: a
+        // borrowed/duplicate argument's extra retain is now protected
+        // on this exception edge exactly like an owning argument's own
+        // word already was, not merely D-180 residual 3 (which covers
+        // a retain that eventually transfers to a real owner, not one
+        // abandoned before transfer completes). See
+        // https://github.com/rotnov/pycc/issues/834.
+        push_pending_int_release_if_scalar_temporary(rt, a, &scalar);
+        let scalar = coerce_scalar_to_type(context, builder, scalar, param_ty.clone());
+        match scalar {
+            Scalar::Int(v) => v.into(),
+            Scalar::Bool(v) => v.into(),
+            Scalar::Float(v) => v.into(),
+            Scalar::Str(v) => v.into(),
+            // Pass-through, identical to `Str`'s arm directly above: a
+            // `list[T]` parameter is an opaque pointer at the ABI
+            // level exactly like a `str` one (`ty_to_basic_type` gives
+            // both the same LLVM type), so argument marshalling needs
+            // no list-specific handling at all.
+            Scalar::List(v) => v.into(),
+            // Pass-through, identical to `List`'s arm directly above: a
+            // `dict[K, V]` parameter is an opaque pointer at the ABI
+            // level exactly like a `str`/`list[T]` one
+            // (`ty_to_basic_type` gives all three the same LLVM type),
+            // so argument marshalling needs no dict-specific handling
+            // at all.
+            Scalar::Dict(v) => v.into(),
+            // Pass-through, identical to `List`'s/`Dict`'s arms
+            // directly above: a `set[T]` parameter is an opaque pointer
+            // at the ABI level exactly like a `str`/`list[T]`/
+            // `dict[K, V]` one (`ty_to_basic_type` gives all four the
+            // same LLVM type), so argument marshalling needs no
+            // set-specific handling at all.
+            Scalar::Set(v) => v.into(),
+            // Pass-through like the three arms above, but by VALUE
+            // rather than by pointer (D-115): a `tuple[...]` argument
+            // is an LLVM struct at the ABI level, not an opaque
+            // pointer. It still needs no tuple-specific marshalling
+            // code, because `BasicMetadataValueEnum` already has a
+            // `StructValue` arm -- the calling convention's own
+            // by-value aggregate handling is LLVM's job, not this
+            // crate's.
+            Scalar::Tuple(v) => v.into(),
+            // Pass-through, identical to `List`'s/`Dict`'s/`Set`'s arms
+            // above: a class-instance parameter (D-154, Part 1 of #375
+            // -- `self`, or any other class-typed parameter a future PR
+            // might add) is an opaque pointer at the ABI level exactly
+            // like a `str`/`list[T]`/`dict[K, V]`/`set[T]` one.
+            Scalar::Instance(v) => v.into(),
+            // Pass-through by VALUE, identical in kind to `Tuple`'s arm
+            // above (D-197, #763, Part 1 of #747): an `Optional[int]`
+            // argument is an LLVM `{ i64, i8 }` struct at the ABI level
+            // -- `coerce_scalar_to_type` immediately above already
+            // built it against `param_ty`, so this arm needs no
+            // further conversion, only the same `Into` `BasicMetadataValueEnum`
+            // has for any `StructValue`.
+            Scalar::Optional(v) => v.into(),
+            // A `Ty::Object` argument (Part 1 of #1333) reaches an
+            // unannotated private helper's solver-inferred `object`
+            // parameter or, since Part 1 of #1367, a parameter
+            // annotated with a class a foreign import binds -- either
+            // way the callee is another pycc function taking the same
+            // `ptr` (a public one called from the host gets the object
+            // through its `--ext` thunk instead, #1397/#1386). Since
+            // Part 2 of #1499 (#1502) the callee's parameter slot owns
+            // it, so a borrowed pointer is retained first
+            // (`object_frame::owned_argument`).
+            Scalar::Object(v) => {
+                object_holds.push(object_frame::owned_argument(
+                    context, builder, module, rt, a, v, false,
+                ));
+                v.into()
+            }
+            // Defensive (Part 2 of #1027): passing `b` to another
+            // function is a bare read of the name, which
+            // `reject_memoryview_read` refuses with `C0001` for a
+            // wrapper-borrowed parameter and
+            // `owned_buffer_use_unsupported` for the artifact-owned
+            // storage of Part 2a of #1142 (#1165). A `memoryview`
+            // parameter exists only on an `--ext` export, which CPython
+            // calls, never compiled code.
+            Scalar::MemoryView(_) => {
+                panic!(
+                    "pycc_codegen: internal error: a memoryview argument is not supported \
+                         yet -- pycc_types should have refused this before codegen"
+                )
+            }
+        }
+    };
     let marshalled_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = args
         .iter()
         .zip(&user_function.param_tys[leading_args.len()..])
-        .map(|(a, param_ty)| {
-            // Part 2 of #1387: a native argument to an `object` parameter
-            // is boxed (`object_box`). The packer borrows the value and the
-            // box is a new `PyObject *` reference (a boxed `None` excepted,
-            // which `object_frame::owned_argument` retains), so none of the
-            // `str`/`int` ownership steps below applies to it.
-            if object_box::boxes_into(a, param_ty) {
-                let pointer =
-                    object_box::emit_boxed(context, builder, module, rt, user_functions, locals, a);
-                object_holds.push(object_frame::owned_argument(
-                    context, builder, module, rt, a, pointer, true,
+        .enumerate()
+        .map(|(index, (a, param_ty))| {
+            let value = marshal(a, param_ty);
+            // #1490: a method's slot is checked once its receiver is
+            // evaluated and before its other arguments are. A raise here
+            // unwinds exactly as a raising second argument would, releasing
+            // the receiver's tracked hold on the way.
+            if index == 0 && callee.is_none() {
+                callee = Some(resolve_user_callee(
+                    context,
+                    builder,
+                    module,
+                    rt,
+                    user_function,
+                    receiver_led_name,
                 ));
-                return pointer.into();
             }
-            let scalar = emit_expr(context, builder, module, rt, user_functions, locals, a);
-            let scalar = incref_if_str_duplicate(builder, rt, a, scalar);
-            let scalar = retain_if_int_duplicate_and_track_for_exception_edge(
-                context, builder, rt, a, scalar,
-            );
-            // Push *after* the retain-and-track call: `int_temporary_word`
-            // (via `push_pending_int_release_if_scalar_temporary`)
-            // excludes a duplicate reference by construction, so this is
-            // a no-op for that case regardless of ordering -- the
-            // retain-and-track call above already pushed a *duplicate*
-            // argument's retained word itself, if any. #834 is closed: a
-            // borrowed/duplicate argument's extra retain is now protected
-            // on this exception edge exactly like an owning argument's own
-            // word already was, not merely D-180 residual 3 (which covers
-            // a retain that eventually transfers to a real owner, not one
-            // abandoned before transfer completes). See
-            // https://github.com/rotnov/pycc/issues/834.
-            push_pending_int_release_if_scalar_temporary(rt, a, &scalar);
-            let scalar = coerce_scalar_to_type(context, builder, scalar, param_ty.clone());
-            match scalar {
-                Scalar::Int(v) => v.into(),
-                Scalar::Bool(v) => v.into(),
-                Scalar::Float(v) => v.into(),
-                Scalar::Str(v) => v.into(),
-                // Pass-through, identical to `Str`'s arm directly above: a
-                // `list[T]` parameter is an opaque pointer at the ABI
-                // level exactly like a `str` one (`ty_to_basic_type` gives
-                // both the same LLVM type), so argument marshalling needs
-                // no list-specific handling at all.
-                Scalar::List(v) => v.into(),
-                // Pass-through, identical to `List`'s arm directly above: a
-                // `dict[K, V]` parameter is an opaque pointer at the ABI
-                // level exactly like a `str`/`list[T]` one
-                // (`ty_to_basic_type` gives all three the same LLVM type),
-                // so argument marshalling needs no dict-specific handling
-                // at all.
-                Scalar::Dict(v) => v.into(),
-                // Pass-through, identical to `List`'s/`Dict`'s arms
-                // directly above: a `set[T]` parameter is an opaque pointer
-                // at the ABI level exactly like a `str`/`list[T]`/
-                // `dict[K, V]` one (`ty_to_basic_type` gives all four the
-                // same LLVM type), so argument marshalling needs no
-                // set-specific handling at all.
-                Scalar::Set(v) => v.into(),
-                // Pass-through like the three arms above, but by VALUE
-                // rather than by pointer (D-115): a `tuple[...]` argument
-                // is an LLVM struct at the ABI level, not an opaque
-                // pointer. It still needs no tuple-specific marshalling
-                // code, because `BasicMetadataValueEnum` already has a
-                // `StructValue` arm -- the calling convention's own
-                // by-value aggregate handling is LLVM's job, not this
-                // crate's.
-                Scalar::Tuple(v) => v.into(),
-                // Pass-through, identical to `List`'s/`Dict`'s/`Set`'s arms
-                // above: a class-instance parameter (D-154, Part 1 of #375
-                // -- `self`, or any other class-typed parameter a future PR
-                // might add) is an opaque pointer at the ABI level exactly
-                // like a `str`/`list[T]`/`dict[K, V]`/`set[T]` one.
-                Scalar::Instance(v) => v.into(),
-                // Pass-through by VALUE, identical in kind to `Tuple`'s arm
-                // above (D-197, #763, Part 1 of #747): an `Optional[int]`
-                // argument is an LLVM `{ i64, i8 }` struct at the ABI level
-                // -- `coerce_scalar_to_type` immediately above already
-                // built it against `param_ty`, so this arm needs no
-                // further conversion, only the same `Into` `BasicMetadataValueEnum`
-                // has for any `StructValue`.
-                Scalar::Optional(v) => v.into(),
-                // A `Ty::Object` argument (Part 1 of #1333) reaches an
-                // unannotated private helper's solver-inferred `object`
-                // parameter or, since Part 1 of #1367, a parameter
-                // annotated with a class a foreign import binds -- either
-                // way the callee is another pycc function taking the same
-                // `ptr` (a public one called from the host gets the object
-                // through its `--ext` thunk instead, #1397/#1386). Since
-                // Part 2 of #1499 (#1502) the callee's parameter slot owns
-                // it, so a borrowed pointer is retained first
-                // (`object_frame::owned_argument`).
-                Scalar::Object(v) => {
-                    object_holds.push(object_frame::owned_argument(
-                        context, builder, module, rt, a, v, false,
-                    ));
-                    v.into()
-                }
-                // Defensive (Part 2 of #1027): passing `b` to another
-                // function is a bare read of the name, which
-                // `reject_memoryview_read` refuses with `C0001` for a
-                // wrapper-borrowed parameter and
-                // `owned_buffer_use_unsupported` for the artifact-owned
-                // storage of Part 2a of #1142 (#1165). A `memoryview`
-                // parameter exists only on an `--ext` export, which CPython
-                // calls, never compiled code.
-                Scalar::MemoryView(_) => {
-                    panic!(
-                        "pycc_codegen: internal error: a memoryview argument is not supported \
-                         yet -- pycc_types should have refused this before codegen"
-                    )
-                }
-            }
+            value
         })
         .collect();
+    let callee = callee.expect("a receiver-led call has its receiver as `args[0]`");
     // #638 (D-208): every argument above evaluated successfully -- this
     // Rust-level line is reached unconditionally at codegen (emission)
     // time regardless of what the *compiled* program's exception-edge
@@ -4744,33 +4827,22 @@ fn build_call_to_with_leading_args<'ctx>(
         .borrow_mut()
         .truncate(mark);
     // Part 2 of #1499 (#1502): likewise for the owned `object` arguments.
-    // The dispatch guard below cannot unwind -- its null branch ends in
-    // `pycc_rt_name_error` and `unreachable` -- so the parameter slots own
-    // them from here on, and the callee releases them on every exit.
+    // The callee was resolved before any argument, or right after a
+    // method's receiver ([`callee::resolve_user_callee`]), so nothing
+    // between here and the call can unwind, and the parameter slots own
+    // them from here on; the callee releases them on every exit.
     for held in object_holds {
         held.consumed(rt);
     }
     arg_values.extend(marshalled_args);
-    // Issue #22: dispatch indirectly through the function-pointer slot.
-    // Load the current binding; if null, the function hasn't been defined
-    // yet at this point in execution -- abort with a runtime NameError.
-    // Otherwise, call through the loaded pointer.
-    // Monomorphized generic specializations (`0gen_...` names) have no
-    // `fn_ptr_global` -- they dispatch directly through `direct_value`
-    // since they are compiler-generated, not user-defined.
-    if let Some(ref direct_value) = user_function.direct_value {
-        return builder
-            .build_call(*direct_value, &arg_values, "call_user_fn")
-            .expect("build_call should not fail for a well-formed direct call");
+    match callee {
+        ResolvedCallee::Direct(direct_value) => builder
+            .build_call(direct_value, &arg_values, "call_user_fn")
+            .expect("build_call should not fail for a well-formed direct call"),
+        ResolvedCallee::Indirect(fn_ptr) => builder
+            .build_indirect_call(user_function.fn_type, fn_ptr, &arg_values, "call_user_fn")
+            .expect("build_indirect_call should not fail for a well-formed indirect call"),
     }
-    // The load, the null check and its `NameError` path are shared with
-    // #1050's `ext` export thunks, which dispatch through the same slot:
-    // see `ext_thunk::emit_fnptr_dispatch_guard`. It returns with the
-    // builder positioned on the non-null path.
-    let fn_ptr = ext_thunk::emit_fnptr_dispatch_guard(context, builder, rt, user_function);
-    builder
-        .build_indirect_call(user_function.fn_type, fn_ptr, &arg_values, "call_user_fn")
-        .expect("build_indirect_call should not fail for a well-formed indirect call")
 }
 
 /// Turns any supported `Scalar` into an LLVM `i1` for use as a `br`
@@ -5980,6 +6052,7 @@ fn compile_to_object_with_observer(
     let builder = context.create_builder();
     let i64_type = context.i64_type();
     let rt = declare_rt_functions(&context, &module);
+    rt.exceptions.host_bridge.set(options.ext);
 
     // First pass: declare every user-defined function -- with its real
     // parameter types and return type (Task 5), instead of Task 3/4's
@@ -6117,7 +6190,7 @@ fn compile_to_object_with_observer(
                     // Deliberately *not* mangled, on both counts. The symbol
                     // is internal-linkage and never declared from C, so it
                     // needs no C-legal spelling; and its contents are the
-                    // string `pycc_rt_name_error` prints, so the array size
+                    // name the `NameError` reports, so the array size
                     // and initializer stay on the source dotted name --
                     // mangling them would make a method's `NameError` read
                     // `0m4_Grid5_scale6_static`.
@@ -6188,7 +6261,7 @@ fn compile_to_object_with_observer(
     // represents a `def` statement's runtime binding effect: store the
     // function's address into the global function-pointer slot so calls
     // after this point dispatch to it. A call before the `def` (the slot
-    // is still null) aborts with `pycc_rt_name_error` -- matching
+    // is still null) raises a catchable `NameError` (#1490) -- matching
     // CPython's `NameError: name 'foo' is not defined`.
     let mut def_iter = function_defs_in_order.iter().peekable();
     let copy_slots = copy_slots::CopySlots::new(mir);

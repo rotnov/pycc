@@ -41,9 +41,17 @@ use std::collections::HashSet;
 ///
 /// Issue #22's dispatch discipline: the slot is null until the `def`
 /// executes at module level, so a call that reaches it first is Python's
-/// `NameError` and not a jump through null. The null path calls
-/// `pycc_rt_name_error`, which does not return, and is terminated with
-/// `unreachable`.
+/// `NameError` and not a jump through null. The null path raises that
+/// `NameError` as a pending exception ([`emit_name_error_raise`]) and then
+/// runs `on_unbound`, which must terminate the block: an ordinary call
+/// branches to its innermost exception target, a thunk returns to the C
+/// wrapper that translates the pending exception (#1490). Before #1490 the
+/// null path called a panicking runtime function, which under `--ext`
+/// aborted the host instead of raising.
+///
+/// `unbound_name` is the name the `NameError` reports; `None` reports the
+/// function's own (dotted) name. A constructor call passes its class name,
+/// which is what CPython reports for `C()` above `class C`.
 ///
 /// Shared by `emit_call`'s ordinary user-function call and by
 /// [`emit_export_thunks`] below rather than replicated: a thunk that skipped
@@ -53,8 +61,11 @@ use std::collections::HashSet;
 pub(super) fn emit_fnptr_dispatch_guard<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
     rt: &RtFns<'ctx>,
     user_function: &UserFunction<'ctx>,
+    unbound_name: Option<&str>,
+    on_unbound: impl FnOnce(),
 ) -> PointerValue<'ctx> {
     let fn_ptr_global = user_function
         .fn_ptr_global
@@ -79,24 +90,79 @@ pub(super) fn emit_fnptr_dispatch_guard<'ctx>(
     builder
         .build_conditional_branch(is_null, is_null_block, not_null_block)
         .expect("build_conditional_branch should not fail for a null-check dispatch");
-    // Null path: call pycc_rt_name_error with the function name as a C
-    // string, then unreachable (name_error never returns). The name
-    // global was created once per function name in the declaration pass
-    // and is reused at every call site.
     builder.position_at_end(is_null_block);
-    let name_global = user_function
-        .name_global
-        .as_ref()
-        .expect("non-monomorphized user function has a name_global");
-    let name_ptr = name_global.as_pointer_value();
-    builder
-        .build_call(rt.name_error, &[name_ptr.into()], "name_error")
-        .expect("build_call should not fail for a well-formed runtime error call");
-    builder
-        .build_unreachable()
-        .expect("build_unreachable terminates the null-pointer path");
+    let (name_ptr, name_len) = match unbound_name {
+        // The function's own name global, created once per function name
+        // in the declaration pass and reused at every call site. It is
+        // NUL-terminated, so its length is the array's minus one.
+        None => {
+            let name_global = user_function
+                .name_global
+                .as_ref()
+                .expect("non-monomorphized user function has a name_global");
+            let len = name_global.get_value_type().into_array_type().len() - 1;
+            (name_global.as_pointer_value(), u64::from(len))
+        }
+        Some(name) => (name_constant(context, module, name), name.len() as u64),
+    };
+    let name_len = context.i64_type().const_int(name_len, false);
+    emit_name_error_raise(context, builder, module, rt, name_ptr, name_len);
+    on_unbound();
     builder.position_at_end(not_null_block);
     fn_ptr
+}
+
+/// The `fnname_<name>` constant holding `name`'s bytes, created on first use
+/// and shared after -- the same global the declaration pass creates for a
+/// function of that name, whose contents are the name itself, so reusing
+/// one created for either purpose is always correct.
+fn name_constant<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+    name: &str,
+) -> PointerValue<'ctx> {
+    let symbol = format!("fnname_{name}");
+    if let Some(existing) = module.get_global(&symbol) {
+        return existing.as_pointer_value();
+    }
+    let global = module.add_global(
+        context.i8_type().array_type(name.len() as u32 + 1),
+        None,
+        &symbol,
+    );
+    global.set_linkage(inkwell::module::Linkage::Internal);
+    global.set_constant(true);
+    global.set_initializer(&context.const_string(name.as_bytes(), true));
+    global.as_pointer_value()
+}
+
+/// Raises `NameError: name '<name>' is not defined` as a pending exception
+/// at the builder's position, without terminating the block (#1490).
+///
+/// A module compiled for a CPython host (`host_bridge`: an `--ext` artifact
+/// or an embedded executable) calls the shim's `pycc_ext_name_error`, which
+/// raises CPython's own `NameError` and bridges it, so the exception reaches
+/// the host as that class and an enclosing compiled `except Exception`
+/// catches it -- the same raise a function body's read of an unbound
+/// foreign global uses (#1316). A native build has no CPython, and calls
+/// `pycc_rt_name_error`, which raises a pycc exception of `Exception`'s tag
+/// named `NameError`.
+pub(super) fn emit_name_error_raise<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    name_ptr: PointerValue<'ctx>,
+    name_len: inkwell::values::IntValue<'ctx>,
+) {
+    let raise = if rt.exceptions.host_bridge.get() {
+        crate::foreign_fail::name_error_fn(context, module)
+    } else {
+        rt.name_error
+    };
+    builder
+        .build_call(raise, &[name_ptr.into(), name_len.into()], "")
+        .expect("build_call should not fail for a well-formed NameError raise");
 }
 
 /// Emits one `pycc_ext_thunk_<name>` for every export whose signature
@@ -244,7 +310,21 @@ fn emit_one_thunk<'ctx>(
             next_param += 1;
         }
     }
-    let fn_ptr = emit_fnptr_dispatch_guard(context, builder, rt, user_function);
+    // The C wrapper checks `fnptr_<name>` itself before calling the thunk
+    // (#1199), so this null path is defensive; should it run, the thunk
+    // returns a zero carrier with the `NameError` pending, which the
+    // wrapper's pending-exception check translates before reading any
+    // result or out-pointer.
+    let fn_ptr =
+        emit_fnptr_dispatch_guard(context, builder, module, rt, user_function, None, || {
+            let zero = thunk.get_type().get_return_type().map(|ty| ty.const_zero());
+            builder
+                .build_return(
+                    zero.as_ref()
+                        .map(|value| value as &dyn inkwell::values::BasicValue),
+                )
+                .expect("build_return should not fail for an unbound-slot thunk exit");
+        });
     let call = builder
         .build_indirect_call(user_function.fn_type, fn_ptr, &arg_values, "call_export")
         .expect("build_indirect_call should not fail for a well-formed indirect call");
@@ -293,3 +373,7 @@ fn emit_one_thunk<'ctx>(
 #[cfg(test)]
 #[path = "ext_thunk_tests.rs"]
 mod ext_thunk_tests;
+
+#[cfg(test)]
+#[path = "unbound_slot_tests.rs"]
+mod unbound_slot_tests;
