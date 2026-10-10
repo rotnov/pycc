@@ -2755,6 +2755,44 @@ inside a function and pins `sys.getrefcount` of the list and of a large `int`
 bound unchanged afterwards (`tests/issue_1371_object_slice_del.rs`). It
 shares the packers' `OverflowError` divergence.
 
+**A step-less slice with `int` bounds
+([#1518](https://github.com/rotnov/pycc/issues/1518), Part 4 of
+[#1514](https://github.com/rotnov/pycc/issues/1514)).** Some slices have no
+step and only pycc `int` bounds, for example `o[-n:]`, `o[i:j]` or
+`del o[i:]`. For those, `crates/pycc_codegen/src/foreign_slice.rs` calls
+`pycc_ext_obj_getslice_int(o, start, stop, present)` or
+`pycc_ext_obj_delslice_int(o, start, stop, present)`. These take the bounds'
+`int` words unpacked, plus the `present` mask without its step bit; the word
+of an absent bound is ignored.
+
+The fast path applies only to a load from an exact `list` or `tuple`, or a
+deletion from an exact `list`. Every present bound must also be an inline
+`int`, which includes a `bool` word. Under those conditions the shim:
+1. resolves the bounds as CPython's `PySlice_Unpack` and
+   `PySlice_AdjustIndices` do for step 1: an absent start is 0 and an absent
+   stop is the length, a negative bound counts from the end, each bound is
+   clamped to `[0, len]`, and a stop below the start selects nothing;
+2. calls `PyList_GetSlice`, `PyTuple_GetSlice` or
+   `PyList_SetSlice(o, low, high, NULL)` over that range.
+
+These are the calls that `list` and `tuple` themselves make for a step-1
+slice, so the result is the same, including an exact `tuple` sliced whole
+coming back as the same object. No bound `int` and no `slice` object is built,
+so the bound conversion and the container's `__getitem__`/`__delitem__`
+dispatch are skipped. User code can still run on a deletion: dropping the
+removed items can run their `__del__` methods and weakref callbacks, exactly
+as `list.__delitem__` does for the same slice.
+
+Every other case packs the words with `pycc_ext_obj_pack_int` and hands them to
+`pycc_ext_obj_getslice` or `pycc_ext_obj_delslice` unchanged:
+- another base type, a `list` or `tuple` subclass included;
+- a bigint bound, which keeps the packers' `OverflowError` divergence.
+
+`tests/issue_1518_native_slice.rs` compares every bound pair in `[-7, 7]` with
+CPython. It covers `list`, `tuple`, `str`, `bytes`, `range`, empty sequences,
+a `list` subclass that overrides `__getitem__` and `__delitem__`, a custom
+sequence, and bases that raise.
+
 **An attribute store or deletion produces nothing.**
 [#1457](https://github.com/rotnov/pycc/issues/1457) adds
 `pycc_ext_obj_setattr(o, name, value)` for `o.name = v` and

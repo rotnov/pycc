@@ -75,8 +75,11 @@ fn membership_is_one_contains_call_per_test_with_a_packed_item() {
 }
 
 /// Each bound shape passes its own `present` mask -- bit 0 start, bit 1
-/// stop, bit 2 step -- with `ptr null` for an absent bound, and a `NULL`
-/// result takes the failure edge.
+/// stop, bit 2 step -- and a `NULL` result takes the failure edge. A
+/// step-less slice whose bounds are all `int`s passes the bound words to
+/// `pycc_ext_obj_getslice_int`, with a zero word for an absent bound
+/// (#1518). Any other slice packs its bounds for `pycc_ext_obj_getslice`,
+/// with `ptr null` for an absent bound.
 #[test]
 fn a_slice_is_one_getslice_call_with_a_present_mask_per_bound_shape() {
     module_ir(
@@ -95,21 +98,37 @@ fn a_slice_is_one_getslice_call_with_a_present_mask_per_bound_shape() {
                 Some(MirExpr::StringLiteral("a".to_string())),
                 Some(MirExpr::FloatLiteral(1.5)),
             ),
+            obj_slice(
+                Some(MirExpr::FloatLiteral(0.5)),
+                Some(MirExpr::IntLiteral(1)),
+                None,
+            ),
         ],
         |ir| {
-            for present in [0, 1, 2, 5, 7] {
+            let calls = |helper: &str, present: u32| {
                 let needle = format!("i32 {present})");
-                assert!(
-                    ir.lines()
-                        .any(|line| line.contains("@pycc_ext_obj_getslice(")
-                            && line.contains(&needle)),
-                    "{needle}: {ir}"
+                ir.lines()
+                    .filter(|line| line.contains(helper) && line.contains(&needle))
+                    .count()
+            };
+            for present in [0, 1, 2] {
+                assert_eq!(
+                    calls("call ptr @pycc_ext_obj_getslice_int(ptr", present),
+                    1,
+                    "{present}: {ir}"
+                );
+            }
+            for present in [3, 5, 7] {
+                assert_eq!(
+                    calls("call ptr @pycc_ext_obj_getslice(ptr", present),
+                    1,
+                    "{present}: {ir}"
                 );
             }
             assert!(
                 ir.lines()
-                    .any(|line| line.contains("@pycc_ext_obj_getslice(")
-                        && line.contains("ptr null, ptr null, ptr null, i32 0)")),
+                    .any(|line| line.contains("@pycc_ext_obj_getslice_int(")
+                        && line.contains("i64 0, i64 0, i32 0)")),
                 "{ir}"
             );
             assert!(ir.contains("foreign_slice_failed"), "{ir}");
@@ -143,7 +162,7 @@ fn a_function_body_membership_or_slice_bridges_its_failure_with_int_temporaries(
         }]),
         |ir| {
             assert!(ir.contains("@pycc_ext_obj_contains("), "{ir}");
-            assert!(ir.contains("@pycc_ext_obj_getslice("), "{ir}");
+            assert!(ir.contains("@pycc_ext_obj_getslice_int("), "{ir}");
             assert!(ir.contains("@pycc_ext_obj_error_bridge("), "{ir}");
         },
     );
@@ -192,8 +211,10 @@ fn obj_del_slice(start: Option<MirExpr>, stop: Option<MirExpr>, step: Option<Mir
 }
 
 /// Part 2c of #1371: each bound shape passes its own `present` mask to one
-/// `i32`-returning `pycc_ext_obj_delslice` call, with `ptr null` for an
-/// absent bound, and a negative status takes the failure edge.
+/// `i32`-returning call, and a negative status takes the failure edge. As
+/// for the load, a step-less slice with `int` bounds calls
+/// `pycc_ext_obj_delslice_int` with the bound words (#1518), and any other
+/// slice calls `pycc_ext_obj_delslice` with `ptr null` for an absent bound.
 #[test]
 fn a_slice_delete_is_one_delslice_call_with_a_present_mask_per_bound_shape() {
     compile_ext_items_checking_ir(
@@ -219,23 +240,34 @@ fn a_slice_delete_is_one_delslice_call_with_a_present_mask_per_bound_shape() {
             .collect(),
         ),
         |ir| {
-            for present in [0, 1, 2, 5, 7] {
+            let calls = |helper: &str, present: u32| {
                 let needle = format!("i32 {present})");
-                assert!(
-                    ir.lines()
-                        .any(|line| line.contains("call i32 @pycc_ext_obj_delslice(")
-                            && line.contains(&needle)),
-                    "{needle}: {ir}"
+                ir.lines()
+                    .filter(|line| line.contains(helper) && line.contains(&needle))
+                    .count()
+            };
+            for present in [0, 1, 2] {
+                assert_eq!(
+                    calls("call i32 @pycc_ext_obj_delslice_int(ptr", present),
+                    1,
+                    "{present}: {ir}"
+                );
+            }
+            for present in [5, 7] {
+                assert_eq!(
+                    calls("call i32 @pycc_ext_obj_delslice(ptr", present),
+                    1,
+                    "{present}: {ir}"
                 );
             }
             assert!(
                 ir.lines()
-                    .any(|line| line.contains("@pycc_ext_obj_delslice(")
-                        && line.contains("ptr null, ptr null, ptr null, i32 0)")),
+                    .any(|line| line.contains("@pycc_ext_obj_delslice_int(")
+                        && line.contains("i64 0, i64 0, i32 0)")),
                 "{ir}"
             );
             assert!(ir.contains("foreign_del_slice_failed"), "{ir}");
-            assert!(!ir.contains("@pycc_ext_obj_getslice("), "{ir}");
+            assert!(!ir.contains("@pycc_ext_obj_getslice"), "{ir}");
             assert!(!ir.contains("DecRef"), "{ir}");
         },
     );

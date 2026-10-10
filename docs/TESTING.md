@@ -997,10 +997,38 @@ call, which has no method lookup. The remaining `pycc_ext_obj_getattr` cost
 (65k) comes from the loop's attribute loads. The parity driver matched CPython
 on both #1517 artifacts, with the same set-order exception.
 
+**Re-measured after #1518 part C (2026-10-10; Part 4 of
+[#1514](https://github.com/rotnov/pycc/issues/1514)).** The same harness,
+machine, venvs and subject were used, with `PYTHONHASHSEED=0`. Each artifact
+was built with `--ext --foreign-relative-imports --release` by a release
+build of `pycc`, once from `main` `67029281` and once from the part C branch on
+top of it. That branch slices an exact `list` or `tuple` with step-less `int`
+bounds without building a `slice` object ("A step-less slice with `int`
+bounds" in `docs/RUNTIME.md`). Three arms alternated, five processes each.
+
+| Arm | `parse(test_json)` | 50-fold input | Instructions per parse (callgrind) |
+|---|---|---|---|
+| CPython 3.14.7 | 238 µs | 11.3 ms | 2.144M |
+| `main` | 341 µs (1.43x) | 15.9 ms (1.40x) | 2.590M (1.21x) |
+| #1518 part C | 324 µs (1.36x) | 15.5 ms (1.37x) | 2.521M (1.18x) |
+
+`ParserState.feed_token` performs 186 slices per parse, 62 loads
+(`value_stack[-size:]`) and 124 deletions (`del state_stack[-size:]`,
+`del value_stack[-size:]`), all on lists. On `main` each slice packed its
+bounds into `int` objects, built a `slice` with `PySlice_New`, and unpacked it
+in the list's `mp_subscript` or `mp_ass_subscript`. The part C branch calls
+`PyList_GetSlice` or `PyList_SetSlice` directly. Measured inclusively, the
+load helper fell from 42.1k to 23.0k instructions per parse, the deletion
+helper from 89.1k to 49.4k, and `pycc_ext_obj_pack_int` from 38.8k (733 calls)
+to 29.0k (547 calls). That is about 69k instructions (2.7%) per parse.
+`PySlice_New` is no longer called; CPython calls it 124 times per parse,
+because its own `BINARY_SLICE` builds no `slice` for a load. The parity driver
+matched CPython with the same set-order exception.
+
 #1514 records the full attribution and the remaining parts:
 - #1516: an optimized shim and runtime in the default artifact;
 - #1517: a method call without a bound method (measured above);
-- #1518: the residual per-operation costs.
+- #1518: the residual per-operation costs (part C measured above).
 
 | Blocker in the subject module (line) | Diagnostic | Issue |
 |---|---|---|
