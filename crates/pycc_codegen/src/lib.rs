@@ -11,8 +11,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 mod exception;
+mod exception_check;
 mod fallthrough;
-use exception::{ExceptionCodegenState, expression_can_set_exception, guard_statement_effects};
+use exception::{ExceptionCodegenState, expression_can_set_exception};
+use exception_check::{guard_statement_effects, load_exception_active};
 mod exception_value;
 use exception_value::{emit_exception_set_frame, emit_exception_value};
 mod attr_slot;
@@ -6299,12 +6301,7 @@ fn compile_to_object_with_observer(
                 // erasing an exception's `unreachable` the current block is
                 // guaranteed to accept this check.
                 erase_unreachable_if_present(&builder);
-                let active = builder
-                    .build_call(rt.exception_active, &[], "top_exc_active")
-                    .expect("build_call should not fail for exception_active")
-                    .try_as_basic_value()
-                    .expect_basic("pycc_rt_exception_active returns i8")
-                    .into_int_value();
+                let active = load_exception_active(&context, &builder, &rt, "top_exc_active");
                 let has_exc = builder
                     .build_int_compare(
                         inkwell::IntPredicate::NE,
@@ -8807,12 +8804,7 @@ fn emit_stmt<'ctx>(
             // straight-line test with no extra basic block, and the two
             // placements are observationally identical: the conjunct below
             // terminates the loop on this same iteration either way.
-            let exc_active = builder
-                .build_call(rt.exception_active, &[], "for_set_exc_active")
-                .expect("build_call should not fail for exception_active")
-                .try_as_basic_value()
-                .expect_basic("pycc_rt_exception_active returns i8")
-                .into_int_value();
+            let exc_active = load_exception_active(context, builder, rt, "for_set_exc_active");
             let no_exception = builder
                 .build_int_compare(
                     IntPredicate::EQ,
@@ -9115,8 +9107,8 @@ fn emit_stmt<'ctx>(
         }
         // #382 (PR-22 Part 1): `try`/`except`/`else`/`finally` codegen.
         // The D-173 model uses explicit check-and-branch: after the try
-        // body completes, generated code checks `pycc_rt_exception_active`
-        // and, if an exception is pending, dispatches to the handler chain.
+        // body completes, generated code checks the pending flag
+        // (`load_exception_active`, #1518) and, if an exception is pending, dispatches to the handler chain.
         // Each handler checks `pycc_rt_exception_type_matches` against its
         // declared type (or catches all for a bare `except:`). The handler
         // clears the exception state before running its body. The `else`

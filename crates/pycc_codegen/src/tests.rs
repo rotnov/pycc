@@ -15842,7 +15842,7 @@ fn a_buffer_length_read_emits_no_pending_exception_check() {
     // body is the fallible element load, and none at all when it is the
     // length read. A `true` classification here would emit a never-taken
     // branch after every `len(b)`.
-    let guard = "call i8 @pycc_rt_exception_active()";
+    let guard = "load i8, ptr %exc_state";
     compile_ext_items_checking_ir(
         "buffer_length_no_guard",
         buffer_fn_items(vec![MirStmt::Return(Some(buffer_len_b()))], Ty::Int),
@@ -15930,11 +15930,7 @@ fn a_buffer_element_store_emits_one_pending_exception_guard() {
             Ty::None,
         ),
         |ir| {
-            assert_eq!(
-                ir.matches("call i8 @pycc_rt_exception_active()").count(),
-                1,
-                "{ir}"
-            );
+            assert_eq!(ir.matches("load i8, ptr %exc_state").count(), 1, "{ir}");
             assert_eq!(ir.matches("@pycc_rt_buffer_f64_set").count(), 2, "{ir}");
         },
     );
@@ -16912,7 +16908,7 @@ fn a_buffer_allocations_length_decoder_can_branch_away_before_it_allocates() {
                 .map(|offset| decode + offset)
                 .unwrap_or_else(|| panic!("the allocator call should follow the decode: {ir}"));
             let between = &ir[decode..alloc];
-            assert!(between.contains("@pycc_rt_exception_active"), "{ir}");
+            assert!(between.contains("%effect_exc_active"), "{ir}");
             assert!(between.contains("br i1 "), "{ir}");
             assert!(between.contains("effect_exc_cont"), "{ir}");
         },
@@ -16992,7 +16988,7 @@ fn a_refused_reallocation_never_reaches_the_free_before_its_own_store() {
                 .map(|offset| second + offset)
                 .unwrap_or_else(|| panic!("a free should follow the second allocation: {ir}"));
             let between = &ir[second..free];
-            assert!(between.contains("@pycc_rt_exception_active"), "{ir}");
+            assert!(between.contains("%effect_exc_active"), "{ir}");
             assert!(between.contains("br i1 "), "{ir}");
             // Substring, not an exact label: LLVM uniquifies the name once
             // two statements each emit a continuation block.
@@ -17066,7 +17062,7 @@ fn a_buffer_allocations_length_temporary_is_released_before_the_guard() {
                 .find("call i64 @pycc_rt_buffer_alloc_untag_len")
                 .unwrap_or_else(|| panic!("the length decode should be emitted: {ir}"));
             let guard = ir[decode..]
-                .find("@pycc_rt_exception_active")
+                .find("%effect_exc_active")
                 .map(|offset| decode + offset)
                 .unwrap_or_else(|| {
                     panic!("the pre-allocator guard should follow the decode: {ir}")
@@ -17136,10 +17132,7 @@ fn a_buffer_allocation_checks_the_pending_state_before_it_allocates() {
                 .find("@pycc_rt_buffer_f64_alloc")
                 .map(|offset| untag + offset)
                 .unwrap_or_else(|| panic!("the allocator call should follow the untag: {ir}"));
-            assert!(
-                ir[untag..alloc].contains("@pycc_rt_exception_active"),
-                "{ir}"
-            );
+            assert!(ir[untag..alloc].contains("%effect_exc_active"), "{ir}");
         },
     );
 }

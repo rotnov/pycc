@@ -237,8 +237,11 @@ pub(super) struct RtFns<'ctx> {
     /// `pycc_ext_name_error` instead (`ext_thunk::emit_name_error_raise`).
     pub(super) name_error: FunctionValue<'ctx>,
     /// #382 (PR-22 Part 1): Exception runtime functions.
-    /// `exception_active` returns i8 (non-zero if an exception is pending).
-    pub(super) exception_active: FunctionValue<'ctx>,
+    /// `exception_state` returns the address of the calling thread's
+    /// pending-exception flag, an `i8` that is non-zero while an exception
+    /// is pending. Generated code reads it through
+    /// `exception_check::load_exception_active` (#1518).
+    pub(super) exception_state: FunctionValue<'ctx>,
     /// `exception_value` returns a pointer to the current exception object.
     pub(super) exception_value: FunctionValue<'ctx>,
     /// `exception_clear` resets the thread-local pending state (void).
@@ -630,10 +633,7 @@ pub(super) fn declare_rt_functions<'ctx>(
             void_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
         ),
         // #382 (PR-22 Part 1): Exception runtime function declarations.
-        exception_active: declare(
-            "pycc_rt_exception_active",
-            context.i8_type().fn_type(&[], false),
-        ),
+        exception_state: declare("pycc_rt_exception_state", ptr_type.fn_type(&[], false)),
         exception_value: declare("pycc_rt_exception_value", ptr_type.fn_type(&[], false)),
         exception_clear: declare("pycc_rt_exception_clear", void_type.fn_type(&[], false)),
         exception_alloc: declare(

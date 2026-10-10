@@ -10,9 +10,15 @@ use std::cell::Cell;
 use std::collections::HashSet;
 
 mod message;
+mod state;
 pub use message::{
     ExceptionMessageResolver, pycc_rt_exception_message, pycc_rt_exception_set_message_resolver,
     pycc_rt_ext_pending_message,
+};
+use state::{EXCEPTION_STATE, ExceptionState};
+pub use state::{
+    pycc_rt_exception_active, pycc_rt_exception_clear, pycc_rt_exception_state,
+    pycc_rt_exception_value,
 };
 
 pub const EXCEPTION_TYPE_EXCEPTION: u8 = 0;
@@ -109,38 +115,6 @@ pub struct PyExceptionObj {
     /// single member.
     pub(crate) exceptions: *mut *mut PyExceptionObj,
     pub(crate) exceptions_len: usize,
-}
-
-#[derive(Clone, Copy)]
-struct ExceptionState {
-    active: i8,
-    value: *mut PyExceptionObj,
-}
-
-impl ExceptionState {
-    const CLEAR: Self = Self {
-        active: 0,
-        value: std::ptr::null_mut(),
-    };
-}
-
-std::thread_local! {
-    static EXCEPTION_STATE: Cell<ExceptionState> = const { Cell::new(ExceptionState::CLEAR) };
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn pycc_rt_exception_active() -> i8 {
-    EXCEPTION_STATE.with(|state| state.get().active)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn pycc_rt_exception_value() -> *mut PyExceptionObj {
-    EXCEPTION_STATE.with(|state| state.get().value)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn pycc_rt_exception_clear() {
-    EXCEPTION_STATE.with(|state| state.set(ExceptionState::CLEAR));
 }
 
 /// D-244's `ext` boundary, exception half: the pending exception's type tag,
