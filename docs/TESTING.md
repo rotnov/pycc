@@ -859,6 +859,64 @@ stand-in modules), or a minimal module holding one construct inside a method
 body. Probes are never the workload. Until #1421 the subject module was never compiled
 whole past the first layer, so this list is a **lower bound**.
 
+**Re-measurement at `main` `96058a33` (2026-10-09; release build; CPython 3.14.7, uv build).**
+Two sources were downloaded into fresh directories. The pinned wheel
+`lark-1.3.1-py3-none-any.whl` (sha256 `c629b661...d1e12`, checked by
+`--require-hashes`) was installed into two fresh venvs. The `1.3.1` tag, which
+resolves to `f79772cd`, supplied `examples/json_parser.py`. Both venvs hold the
+unannotated subject `419d76a7...`. Copied alone, the subject builds with
+`pycc build lalr_parser_state.py -o lalr_parser_state.abi3.so --ext
+--foreign-relative-imports` and reports no diagnostic. The artifact was
+installed in place of the source in one venv's `lark/parsers/`, with the `.py`
+and its bytecode removed.
+
+- **Parity: one divergence.** The `drv_lark` workload parses the `test_json`
+  string with the parser built as `examples/json_parser.py` builds it. It
+  returns CPython's value, which equals `json.loads`. The following paths also
+  match, with `PYTHONHASHSEED=0` in both arms:
+  - a tree-building parse and `pretty()`;
+  - `parse_interactive(...)`'s `choices()` and `accepts()`;
+  - `InteractiveParser.copy()`, with and without `deepcopy_values=False`;
+  - `feed_eof()`, `resume_parse()` and an `on_error` recovery;
+  - a calculator grammar's parse and `accepts()`;
+  - a 50-fold array of the input.
+
+  The divergence is on the error path. An `UnexpectedToken` raised by the
+  compiled `feed_token` reaches the host with its lazy `accepts` already
+  cached as `None`. So `e.accepts` is `None` where CPython returns a set, and
+  `str(e)` lists `expected` where CPython lists `accepts`. For `{"a" 1}` it
+  lists five terminals where CPython lists only `COLON`. The token, position
+  and `expected` set still match. The cause is the function-body bridge
+  ("Inside a function body a failure is bridged" in `docs/RUNTIME.md`;
+  `pycc_ext_bridge_store` in `src/ext/pycc_ext_module.c`). It builds the
+  pycc message with `str(exc)` as the exception crosses compiled code. lark's
+  `UnexpectedToken.__str__` then reads `accepts` before `parse_from_state`
+  attaches `interactive_parser`, and caches `None`. A minimal reproduction is
+  an `--ext` module holding `def reraise(e: Any) -> None: raise e`, or
+  `def call(f: Any) -> None: f()`, called from the host with an exception
+  whose `__str__` counts its calls. Compiled, `__str__` runs once; under
+  CPython it runs zero times. The earlier rows that report the malformed
+  inputs as matching compared only token, position and `expected`.
+- **Retention.** Over 20,000 parses, each parse keeps about 2.9 KB of RSS and
+  14 GC-tracked objects: the `LexerThread`, tokens, trees and lists that a
+  `ParserState` references. CPython keeps none. This is the D-107 instance
+  lifetime, under which a compiled instance is never freed (`docs/RUNTIME.md`).
+  It is not a new defect.
+- **Time.** This is an ad hoc measurement outside the D-244 rule 6 protocol.
+  It is not pre-registered, has no committed input, and is not evidence for
+  either `product-sprint-1` Accept box. Each arm ran five alternating
+  processes. Each process timed 11 samples of 500 `parse(test_json)` calls
+  after a warm-up, with parser construction outside the timed region.
+  - Over all 55 samples, the median is 222 µs per parse under CPython and
+    446 µs with the compiled subject: **2.00x slower**. The per-process
+    medians are 218-230 µs and 423-482 µs.
+  - The 50-fold array input, timed as 11 samples of 20 parses, gives 10.5 ms
+    and 21.7 ms: 2.08x slower.
+  - Machine: a Linux x86-64 container with 4 vCPUs (Xeon, 2.10 GHz). The
+    interpreter's `CONFIG_ARGS` include `--enable-optimizations`,
+    `--with-lto=full` and `--enable-experimental-jit=yes-off`, so the JIT
+    is off.
+
 | Blocker in the subject module (line) | Diagnostic | Issue |
 |---|---|---|
 | `from typing import Dict, Any, Generic, List` (2) | cleared: the line compiles, since each name is registered in `typing` (the subject's own `-> Any` would still meet `T0002`, #1285 -- an inference, since the measured run never reaches it; [D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md) admits it in an `--ext` module, implemented by [#1397](https://github.com/rotnov/pycc/issues/1397)). With a debug build of the #1378 branch (on top of `main` at `6114494b`, which carries Part 1 of #1138), the same `pycc build lalr_parser_state.py -o out.abi3.so --ext` command on the module copied alone reports five errors (rows 2 and 4), and two with `--foreign-relative-imports` (row 4) | [#1378](https://github.com/rotnov/pycc/issues/1378) (Part 6 of #882) |
