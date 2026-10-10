@@ -293,6 +293,59 @@ except NameError as e:
     );
 }
 
+/// `C.s(...)` and `C.cm(...)` above `class C`: CPython fails looking `C`
+/// up, before any argument, so both report the class rather than the
+/// method -- pycc's mangled `C.s.static` / `C.cm.classmethod` never leak.
+const CLASS_LEVEL_MODULE: &str = r#"def side() -> int:
+    print("side")
+    return 1
+
+
+def use_static() -> int:
+    return C.s(side())
+
+
+def use_class() -> int:
+    return C.cm(side())
+
+
+import cb
+
+
+class C:
+    @staticmethod
+    def s(x: int) -> int:
+        return x + 1
+
+    @classmethod
+    def cm(cls, x: int) -> int:
+        return x + 2
+"#;
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_class_level_call_above_its_class_reports_the_class() {
+    let fixture = Fixture::new(
+        "1490_class_level",
+        CLASS_LEVEL_MODULE,
+        r#"import my
+
+for use in (my.use_static, my.use_class):
+    try:
+        use()
+    except NameError as e:
+        print("host caught", e)
+"#,
+    );
+    let out = fixture
+        .assert_matches_cpython("import my\nprint(my.use_static())\nprint(my.use_class())\n");
+    assert_eq!(
+        out,
+        "host caught name 'C' is not defined\nhost caught name 'C' is not defined\n\
+         side\n2\nside\n3\n"
+    );
+}
+
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn a_module_body_raising_the_name_error_fails_the_import() {
@@ -476,6 +529,81 @@ fn the_native_receiver_expectation_is_cpythons_output() {
         .expect("CPython runs the oracle program");
     assert_ok(&oracle);
     assert_eq!(stdout_of(&oracle), NATIVE_RECEIVER_STDOUT);
+}
+
+/// [`CLASS_LEVEL_MODULE`]'s calls in a native build: a `@staticmethod`
+/// and a `@classmethod` called on their class above its statement.
+const NATIVE_CLASS_LEVEL_PROGRAM: &str = r#"def side() -> int:
+    print("side")
+    return 1
+
+
+def use_static() -> int:
+    return C.s(side())
+
+
+def use_class() -> int:
+    return C.cm(side())
+
+
+try:
+    use_static()
+except Exception as e:
+    print("caught", e)
+try:
+    use_class()
+except Exception as e:
+    print("caught", e)
+
+
+class C:
+    @staticmethod
+    def s(x: int) -> int:
+        return x + 1
+
+    @classmethod
+    def cm(cls, x: int) -> int:
+        return x + 2
+
+
+print(use_static())
+print(use_class())
+"#;
+
+/// CPython 3.14.7's stdout for [`NATIVE_CLASS_LEVEL_PROGRAM`].
+const NATIVE_CLASS_LEVEL_STDOUT: &str =
+    "caught name 'C' is not defined\ncaught name 'C' is not defined\nside\n2\nside\n3\n";
+
+#[test]
+fn a_native_class_level_call_reports_the_class() {
+    let dir = ScratchDir::new("1490_native_class_level").expect("scratch");
+    let source = write(&dir, "m.py", NATIVE_CLASS_LEVEL_PROGRAM);
+    let build = pycc()
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(dir.join("m"))
+        .output()
+        .expect("pycc should spawn");
+    assert_ok(&build);
+    let run = Command::new(dir.join("m"))
+        .output()
+        .expect("the binary runs");
+    assert_ok(&run);
+    assert_eq!(stdout_of(&run), NATIVE_CLASS_LEVEL_STDOUT);
+}
+
+#[test]
+#[ignore = "requires CPython 3.14.7 as PYCC_PYTHON; run with --include-ignored"]
+fn the_native_class_level_expectation_is_cpythons_output() {
+    let dir = ScratchDir::new("1490_native_class_level_oracle").expect("scratch");
+    let source = write(&dir, "m.py", NATIVE_CLASS_LEVEL_PROGRAM);
+    let oracle = host_python()
+        .arg(&source)
+        .output()
+        .expect("CPython runs the oracle program");
+    assert_ok(&oracle);
+    assert_eq!(stdout_of(&oracle), NATIVE_CLASS_LEVEL_STDOUT);
 }
 
 /// An embedded executable compiles for a CPython host too, so its raise

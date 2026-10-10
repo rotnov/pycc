@@ -48,7 +48,7 @@ use exception_render::emit_exception_message;
 mod str_rc;
 use str_rc::{decref_str_slot_before_store, incref_if_str_duplicate};
 mod rt_fns;
-use callee::{CallTarget, ResolvedCallee, receiver_leads, resolve_user_callee};
+use callee::{CallTarget, ResolvedCallee, receiver_leads, resolve_user_callee, unbound_name};
 use rt_fns::{RtFns, declare_rt_functions};
 mod ext;
 mod ext_publish;
@@ -4608,9 +4608,11 @@ fn build_call_to_with_leading_args<'ctx>(
     args: &[MirExpr],
 ) -> inkwell::values::CallSiteValue<'ctx> {
     // #1490: a method call checks its slot after its receiver, `args[0]`,
-    // and a function call before any argument (`callee`'s module doc).
+    // and a function call before any argument; an unbound method reports
+    // its class (`callee`'s module doc).
+    let unbound_name = unbound_name(callee_name);
     let target = if leading_args.is_empty() && !args.is_empty() && receiver_leads(callee_name) {
-        CallTarget::AfterReceiver
+        CallTarget::AfterReceiver { unbound_name }
     } else {
         CallTarget::Resolved(resolve_user_callee(
             context,
@@ -4618,7 +4620,7 @@ fn build_call_to_with_leading_args<'ctx>(
             module,
             rt,
             user_function,
-            None,
+            unbound_name,
         ))
     };
     build_resolved_call(
@@ -4646,13 +4648,13 @@ fn build_resolved_call<'ctx>(
     user_functions: &HashMap<&str, UserFunction<'ctx>>,
     locals: &HashMap<String, StorageSlot<'ctx>>,
     user_function: &UserFunction<'ctx>,
-    target: CallTarget<'ctx>,
+    target: CallTarget<'ctx, '_>,
     leading_args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
     args: &[MirExpr],
 ) -> inkwell::values::CallSiteValue<'ctx> {
-    let mut callee = match target {
-        CallTarget::Resolved(callee) => Some(callee),
-        CallTarget::AfterReceiver => None,
+    let (mut callee, receiver_led_name) = match target {
+        CallTarget::Resolved(callee) => (Some(callee), None),
+        CallTarget::AfterReceiver { unbound_name } => (None, unbound_name),
     };
     let mut arg_values: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = leading_args.to_vec();
     // #638 (D-208): a fresh (non-duplicate) `Ty::Int` argument's ownership
@@ -4804,7 +4806,7 @@ fn build_resolved_call<'ctx>(
                     module,
                     rt,
                     user_function,
-                    None,
+                    receiver_led_name,
                 ));
             }
             value

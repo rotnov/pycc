@@ -624,7 +624,12 @@ the host. As in CPython the callee is checked before its arguments are
 evaluated and before a constructed instance is allocated, a method call
 checks its method's slot after evaluating the receiver and before the other
 arguments (`make().m(h())` runs `make()` and not `h()`), and a construction
-reports the class name (`name 'C' is not defined`). The
+or any compiled method call -- regular, `@staticmethod` (`C.s(...)`),
+`@classmethod` (`C.cm(...)`), property setter or `super()` dispatch --
+reports the class name (`name 'C' is not defined`), the name CPython fails
+to look up, never pycc's mangled method name. (A host calling a method on an
+escaped instance goes through the generated wrapper's guard above, which
+names the method it was called as.) The
 guard sees only the constructor's slot, though, so one divergence remains:
 a class that inherits `__init__` from an already-bound base (`class D(Real)`
 constructed by a published `def make() -> object: return D(1)` called

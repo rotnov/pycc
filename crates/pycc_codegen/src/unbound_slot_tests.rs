@@ -374,11 +374,13 @@ fn a_method_slot_is_checked_after_its_receiver_and_before_its_arguments() {
     assert!(receiver < method && method < argument, "{ir}");
     assert!(entry(&ir).contains("@fnptr_recv"), "{ir}");
     assert!(!entry(&ir).contains("@fnptr_0m1_C1_m"), "{ir}");
-    // The unbound method reports its own name.
+    // The unbound method reports its class, as CPython's failed `C`
+    // lookup does.
     assert!(
-        ir.contains("@pycc_rt_name_error(ptr @fnname_C.m, i64 3)"),
+        ir.contains("@pycc_rt_name_error(ptr @fnname_C, i64 1)"),
         "{ir}"
     );
+    assert!(!ir.contains("@fnname_C.m, i64 3"), "{ir}");
 }
 
 #[test]
@@ -397,4 +399,9 @@ fn a_static_method_slot_is_checked_before_any_argument() {
     let entry = entry(&ir);
     assert!(entry.contains("@fnptr_0m1_C1_s6_static"), "{ir}");
     assert!(!entry.contains("@fnptr_side"), "{ir}");
+    // It reports its class, not `C.s.static`.
+    assert!(
+        ir.contains("@pycc_rt_name_error(ptr @fnname_C, i64 1)"),
+        "{ir}"
+    );
 }

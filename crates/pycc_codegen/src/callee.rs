@@ -15,6 +15,11 @@
 //!   the slot is checked between `args[0]` and the rest
 //!   ([`CallTarget::AfterReceiver`]).
 //!
+//! An unbound method of any kind -- regular, class, static, a property
+//! setter or a receiver-exact copy -- reports its class, not its mangled
+//! name ([`unbound_name`]): CPython's `C.s()` above `class C` fails looking
+//! `C` up, `name 'C' is not defined`, before it ever reaches `s`.
+//!
 //! New code lands here rather than in the oversized `lib.rs` (AGENTS.md's
 //! "Keep source files decomposable").
 
@@ -36,12 +41,21 @@ pub(crate) enum ResolvedCallee<'ctx> {
 
 /// When a call checks its callee's slot.
 #[derive(Clone, Copy)]
-pub(crate) enum CallTarget<'ctx> {
+pub(crate) enum CallTarget<'ctx, 'name> {
     /// Already checked, before any argument is evaluated.
     Resolved(ResolvedCallee<'ctx>),
     /// Checked once `args[0]`, the method's receiver, is evaluated and
-    /// before the remaining arguments are.
-    AfterReceiver,
+    /// before the remaining arguments are; an unbound slot reports
+    /// `unbound_name` (see [`resolve_user_callee`]).
+    AfterReceiver { unbound_name: Option<&'name str> },
+}
+
+/// The name an unbound `callee_name` reports, when it is not the callee's
+/// own: a method-like item (`Class.member...`, see [`receiver_leads`])
+/// reports its class, which is what CPython fails to find. A module-level
+/// function reports itself (`None`).
+pub(crate) fn unbound_name(callee_name: &str) -> Option<&str> {
+    callee_name.split_once('.').map(|(class, _)| class)
 }
 
 /// Whether a call of `callee_name` carries its receiver as `args[0]`.
@@ -91,7 +105,17 @@ pub(crate) fn resolve_user_callee<'ctx>(
 
 #[cfg(test)]
 mod tests {
-    use super::receiver_leads;
+    use super::{receiver_leads, unbound_name};
+
+    #[test]
+    fn a_method_like_callee_reports_its_class() {
+        assert_eq!(unbound_name("C.m"), Some("C"));
+        assert_eq!(unbound_name("C.s.static"), Some("C"));
+        assert_eq!(unbound_name("C.cm.classmethod"), Some("C"));
+        assert_eq!(unbound_name("C.p.setter"), Some("C"));
+        assert_eq!(unbound_name("D.m.0super_C"), Some("D"));
+        assert_eq!(unbound_name("late"), None);
+    }
 
     #[test]
     fn a_method_or_class_method_leads_with_its_receiver() {
