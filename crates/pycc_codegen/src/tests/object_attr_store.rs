@@ -90,8 +90,8 @@ fn a_store_evaluates_the_value_before_the_base() {
                     .position(|line| line.contains("call ") && line.contains(global))
                     .unwrap_or_else(|| panic!("{global}: {ir}"))
             };
-            let value = first_use("@pycc_foreign_attr_e)");
-            let base = first_use("@pycc_foreign_attr_pi)");
+            let value = first_use("@pycc_foreign_attr_slot.e)");
+            let base = first_use("@pycc_foreign_attr_slot.pi)");
             assert!(
                 value < base,
                 "value line {value} after base line {base}: {ir}"

@@ -79,7 +79,7 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         //
         // `ObjAttrGet` joins the `true` group too (D-244, Part 2 of #1026):
         // like `AttrGet`, but unlike its compile-time-resolved slot, a
-        // foreign attribute load is a real `PyObject_GetAttrString` call
+        // foreign attribute load is a real `PyObject_GetAttr` call
         // that returns `NULL` with a CPython exception set whenever the
         // attribute is missing or its descriptor raises.
         //

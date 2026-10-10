@@ -1988,7 +1988,9 @@ assignability check (`T0025`).
 module object is reachable from `sys.modules` for the life of the interpreter
 regardless, and the `object` binding is a module-level global with no scope to
 leave. Part 2 of #1026 keeps that rule and extends it to the values an
-attribute load produces: `pycc_ext_obj_getattr` wraps `PyObject_GetAttrString`,
+attribute load produces: `pycc_ext_obj_getattr` wraps `PyObject_GetAttr`
+(`PyObject_GetAttrString` until #1515; see "Attribute names are interned once
+per module" below),
 whose result is also a new reference, and it too is never released. A method
 call's *result* is governed by the same rule for the same reason:
 `PyObject_Vectorcall` hands back a new reference and `pycc_ext_obj_call`
@@ -2004,6 +2006,28 @@ body merely happens to be written inside one. This paragraph records the
 original leak-only rule; since Part 1 of #1499 a module global owns its value
 and a rebind, a re-import or the next `for` item releases the previous one
 ("A module global owns its reference" below).
+
+**Attribute names are interned once per module
+([#1515](https://github.com/rotnov/pycc/issues/1515), Part 1 of
+[#1514](https://github.com/rotnov/pycc/issues/1514)).** An attribute load and a
+method lookup on a CPython object pass `pycc_ext_obj_getattr` a third
+argument: the module's cache slot for that attribute name, an internal,
+null-initialised `ptr` global (`pycc_foreign_attr_slot.<name>`, one per
+distinct name, shared by every load and lookup of it --
+`crates/pycc_codegen/src/foreign_attr.rs`). The first call through a slot
+interns the name with `PyUnicode_InternFromString` and stores the strong
+reference there for the rest of the process, which the shim's refusal of
+subinterpreters licenses as it licenses its other file-scope statics; every
+later call passes that interned `str` straight to `PyObject_GetAttr`. CPython
+therefore sees the same name object its own bytecode would pass -- a
+`__getattribute__` observes `name is sys.intern(name)` -- and the lookup no
+longer allocates, hashes and releases a fresh `str` per load, which was the
+largest single cost of the hosted lark subject's parse loop (`docs/TESTING.md`,
+#1207). A failed intern leaves the slot null for the next load to retry and
+returns `NULL` with CPython's exception set, the ordinary failure protocol.
+`tests/issue_1515_interned_attr_names.rs` checks the interned name and the
+CPython-identical behaviour, failure paths included; the unit tests in
+`foreign_attr.rs` pin the slot argument and one slot per name.
 
 **An unbound temporary is released by its consumer (Part 1 of
 [#1092](https://github.com/rotnov/pycc/issues/1092)).** Every rule above

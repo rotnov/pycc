@@ -917,6 +917,43 @@ and its bytecode removed.
     `--with-lto=full` and `--enable-experimental-jit=yes-off`, so the JIT
     is off.
 
+**Re-measured after #1515 (2026-10-10; Part 1 of
+[#1514](https://github.com/rotnov/pycc/issues/1514)).** The same harness,
+machine, venvs and subject (`419d76a7...`) were used. Each artifact was built
+by the same `--ext --foreign-relative-imports` command with a debug build of
+`pycc`, once without and once with `--release`. Five arms alternated, five
+processes each: CPython; `main` `7a76dc46`; and the #1515 branch on top of
+it. The #1515 branch passes CPython an interned attribute name cached once
+per module, where `main` called `PyObject_GetAttrString` ("Attribute names are
+interned once per module" in `docs/RUNTIME.md`).
+
+| Arm | `parse(test_json)`, median of 55 samples | 50-fold input |
+|---|---|---|
+| CPython 3.14.7 | 222 µs | 10.6 ms |
+| `main`, artifact built without `--release` | 440 µs (1.98x) | 21.6 ms (2.04x) |
+| #1515, artifact built without `--release` | 385 µs (1.73x) | 19.2 ms (1.81x) |
+| `main`, artifact built with `--release` | 383 µs (1.72x) | 18.6 ms (1.76x) |
+| #1515, artifact built with `--release` | 310 µs (1.39x) | 16.1 ms (1.52x) |
+
+callgrind counted instructions per parse as the difference between a
+200-parse run and a 600-parse run, divided by 400. CPython executes 2.15M
+instructions per parse. The release-built artifact drops from 3.01M to 2.63M,
+and the debug-built one from 3.40M to 3.03M.
+
+In the release-built artifact, `pycc_ext_obj_getattr` falls from 510k to 118k
+instructions per parse. Before the change it was the largest single cost of
+`ParserState.feed_token`: building, hashing and releasing a fresh `str` for
+each of the loop's attribute loads and method lookups.
+
+#1514 records the full attribution and the remaining parts:
+- #1516: an optimized shim and runtime in the default artifact;
+- #1517: a method call without a bound method;
+- #1518: the residual per-operation costs.
+
+The parity driver above matched CPython on the #1515 artifact, error paths
+and `accepts` included. The one exception is the order in which `str(e)` lists
+a set's members, which differs between two CPython runs as well.
+
 | Blocker in the subject module (line) | Diagnostic | Issue |
 |---|---|---|
 | `from typing import Dict, Any, Generic, List` (2) | cleared: the line compiles, since each name is registered in `typing` (the subject's own `-> Any` would still meet `T0002`, #1285 -- an inference, since the measured run never reaches it; [D-258](./decisions/D-258-ext-module-any-object-and-object-containers-are-opaque.md) admits it in an `--ext` module, implemented by [#1397](https://github.com/rotnov/pycc/issues/1397)). With a debug build of the #1378 branch (on top of `main` at `6114494b`, which carries Part 1 of #1138), the same `pycc build lalr_parser_state.py -o out.abi3.so --ext` command on the module copied alone reports five errors (rows 2 and 4), and two with `--foreign-relative-imports` (row 4) | [#1378](https://github.com/rotnov/pycc/issues/1378) (Part 6 of #882) |

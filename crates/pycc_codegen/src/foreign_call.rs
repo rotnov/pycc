@@ -56,7 +56,7 @@
 //! across the call and released after it (`foreign_call_emit.rs`).
 
 use super::*;
-use crate::foreign_attr::{expect_module_exec_entry, expect_object_pointer};
+use crate::foreign_attr::{emit_getattr_call, expect_module_exec_entry, expect_object_pointer};
 use crate::foreign_fail::{ForeignFailEdge, emit_failure, route_null};
 use crate::foreign_pack::{emit_pack, shim_fn};
 use inkwell::builder::Builder;
@@ -411,26 +411,15 @@ pub(super) fn emit_lookup<'ctx>(
 ) -> inkwell::values::PointerValue<'ctx> {
     let edge = ForeignFailEdge::for_current(builder);
     let base_ptr = expect_object_pointer(base);
-    let ptr = context.ptr_type(inkwell::AddressSpace::default());
-    let name = builder
-        .build_global_string_ptr(method, &format!("pycc_foreign_method_{method}"))
-        .expect("build_global_string_ptr should not fail")
-        .as_pointer_value();
-    let getattr = shim_fn(
+    let bound = emit_getattr_call(
+        context,
+        builder,
         module,
-        EXT_OBJ_GETATTR_SYMBOL,
-        ptr.fn_type(&[ptr.into(), ptr.into()], false),
+        base_ptr,
+        method,
+        &format!("pycc_foreign_method_{method}"),
+        "foreign_call_bound",
     );
-    let bound = builder
-        .build_call(
-            getattr,
-            &[base_ptr.into(), name.into()],
-            "foreign_call_bound",
-        )
-        .expect("build_call should not fail for pycc_ext_obj_getattr")
-        .try_as_basic_value()
-        .expect_basic("pycc_ext_obj_getattr returns PyObject *")
-        .into_pointer_value();
     route_null(
         context,
         builder,
