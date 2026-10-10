@@ -2879,6 +2879,162 @@ int pycc_ext_obj_delslice(PyObject *o, PyObject *start, PyObject *stop, PyObject
 }
 
 /*
+ * #1518 (Part 4 of #1514): one `int` bound of `pycc_ext_obj_getslice_int` or
+ * `pycc_ext_obj_delslice_int` as a `Py_ssize_t`. Returns 1 and stores the
+ * value for an inline `int` word, `False` or `True`. Returns 0 for a bigint
+ * word, or for a value outside `Py_ssize_t`. Those take the packed path,
+ * which raises the boundary's `OverflowError` (#1040) as before.
+ */
+static int pycc_ext_slice_bound(long long encoded, Py_ssize_t *out)
+{
+    long long value;
+
+    switch (pycc_rt_ext_int_classify(encoded)) {
+    case PYCC_EXT_INT_SMALLINT:
+        value = pycc_rt_ext_int_decode(encoded);
+        break;
+    case PYCC_EXT_INT_FALSE:
+        value = 0;
+        break;
+    case PYCC_EXT_INT_TRUE:
+        value = 1;
+        break;
+    default:
+        return 0;
+    }
+    if (value < PY_SSIZE_T_MIN || value > PY_SSIZE_T_MAX) {
+        return 0;
+    }
+    *out = (Py_ssize_t)value;
+    return 1;
+}
+
+/*
+ * #1518: the `[start, stop)` range `o[start:stop]` selects in a sequence of
+ * length `len`. Each present bound is an inline `int`. This is CPython's
+ * `PySlice_Unpack` followed by `PySlice_AdjustIndices` for step 1:
+ * - an absent start is 0, and an absent stop is the length;
+ * - a negative bound counts from the end;
+ * - each bound is clamped to `[0, len]`;
+ * - a stop below the start selects nothing.
+ * Returns 1 when `o` is an exact `list` (or, when `tuple_too`, an exact
+ * `tuple`) and every present bound is an inline `int`. Otherwise it returns
+ * 0, and the caller takes the packed path.
+ */
+static int pycc_ext_native_slice_range(PyObject *o, long long start, long long stop,
+                                       int present, int tuple_too, Py_ssize_t *low,
+                                       Py_ssize_t *high)
+{
+    Py_ssize_t len;
+    Py_ssize_t bounds[2];
+    int i;
+
+    if (o == NULL) {
+        return 0;
+    }
+    if (PyList_CheckExact(o)) {
+        len = PyList_Size(o);
+    } else if (tuple_too && PyTuple_CheckExact(o)) {
+        len = PyTuple_Size(o);
+    } else {
+        return 0;
+    }
+    if (len < 0) {
+        PyErr_Clear();
+        return 0;
+    }
+    bounds[0] = 0;
+    bounds[1] = len;
+    if ((present & 1) && !pycc_ext_slice_bound(start, &bounds[0])) {
+        return 0;
+    }
+    if ((present & 2) && !pycc_ext_slice_bound(stop, &bounds[1])) {
+        return 0;
+    }
+    for (i = 0; i < 2; i++) {
+        if (bounds[i] < 0) {
+            bounds[i] += len;
+            if (bounds[i] < 0) {
+                bounds[i] = 0;
+            }
+        } else if (bounds[i] > len) {
+            bounds[i] = len;
+        }
+    }
+    if (bounds[1] < bounds[0]) {
+        bounds[1] = bounds[0];
+    }
+    *low = bounds[0];
+    *high = bounds[1];
+    return 1;
+}
+
+/*
+ * #1518: packs `pycc_ext_obj_getslice_int`'s and
+ * `pycc_ext_obj_delslice_int`'s `int` words for the general helpers. An
+ * absent bound stays `NULL`.
+ */
+static void pycc_ext_pack_slice_bounds(long long start, long long stop, int present,
+                                       PyObject **packed)
+{
+    packed[0] = (present & 1) ? pycc_ext_obj_pack_int(start) : NULL;
+    packed[1] = (present & 2) ? pycc_ext_obj_pack_int(stop) : NULL;
+}
+
+/*
+ * #1518 (Part 4 of #1514): `o[start:stop]` whose present bounds are pycc
+ * `int` words and whose step is absent (`EXT_OBJ_GETSLICE_INT_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`). `present` is `pycc_ext_obj_getslice`'s
+ * mask without the step bit, and an absent bound's word is ignored. The base
+ * is borrowed.
+ *
+ * Two cases:
+ * - An exact `list` or `tuple` with inline-`int` bounds is sliced by
+ *   `PyList_GetSlice` or `PyTuple_GetSlice` over the range CPython's own
+ *   slice resolves to (`pycc_ext_native_slice_range`). No bound `int` and
+ *   no `slice` object is built, and no user code can run.
+ * - Any other base or bound is packed and handed to
+ *   `pycc_ext_obj_getslice`, exactly as before.
+ *
+ * Returns a new reference, or `NULL` with the exception set.
+ */
+PyObject *pycc_ext_obj_getslice_int(PyObject *o, long long start, long long stop, int present)
+{
+    Py_ssize_t low;
+    Py_ssize_t high;
+    PyObject *packed[2];
+
+    if (pycc_ext_native_slice_range(o, start, stop, present, 1, &low, &high)) {
+        return PyList_CheckExact(o) ? PyList_GetSlice(o, low, high)
+                                    : PyTuple_GetSlice(o, low, high);
+    }
+    pycc_ext_pack_slice_bounds(start, stop, present, packed);
+    return pycc_ext_obj_getslice(o, packed[0], packed[1], NULL, present);
+}
+
+/*
+ * #1518: `del o[start:stop]`, the statement twin of
+ * `pycc_ext_obj_getslice_int` (`EXT_OBJ_DELSLICE_INT_SYMBOL`). An exact
+ * `list` with inline-`int` bounds deletes the range through
+ * `PyList_SetSlice(o, low, high, NULL)`, which is the step-1 deletion that
+ * `list.__delitem__` performs for that slice. Anything else, a `tuple`
+ * included, takes `pycc_ext_obj_delslice`. Returns `0`, or `-1` with the
+ * exception set.
+ */
+int pycc_ext_obj_delslice_int(PyObject *o, long long start, long long stop, int present)
+{
+    Py_ssize_t low;
+    Py_ssize_t high;
+    PyObject *packed[2];
+
+    if (pycc_ext_native_slice_range(o, start, stop, present, 0, &low, &high)) {
+        return PyList_SetSlice(o, low, high, NULL);
+    }
+    pycc_ext_pack_slice_bounds(start, stop, present, packed);
+    return pycc_ext_obj_delslice(o, packed[0], packed[1], NULL, present);
+}
+
+/*
  * #1457 (Part 2 of #1443): `o.name = value` with a CPython object `o`
  * (`EXT_OBJ_SETATTR_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *

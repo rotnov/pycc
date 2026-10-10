@@ -436,6 +436,28 @@ pub const EXT_OBJ_BUILD_LIST_SYMBOL: &str = "pycc_ext_obj_build_list";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_DELSLICE_SYMBOL: &str = "pycc_ext_obj_delslice";
 
+/// The fixed C shim's step-less slice load with `int` bounds (#1518, Part 4
+/// of #1514): `PyObject *pycc_ext_obj_getslice_int(PyObject *o, long long
+/// start, long long stop, int present)`. Each present bound is a pycc `int`
+/// word rather than a packed object, and `present` is
+/// [`EXT_OBJ_GETSLICE_SYMBOL`]'s mask without the step bit. An exact `list`
+/// or `tuple` with inline bounds is sliced without building a `slice`
+/// object. Every other case is packed and handed to
+/// [`EXT_OBJ_GETSLICE_SYMBOL`] (`docs/RUNTIME.md`'s "A step-less slice with
+/// `int` bounds").
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_GETSLICE_INT_SYMBOL: &str = "pycc_ext_obj_getslice_int";
+
+/// The statement twin of [`EXT_OBJ_GETSLICE_INT_SYMBOL`] (#1518): `int
+/// pycc_ext_obj_delslice_int(PyObject *o, long long start, long long stop,
+/// int present)`. It deletes from an exact `list` in place, and hands
+/// everything else to [`EXT_OBJ_DELSLICE_SYMBOL`]. It returns `0`, or `-1`
+/// with the CPython exception already set.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_DELSLICE_INT_SYMBOL: &str = "pycc_ext_obj_delslice_int";
+
 /// The fixed C shim's attribute-store helper (#1457, Part 2 of #1443):
 /// `int pycc_ext_obj_setattr(PyObject *o, const char *name, PyObject *value)`
 /// with `o` borrowed and `value` a packer's new reference the helper
