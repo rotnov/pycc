@@ -248,3 +248,76 @@ fn a_caught_exception_renders_its_own_message() {
         "counted\n1\ncaught: 'k'\ncaught: counted 2\n",
     );
 }
+
+/// A host helper whose exception's `__str__` calls back into a compiled
+/// export (`hook`, set by the host script), recording what each call
+/// returned or raised.
+const REENTRANT: &str = "\
+hook = None
+pings = []
+errors = []
+
+
+class Reentrant(ValueError):
+    def __str__(self) -> str:
+        try:
+            pings.append(hook())
+        except BaseException as exc:
+            errors.append(type(exc).__name__)
+        return 'msg'
+
+
+def fail() -> None:
+    raise Reentrant('x')
+";
+
+/// The compiled side of the re-entrant cases: an export the `__str__` calls,
+/// and a function whose `except*` leaves the bridged exception unmatched.
+const REENTRANT_BODY: &str = "import reentrant\n\n\n\
+     def ping() -> int:\n    return 1\n\n\n\
+     def star() -> int:\n\
+     \x20   try:\n\
+     \x20       reentrant.fail()\n\
+     \x20   except* KeyError:\n\
+     \x20       pass\n\
+     \x20   return 0\n";
+
+/// While the message is produced, the exception being rendered is no longer
+/// pending. Here the unmatched `except*` rest group escapes, and the export
+/// wrapper renders it, which runs the original's `__str__`. That `__str__`
+/// calls the compiled `ping`, which must return normally. If the escaping
+/// group were still pending, `ping`'s own wrapper would re-raise it and
+/// re-render it recursively.
+///
+/// The host sees the recorded `except*` deviation (a plain `Exception`
+/// carrying the member's message, see `issue_1293_import_bridge`), so the
+/// pycc run is pinned on its own. CPython is run on the same script for
+/// the part both share: rendering the original calls `ping` once, it
+/// returns 1, and nothing raises.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_str_that_calls_a_compiled_export_while_rendering_sees_nothing_pending() {
+    let script = "import pycc_lazy1511_reenter as m\n\
+                  import reentrant\n\
+                  reentrant.hook = m.ping\n\
+                  try:\n    m.star()\n\
+                  except BaseException as e:\n    caught = e\n\
+                  leaf = caught.exceptions[0] if isinstance(caught, BaseExceptionGroup) else caught\n\
+                  text = str(leaf)\n\
+                  print(text, reentrant.pings, reentrant.errors)\n";
+
+    let hosted = ScratchDir::new("lazy1511_reenter").expect("scratch");
+    write_helpers(&hosted, &[("reentrant", REENTRANT)]);
+    build_ext(&hosted, "pycc_lazy1511_reenter", REENTRANT_BODY);
+    let run = python(&hosted, script);
+    assert_ok(&run, "pycc");
+    assert_eq!(stdout_of(&run), "msg [1] []\n", "pycc");
+
+    let reference = ScratchDir::new("lazy1511_reenter_cpython").expect("scratch");
+    write_helpers(&reference, &[("reentrant", REENTRANT)]);
+    std::fs::write(reference.join("pycc_lazy1511_reenter.py"), REENTRANT_BODY)
+        .expect("write the oracle source");
+    let cpython = python(&reference, script);
+    assert_ok(&cpython, "CPython");
+    assert_eq!(stdout_of(&cpython), "msg [1] []\n", "CPython");
+}

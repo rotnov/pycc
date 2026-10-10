@@ -1721,7 +1721,9 @@ The pycc exception is allocated without a message, and the first time compiled
 code renders it -- `print(e)`, `f"{e}"` -- `pycc_rt_exception_message` asks the
 resolver the shim registers (`pycc_ext_bridge_message`, owned by
 `crates/pycc_rt/src/exception/message.rs`), which calls `str()` on the original
-in the bridge table and caches the result on the pycc exception. So an
+in the bridge table and caches the result on the pycc exception. The resolver
+runs with nothing pending, so a `__str__` that calls a compiled export while an
+escaping exception is rendered does not see that exception and re-raise it. So an
 exception that only passes through compiled code, or is caught without being
 rendered, never runs `__str__`, and neither does `except*`: the matched group
 it derives from a bridged exception carries CPython's `''` wrapper message, and

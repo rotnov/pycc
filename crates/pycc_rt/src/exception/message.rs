@@ -26,7 +26,9 @@
 //! it twice; an exception that is only propagated calls it never, as in
 //! CPython.
 
-use super::{EXCEPTION_STATE, PyExceptionObj, alloc_exception_message, exception_type_name};
+use super::{
+    EXCEPTION_STATE, ExceptionState, PyExceptionObj, alloc_exception_message, exception_type_name,
+};
 use crate::PyStrObj;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -71,9 +73,10 @@ fn registered_resolver() -> Option<ExceptionMessageResolver> {
 /// `obj`'s message, producing and caching it first when `obj` carries none.
 ///
 /// The resolver runs arbitrary code (a user `__str__`), which may call back
-/// into compiled code and raise there; this thread's pending-exception state
-/// is restored afterwards, so the read never leaves or clears a pending pycc
-/// exception. When the resolver produces nothing, the message is the class
+/// into compiled code and raise there. It runs with this thread's
+/// pending-exception state cleared, and that state is restored afterwards,
+/// so compiled code it calls never sees the exception being rendered, and
+/// the read never leaves or clears a pending pycc exception. When the resolver produces nothing, the message is the class
 /// name -- the text the C shim's degraded bridge path already uses.
 ///
 /// # Safety
@@ -84,7 +87,12 @@ pub(crate) unsafe fn materialized_message(obj: *mut PyExceptionObj) -> *mut PySt
     if !existing.is_null() {
         return existing;
     }
-    let saved = EXCEPTION_STATE.with(|state| state.get());
+    // The resolver runs with nothing pending (#1511). An exception escaping
+    // through an export is rendered while it is still pending, and a
+    // `__str__` that calls a compiled export would otherwise see it there:
+    // that export's wrapper would re-raise it and render it again, without
+    // end.
+    let saved = EXCEPTION_STATE.with(|state| state.replace(ExceptionState::CLEAR));
     let resolved = match registered_resolver() {
         Some(resolver) => unsafe { resolver(obj) },
         None => std::ptr::null_mut(),
@@ -234,6 +242,44 @@ mod tests {
         let second = unsafe { pycc_rt_exception_message(obj) };
         assert_eq!(first, second, "the first answer is cached");
         assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+        pycc_rt_exception_set_message_resolver(None);
+    }
+
+    static SAW_PENDING: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn observing(_obj: *mut PyExceptionObj) -> *mut PyStrObj {
+        SAW_PENDING.store(
+            usize::from(super::super::pycc_rt_exception_active() != 0),
+            Ordering::SeqCst,
+        );
+        alloc_exception_message("observed")
+    }
+
+    /// The pending exception being rendered is cleared while the resolver
+    /// runs, so compiled code a `__str__` calls does not see it, and it is
+    /// pending again afterwards.
+    #[test]
+    fn the_resolver_runs_with_nothing_pending_and_the_pending_exception_returns() {
+        let _guard = RESOLVER_REGISTRATION
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        pycc_rt_exception_set_message_resolver(Some(observing));
+        SAW_PENDING.store(2, Ordering::SeqCst);
+        let obj = lazy_value_error();
+        pycc_rt_exception_raise(obj);
+        let mut len = 0usize;
+        let bytes = unsafe { pycc_rt_ext_pending_message(&raw mut len) };
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(bytes, len) },
+            b"observed"
+        );
+        assert_eq!(
+            SAW_PENDING.load(Ordering::SeqCst),
+            0,
+            "nothing pending inside"
+        );
+        assert_eq!(pycc_rt_exception_value(), obj, "still pending afterwards");
+        pycc_rt_exception_clear();
         pycc_rt_exception_set_message_resolver(None);
     }
 
