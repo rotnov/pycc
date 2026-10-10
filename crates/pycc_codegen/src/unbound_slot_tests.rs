@@ -331,3 +331,70 @@ fn an_export_thunks_unbound_path_raises_through_the_shim_and_returns() {
     assert!(null.contains("@fnname_u, i64 1)"), "{void_thunk}");
     assert!(null.contains("ret void"), "{void_thunk}");
 }
+
+/// `def recv() -> int`, `def side() -> int`, the method `callee` taking
+/// `(self, x)` (or just `x` for a `@staticmethod`), and `def f() -> int`
+/// calling it with `args`.
+fn method_call_items(callee: &str, params: &[&str], args: Vec<MirExpr>) -> Vec<MirItem> {
+    vec![
+        int_function("f", &[], call(callee, args)),
+        int_function(callee, params, MirExpr::IntLiteral(0)),
+        int_function("recv", &[], MirExpr::IntLiteral(1)),
+        int_function("side", &[], MirExpr::IntLiteral(2)),
+    ]
+}
+
+/// The offset of `needle`'s first occurrence in `ir`.
+fn offset(ir: &str, needle: &str) -> usize {
+    ir.find(needle)
+        .unwrap_or_else(|| panic!("no {needle} in:\n{ir}"))
+}
+
+#[test]
+fn a_method_slot_is_checked_after_its_receiver_and_before_its_arguments() {
+    // CPython evaluates `recv()` before looking `m` up on it, and `side()`
+    // after: MIR's `C.m(recv(), side())` carries the receiver as
+    // `args[0]`, and the method's slot (`fnptr_0m1_C1_m`) is checked
+    // between the two.
+    let [ir] = functions_ir(
+        "unbound_method_order",
+        method_call_items(
+            "C.m",
+            &["self", "x"],
+            vec![call("recv", Vec::new()), call("side", Vec::new())],
+        ),
+        &native(),
+        &["pyfn_f"],
+    )
+    .try_into()
+    .unwrap();
+    let receiver = offset(&ir, "@fnptr_recv");
+    let method = offset(&ir, "@fnptr_0m1_C1_m");
+    let argument = offset(&ir, "@fnptr_side");
+    assert!(receiver < method && method < argument, "{ir}");
+    assert!(entry(&ir).contains("@fnptr_recv"), "{ir}");
+    assert!(!entry(&ir).contains("@fnptr_0m1_C1_m"), "{ir}");
+    // The unbound method reports its own name.
+    assert!(
+        ir.contains("@pycc_rt_name_error(ptr @fnname_C.m, i64 3)"),
+        "{ir}"
+    );
+}
+
+#[test]
+fn a_static_method_slot_is_checked_before_any_argument() {
+    // A `@staticmethod` has no receiver argument: MIR sequences an
+    // instance receiver ahead of the whole call, so its slot is checked
+    // before `side()`, like a module-level function's.
+    let [ir] = functions_ir(
+        "unbound_static_order",
+        method_call_items("C.s.static", &["x"], vec![call("side", Vec::new())]),
+        &native(),
+        &["pyfn_f"],
+    )
+    .try_into()
+    .unwrap();
+    let entry = entry(&ir);
+    assert!(entry.contains("@fnptr_0m1_C1_s6_static"), "{ir}");
+    assert!(!entry.contains("@fnptr_side"), "{ir}");
+}

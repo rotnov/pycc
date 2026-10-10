@@ -12,6 +12,10 @@
 //! is `T0021`). A native build raises a pycc exception of `Exception`'s tag
 //! named `NameError`.
 //!
+//! The slot is checked where CPython looks the name up: before a
+//! function's arguments, before a constructed instance is allocated, and
+//! between a method call's receiver and its other arguments.
+//!
 //! Each `--ext` program is run twice -- built with `--ext`, and imported as
 //! the same source under CPython -- and the outputs compared, in the layout
 //! `tests/issue_1199_ext_reentrant_init.rs` uses: the compiled module's
@@ -112,12 +116,21 @@ impl Fixture {
         }
     }
 
+    /// Runs `script` with `first` ahead of `lib` on `PYTHONPATH`.
+    ///
+    /// Unbuffered, as every `ext` comparison in this tree runs: compiled
+    /// `print` writes through pycc's own line-buffered stdout, not
+    /// CPython's `sys.stdout`, which block-buffers into a pipe and would
+    /// emit the host's lines only at exit -- after every compiled line,
+    /// whatever order they ran in. Unbuffered, the captured order is the
+    /// execution order for both runs, so the comparison checks it.
     fn run(&self, first: &Path, script: &str) -> Output {
         let path = std::env::join_paths([first, self.lib.as_path()]).expect("a PYTHONPATH");
         host_python()
             .arg("-c")
             .arg(script)
             .env("PYTHONPATH", path)
+            .env("PYTHONUNBUFFERED", "1")
             .current_dir(&self.run)
             .output()
             .expect("python3 should spawn")
@@ -229,6 +242,55 @@ except NameError as e:
     );
     let out = fixture.assert_matches_cpython("import my\nprint(my.call())\n");
     assert_eq!(out, "host caught name 'late' is not defined\nside\n2\n");
+}
+
+/// A method call evaluates its receiver before the method lookup, and its
+/// arguments after: `_make_d()` prints and then raises constructing `D`
+/// above `class D`, so `side()` never runs and the error names `D`, not
+/// the method. The unannotated private helper is how a function above a
+/// class statement returns its instances (a forward class annotation is
+/// `C0001`).
+const RECEIVER_MODULE: &str = r#"def side() -> int:
+    print("side")
+    return 1
+
+
+def _make_d():
+    print("made")
+    return D()
+
+
+def use() -> int:
+    return _make_d().m(side())
+
+
+import cb
+
+
+class D:
+    def m(self, x: int) -> int:
+        return x + 1
+"#;
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_method_call_evaluates_its_receiver_before_the_lookup() {
+    let fixture = Fixture::new(
+        "1490_receiver",
+        RECEIVER_MODULE,
+        r#"import my
+
+try:
+    my.use()
+except NameError as e:
+    print("host caught", e)
+"#,
+    );
+    let out = fixture.assert_matches_cpython("import my\nprint(my.use())\n");
+    assert_eq!(
+        out,
+        "made\nhost caught name 'D' is not defined\nmade\nside\n2\n"
+    );
 }
 
 #[test]
@@ -349,6 +411,71 @@ fn the_native_expectation_is_cpythons_output() {
         last_stderr_line(&oracle),
         "NameError: name 'C' is not defined"
     );
+}
+
+/// [`RECEIVER_MODULE`]'s receiver order in a native build: the module body
+/// calls `use` above `class D` and again below it.
+const NATIVE_RECEIVER_PROGRAM: &str = r#"def side() -> int:
+    print("side")
+    return 1
+
+
+def _make_d():
+    print("made")
+    return D()
+
+
+def use() -> int:
+    return _make_d().m(side())
+
+
+try:
+    use()
+except Exception as e:
+    print("caught", e)
+
+
+class D:
+    def m(self, x: int) -> int:
+        return x + 1
+
+
+print(use())
+"#;
+
+/// CPython 3.14.7's stdout for [`NATIVE_RECEIVER_PROGRAM`].
+const NATIVE_RECEIVER_STDOUT: &str = "made\ncaught name 'D' is not defined\nmade\nside\n2\n";
+
+#[test]
+fn a_native_method_call_evaluates_its_receiver_before_the_lookup() {
+    let dir = ScratchDir::new("1490_native_receiver").expect("scratch");
+    let source = write(&dir, "m.py", NATIVE_RECEIVER_PROGRAM);
+    let build = pycc()
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(dir.join("m"))
+        .output()
+        .expect("pycc should spawn");
+    assert_ok(&build);
+    let run = Command::new(dir.join("m"))
+        .output()
+        .expect("the binary runs");
+    assert_ok(&run);
+    assert_eq!(stdout_of(&run), NATIVE_RECEIVER_STDOUT);
+}
+
+#[test]
+#[ignore = "requires CPython 3.14.7 as PYCC_PYTHON; run with --include-ignored"]
+fn the_native_receiver_expectation_is_cpythons_output() {
+    let dir = ScratchDir::new("1490_native_receiver_oracle").expect("scratch");
+    let source = write(&dir, "m.py", NATIVE_RECEIVER_PROGRAM);
+    let oracle = host_python()
+        .arg(&source)
+        .output()
+        .expect("CPython runs the oracle program");
+    assert_ok(&oracle);
+    assert_eq!(stdout_of(&oracle), NATIVE_RECEIVER_STDOUT);
 }
 
 /// An embedded executable compiles for a CPython host too, so its raise
