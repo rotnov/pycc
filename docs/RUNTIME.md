@@ -2778,7 +2778,10 @@ deletion from an exact `list`. Every present bound must also be an inline
 These are the calls that `list` and `tuple` themselves make for a step-1
 slice, so the result is the same, including an exact `tuple` sliced whole
 coming back as the same object. No bound `int` and no `slice` object is built,
-and no user code runs.
+so the bound conversion and the container's `__getitem__`/`__delitem__`
+dispatch are skipped. User code can still run on a deletion: dropping the
+removed items can run their `__del__` methods and weakref callbacks, exactly
+as `list.__delitem__` does for the same slice.
 
 Every other case packs the words with `pycc_ext_obj_pack_int` and hands them to
 `pycc_ext_obj_getslice` or `pycc_ext_obj_delslice` unchanged:

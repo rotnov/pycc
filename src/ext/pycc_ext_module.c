@@ -2992,7 +2992,8 @@ static void pycc_ext_pack_slice_bounds(long long start, long long stop, int pres
  * - An exact `list` or `tuple` with inline-`int` bounds is sliced by
  *   `PyList_GetSlice` or `PyTuple_GetSlice` over the range CPython's own
  *   slice resolves to (`pycc_ext_native_slice_range`). No bound `int` and
- *   no `slice` object is built, and no user code can run.
+ *   no `slice` object is built, so the bound conversion and the container
+ *   dispatch are skipped.
  * - Any other base or bound is packed and handed to
  *   `pycc_ext_obj_getslice`, exactly as before.
  *
@@ -3017,9 +3018,11 @@ PyObject *pycc_ext_obj_getslice_int(PyObject *o, long long start, long long stop
  * `pycc_ext_obj_getslice_int` (`EXT_OBJ_DELSLICE_INT_SYMBOL`). An exact
  * `list` with inline-`int` bounds deletes the range through
  * `PyList_SetSlice(o, low, high, NULL)`, which is the step-1 deletion that
- * `list.__delitem__` performs for that slice. Anything else, a `tuple`
- * included, takes `pycc_ext_obj_delslice`. Returns `0`, or `-1` with the
- * exception set.
+ * `list.__delitem__` performs for that slice. The bound conversion and the
+ * container dispatch are skipped, but dropping the removed items can still
+ * run their `__del__` methods and weakref callbacks, as in CPython. Anything
+ * else, a `tuple` included, takes `pycc_ext_obj_delslice`. Returns `0`, or
+ * `-1` with the exception set.
  */
 int pycc_ext_obj_delslice_int(PyObject *o, long long start, long long stop, int present)
 {
