@@ -2100,7 +2100,8 @@ PyObject *pycc_ext_obj_method_lookup(PyObject *obj, const char *name,
  * returned.
  *
  * `args` has `nargs + 1` slots: slot 0 is reserved, never written by the
- * compiled code, and slots 1..nargs hold the packed arguments. With a
+ * compiled code (this function initializes it before every call), and
+ * slots 1..nargs hold the packed arguments. With a
  * `self` (an unbound method descriptor) slot 0 receives it and the call is
  * `callable(self, *args)`, CPython's own unbound-method call. Without one
  * the call is `callable(*args)` with `PY_VECTORCALL_ARGUMENTS_OFFSET`,
@@ -2130,6 +2131,9 @@ PyObject *pycc_ext_obj_method_call(PyObject *callable, PyObject *self,
             args[0] = self;
             result = PyObject_Vectorcall(callable, args, (size_t)nargs + 1, NULL);
         } else {
+            /* The offset flag lets the callee save and temporarily replace
+             * slot 0, so it must hold a defined value. */
+            args[0] = NULL;
             result = PyObject_Vectorcall(callable, args + 1,
                                          (size_t)nargs | PY_VECTORCALL_ARGUMENTS_OFFSET,
                                          NULL);
