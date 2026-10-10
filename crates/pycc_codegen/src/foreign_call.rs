@@ -103,18 +103,24 @@ fn alloca_in_entry_block<'ctx>(
 /// meaningful to GEP into -- and `gc.disable()` and an empty `[]` are both
 /// zero-length shapes. One slot is always allocated and simply left
 /// unread; the consumer reads only the count it is passed.
+///
+/// `leading` slots are reserved in front of the values and left unwritten:
+/// a positional method call ([`emit_method_call`], #1517) reserves one for
+/// the receiver its shim helper prepends.
 fn emit_packed_array<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
     entry_fn: FunctionValue<'ctx>,
+    leading: usize,
     values: &[Scalar<'ctx>],
 ) -> inkwell::values::PointerValue<'ctx> {
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
     let i64_type = context.i64_type();
-    let slots = values.len().max(1);
+    let slots = (leading + values.len()).max(1);
     let array = alloca_in_entry_block(context, builder, entry_fn, slots);
-    for (index, value) in values.iter().enumerate() {
+    for (offset, value) in values.iter().enumerate() {
+        let index = leading + offset;
         let packed = emit_pack(context, builder, module, *value, "foreign_call_arg");
         let slot = unsafe {
             builder
@@ -156,7 +162,7 @@ pub(super) fn emit_list<'ctx>(
     let edge = ForeignFailEdge::for_current(builder);
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
     let i64_type = context.i64_type();
-    let items = emit_packed_array(context, builder, module, edge.function(), elements);
+    let items = emit_packed_array(context, builder, module, edge.function(), 0, elements);
     let build_list = shim_fn(
         module,
         EXT_OBJ_BUILD_LIST_SYMBOL,
@@ -372,8 +378,167 @@ pub(super) fn emit_iter_header<'ctx>(
     }
 }
 
-/// Emits the *callable lookup* of one `obj.method(args)` call, yielding the
-/// bound method as an owned `PyObject *` that [`emit_call`] consumes.
+/// The callable of a positional `obj.method(args)` call (#1517), as
+/// [`emit_method_lookup`] resolved it: `callable` is always a new reference
+/// on the success edge, and `receiver` is a new reference to `obj` when
+/// `callable` is an unbound method descriptor the call must prepend it to,
+/// `NULL` otherwise. [`emit_method_call`] consumes both.
+#[derive(Clone, Copy)]
+pub(super) struct MethodCallee<'ctx> {
+    pub(super) callable: PointerValue<'ctx>,
+    pub(super) receiver: PointerValue<'ctx>,
+}
+
+/// The per-call-site state [`EXT_OBJ_METHOD_LOOKUP_SYMBOL`] keeps: an
+/// internal, zero-initialised `[2 x ptr]` global -- the receiver type last
+/// seen at the site and the unbound method descriptor it resolved to, if
+/// any (`src/ext/pycc_ext_module.c`). One per *site*, not per name: two
+/// sites calling one name usually see different receiver types, and a
+/// shared monomorphic entry would thrash between them. LLVM gives each
+/// later global of the same name a fresh suffix.
+fn method_site<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+    method: &str,
+) -> PointerValue<'ctx> {
+    let pair = context
+        .ptr_type(inkwell::AddressSpace::default())
+        .array_type(2);
+    let site = module.add_global(pair, None, &format!("pycc_foreign_method_site.{method}"));
+    site.set_linkage(inkwell::module::Linkage::Internal);
+    site.set_initializer(&pair.const_zero());
+    site.as_pointer_value()
+}
+
+/// Emits the *callable lookup* of one positional `obj.method(args)` call
+/// (#1517, Part 3 of #1514): one [`EXT_OBJ_METHOD_LOOKUP_SYMBOL`] call with
+/// the name's interned-name slot (#1515) and the site's own state
+/// ([`method_site`]), and the routing of its `NULL`.
+///
+/// It runs *before* the arguments, exactly as [`emit_lookup`] does and for
+/// the same reason: CPython resolves the callable first, so `obj.missing(f())`
+/// raises `AttributeError` without calling `f`, and an argument that rebinds
+/// the method does not change what is called. That ordering is why the call
+/// is not `PyObject_VectorcallMethod`, which looks the method up after
+/// the arguments exist. What changes from [`emit_lookup`] is the result: for
+/// an exact builtin receiver whose method is a method descriptor (a `list`'s
+/// `append`), the shim hands back the unbound descriptor and a reference to
+/// the receiver instead of allocating a bound method that the call would
+/// release again -- CPython's own `LOAD_ATTR` method form. Every other
+/// receiver gets `getattr(obj, method)` as before.
+///
+/// The receiver comes back through a one-pointer out-parameter hoisted into
+/// the entry block ([`alloca_in_entry_block`]) and is loaded into an SSA
+/// value at once, so nothing about it outlives this site.
+pub(super) fn emit_method_lookup<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    base: Scalar<'ctx>,
+    method: &str,
+) -> MethodCallee<'ctx> {
+    let edge = ForeignFailEdge::for_current(builder);
+    let base_ptr = expect_object_pointer(base);
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let lookup = shim_fn(
+        module,
+        EXT_OBJ_METHOD_LOOKUP_SYMBOL,
+        ptr.fn_type(
+            &[ptr.into(), ptr.into(), ptr.into(), ptr.into(), ptr.into()],
+            false,
+        ),
+    );
+    let name = builder
+        .build_global_string_ptr(method, &format!("pycc_foreign_method_{method}"))
+        .expect("build_global_string_ptr should not fail")
+        .as_pointer_value();
+    let cache = crate::foreign_attr::attr_name_slot(context, module, method);
+    let site = method_site(context, module, method);
+    let receiver_slot = alloca_in_entry_block(context, builder, edge.function(), 1);
+    let callable = builder
+        .build_call(
+            lookup,
+            &[
+                base_ptr.into(),
+                name.into(),
+                cache.into(),
+                site.into(),
+                receiver_slot.into(),
+            ],
+            "foreign_call_callable",
+        )
+        .expect("build_call should not fail for pycc_ext_obj_method_lookup")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_method_lookup returns PyObject *")
+        .into_pointer_value();
+    let receiver = builder
+        .build_load(ptr, receiver_slot, "foreign_call_receiver")
+        .expect("build_load should not fail for a slot this function allocated")
+        .into_pointer_value();
+    route_null(
+        context,
+        builder,
+        module,
+        rt,
+        edge,
+        callable,
+        "foreign_call_lookup",
+    );
+    MethodCallee { callable, receiver }
+}
+
+/// Marshals `args` and calls `callee` (#1517), yielding the call's result
+/// as an opaque [`Scalar::Object`].
+///
+/// The argument array reserves one leading slot ([`emit_packed_array`]),
+/// which [`EXT_OBJ_METHOD_CALL_SYMBOL`] fills with the receiver for an
+/// unbound method descriptor, and otherwise lends the callee through
+/// `PY_VECTORCALL_ARGUMENTS_OFFSET`. The helper consumes the callable, the
+/// receiver and every packed argument on every path.
+pub(super) fn emit_method_call<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    callee: MethodCallee<'ctx>,
+    args: &[Scalar<'ctx>],
+) -> Scalar<'ctx> {
+    let edge = ForeignFailEdge::for_current(builder);
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let i64_type = context.i64_type();
+    let arg_array = emit_packed_array(context, builder, module, edge.function(), 1, args);
+    let call = shim_fn(
+        module,
+        EXT_OBJ_METHOD_CALL_SYMBOL,
+        ptr.fn_type(
+            &[ptr.into(), ptr.into(), ptr.into(), i64_type.into()],
+            false,
+        ),
+    );
+    let result = builder
+        .build_call(
+            call,
+            &[
+                callee.callable.into(),
+                callee.receiver.into(),
+                arg_array.into(),
+                i64_type.const_int(args.len() as u64, false).into(),
+            ],
+            "foreign_call",
+        )
+        .expect("build_call should not fail for pycc_ext_obj_method_call")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_method_call returns PyObject *")
+        .into_pointer_value();
+    route_null(context, builder, module, rt, edge, result, "foreign_call");
+    Scalar::Object(result)
+}
+
+/// Emits the *callable lookup* of one keyword `obj.method(args, k=v)` call,
+/// yielding the bound method as an owned `PyObject *` that [`emit_call_kw`]
+/// consumes. A positional call goes through [`emit_method_lookup`] instead
+/// (#1517); the keyword form still builds the bound method.
 ///
 /// Split from [`emit_call`] so that `emit_expr`'s own arm can run it
 /// *before* it evaluates the argument expressions. CPython resolves a
@@ -600,7 +765,7 @@ fn emit_call_with<'ctx>(
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
     let i64_type = context.i64_type();
 
-    let arg_array = emit_packed_array(context, builder, module, entry_fn, args);
+    let arg_array = emit_packed_array(context, builder, module, entry_fn, 0, args);
 
     let nargs = i64_type.const_int((args.len() - names.len()) as u64, false);
     let (fn_type, operands): (_, Vec<BasicMetadataValueEnum<'ctx>>) = if names.is_empty() {

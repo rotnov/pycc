@@ -202,21 +202,43 @@ pub const EXT_NAME_ERROR_SYMBOL: &str = "pycc_ext_name_error";
 /// Spelled once here for exactly the reason [`EXT_OBJ_IMPORT_SYMBOL`]
 /// directly above is: the symbol is defined in `src/ext/pycc_ext_module.c`
 /// and declared by LLVM in `foreign_attr.rs` (for an attribute load and a
-/// method lookup alike), and the
+/// keyword method call's lookup alike), and the
 /// `--ext` link resolves an undefined symbol lazily, so a misspelling on
 /// either side is a crash at first call rather than a link error.
 pub const EXT_OBJ_GETATTR_SYMBOL: &str = "pycc_ext_obj_getattr";
 
-/// The fixed C shim's method-call helper (Part 2 of #1026, PR 2b of #1081):
-/// it takes a borrowed `PyObject *`, a NUL-terminated method name, an array
-/// of `nargs` *owned* argument references, and returns a *new* reference to
-/// the call's result, or `NULL` with the CPython exception already set. It
-/// consumes every argument reference on every path.
+/// The fixed C shim's method-call lookup (#1517, Part 3 of #1514): `PyObject
+/// *pycc_ext_obj_method_lookup(PyObject *obj, const char *name, PyObject
+/// **cache, PyObject **site, PyObject **self_out)`. Emitted for a positional
+/// `o.method(args)` before any argument is evaluated -- CPython's order --
+/// with `name`'s interned-name slot (#1515) and the call site's own
+/// two-pointer state. Returns a *new* reference to the callable, or `NULL`
+/// with the CPython exception set. When the callable is an unbound method
+/// descriptor (an exact builtin receiver such as a `list`), `*self_out`
+/// receives a new reference to `obj` and no bound method is ever built;
+/// otherwise `*self_out` is `NULL` and the callable is `getattr(obj, name)`.
+/// Spelled once here for exactly the reason [`EXT_OBJ_IMPORT_SYMBOL`] is.
+pub const EXT_OBJ_METHOD_LOOKUP_SYMBOL: &str = "pycc_ext_obj_method_lookup";
+
+/// The fixed C shim's method-call helper (#1517): `PyObject
+/// *pycc_ext_obj_method_call(PyObject *callable, PyObject *self, PyObject
+/// **args, long long nargs)`, taking what [`EXT_OBJ_METHOD_LOOKUP_SYMBOL`]
+/// returned. `args` has `nargs + 1` slots; slot 0 is reserved for `self`
+/// and slots `1..=nargs` hold the packed arguments. It consumes `callable`,
+/// `self` and every packed argument on every path, and returns a *new*
+/// reference or `NULL` with the CPython exception set.
+pub const EXT_OBJ_METHOD_CALL_SYMBOL: &str = "pycc_ext_obj_method_call";
+
+/// The fixed C shim's consuming call helper (Part 2 of #1026, PR 2b of
+/// #1081): it takes an *owned* callable, an array of `nargs` *owned*
+/// argument references, and returns a *new* reference to the call's result,
+/// or `NULL` with the CPython exception already set. It consumes the
+/// callable and every argument reference on every path.
 ///
-/// Fused rather than "getattr then call" so the bound method object never
-/// becomes a pycc value and the whole operation has one failure edge; the C
-/// side's own comment carries the full rationale. Spelled once here for
-/// exactly the reason [`EXT_OBJ_IMPORT_SYMBOL`] is.
+/// Since #1517 a positional method call no longer reaches it (see
+/// [`EXT_OBJ_METHOD_CALL_SYMBOL`]); it calls a produced callee
+/// (`callbacks[k](x)`). Spelled once here for exactly the reason
+/// [`EXT_OBJ_IMPORT_SYMBOL`] is.
 pub const EXT_OBJ_CALL_SYMBOL: &str = "pycc_ext_obj_call";
 
 /// The fixed C shim's direct-call helper (#1313): `f(args)` where `f` is

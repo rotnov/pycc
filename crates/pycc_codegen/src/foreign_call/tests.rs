@@ -5,6 +5,7 @@ use super::*;
 
 mod call_tests;
 mod keyword_tests;
+mod method_tests;
 use crate::{CompileOptions, EXT_MODULE_EXEC_SYMBOL, compile_to_object_with_observer};
 use inkwell::values::AnyValue;
 use pycc_mir::{MirExpr, MirItem, MirModule, MirStmt, Ty};
@@ -39,11 +40,19 @@ fn call(module: &str, method: &str, args: Vec<MirExpr>) -> Vec<MirItem> {
 /// where the rationale for compiling all the way to an object file
 /// (LLVM's verifier runs before any assertion is believed) lives.
 fn entry_ir(label: &str, items: Vec<MirItem>) -> String {
+    compiled_ir(label, items).0
+}
+
+/// [`entry_ir`] together with the whole module's LLVM text, for the
+/// assertions that read a global's definition (#1517's per-site state).
+fn compiled_ir(label: &str, items: Vec<MirItem>) -> (String, String) {
     let dir = pycc_scratch::ScratchDir::new(label).expect("failed to create scratch dir");
     let mut ir = String::new();
+    let mut whole = String::new();
     let mut observer = |module: &inkwell::module::Module<'_>, _: Option<&'static str>| {
         if let Some(entry) = module.get_function(EXT_MODULE_EXEC_SYMBOL) {
             ir = crate::llvm_string_to_owned(entry.print_to_string());
+            whole = module.print_to_string().to_string();
         }
     };
     compile_to_object_with_observer(
@@ -60,15 +69,15 @@ fn entry_ir(label: &str, items: Vec<MirItem>) -> String {
     )
     .expect("ext codegen should succeed");
     assert!(!ir.is_empty(), "no {EXT_MODULE_EXEC_SYMBOL} was emitted");
-    ir
+    (ir, whole)
 }
 
 /// The zero-argument shape this PR's acceptance test builds
-/// (`gc.disable()`): the call reaches the shim by its shared symbol,
-/// the method name reaches it as a global string, and no packer is
-/// emitted.
+/// (`gc.disable()`): the lookup and the call reach the shim by their
+/// shared symbols (#1517's method-call pair), the method name reaches it
+/// as a global string, and no packer is emitted.
 ///
-/// The symbol is asserted through [`EXT_OBJ_CALL_SYMBOL`] rather than
+/// The symbols are asserted through [`EXT_OBJ_METHOD_CALL_SYMBOL`] rather than
 /// against a literal for `foreign_attr.rs`'s reason: the C definition
 /// and this declaration are resolved lazily at load time, so a literal
 /// spelled twice would be a crash at first call rather than a link
@@ -76,7 +85,8 @@ fn entry_ir(label: &str, items: Vec<MirItem>) -> String {
 #[test]
 fn a_zero_argument_foreign_method_call_reaches_the_shim_by_its_shared_symbol() {
     let ir = entry_ir("foreign_call_zero_arg", call("gc", "disable", Vec::new()));
-    assert!(ir.contains(EXT_OBJ_CALL_SYMBOL), "{ir}");
+    assert!(ir.contains(EXT_OBJ_METHOD_LOOKUP_SYMBOL), "{ir}");
+    assert!(ir.contains(EXT_OBJ_METHOD_CALL_SYMBOL), "{ir}");
     assert!(ir.contains("pycc_foreign_method_disable"), "{ir}");
     assert!(!ir.contains(EXT_OBJ_PACK_INT_SYMBOL), "{ir}");
     assert!(
@@ -140,7 +150,7 @@ fn a_failed_foreign_method_call_returns_on_the_module_exec_failure_edge() {
 }
 
 /// The *lookup*'s own failure edge, which the call edge above does not
-/// cover: a missing method makes `pycc_ext_obj_getattr` return NULL
+/// cover: a missing method makes `pycc_ext_obj_method_lookup` return NULL
 /// before any argument is packed, and that NULL must reach the same
 /// `ret i64 -1`.
 #[test]
@@ -161,8 +171,9 @@ fn a_failed_method_lookup_returns_on_the_module_exec_failure_edge() {
 /// CPython resolves a call's callable before it evaluates the
 /// arguments, so `obj.missing(1 // 0)` raises `AttributeError` rather
 /// than `ZeroDivisionError`. This pins that order where it is decided:
-/// the `pycc_ext_obj_getattr` call site must precede every packer call
-/// site in the emitted entry function.
+/// the `pycc_ext_obj_method_lookup` call site must precede every packer
+/// call site in the emitted entry function -- the order #1517 keeps by not
+/// using `PyObject_VectorcallMethod`, which looks up after the arguments.
 #[test]
 fn the_callable_is_resolved_before_any_argument_is_packed() {
     let ir = entry_ir(
@@ -170,7 +181,7 @@ fn the_callable_is_resolved_before_any_argument_is_packed() {
         call("gc", "set_threshold", vec![MirExpr::IntLiteral(1)]),
     );
     let lookup_at = ir
-        .find(EXT_OBJ_GETATTR_SYMBOL)
+        .find(EXT_OBJ_METHOD_LOOKUP_SYMBOL)
         .unwrap_or_else(|| panic!("no method lookup was emitted: {ir}"));
     let pack_at = ir
         .find(EXT_OBJ_PACK_INT_SYMBOL)
@@ -200,7 +211,7 @@ fn a_second_foreign_method_call_reuses_the_one_extern_declaration() {
         found
     };
     assert_eq!(
-        count(EXT_OBJ_CALL_SYMBOL),
+        count(EXT_OBJ_METHOD_CALL_SYMBOL),
         2,
         "one call site per call: {ir}"
     );
