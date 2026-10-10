@@ -516,6 +516,21 @@ carry as a `METH_FASTCALL` wrapper, runs the module body in a PEP 489
 `Py_mod_exec` slot, refuses to initialize on a free-threaded interpreter, and
 rejects any other public signature at compile time as `C0003`.
 
+**Build profile of an `ext` artifact ([#1516](https://github.com/rotnov/pycc/issues/1516)).**
+An `--ext` build follows the ordinary `pycc build` profile rule
+(`docs/CLI_SPEC.md`, `--release`): without `--release` (or a neighboring
+`pycc.toml`'s `opt = "release"`) it emits unoptimized IR and links the
+debug-profile `libpycc_rt.a`; with it, the O3-equivalent pipeline and the
+release-profile runtime. The fixed C shim (`src/ext/pycc_ext_module.c`) is the
+one exception: `ext_build::ext_compile_args` compiles it at `-O2` in every
+profile, on every platform arm, since it is already-correct C on the path of
+every boundary crossing and has no debug-only behavior. Every driver the build
+runs is GCC-compatible (the system `cc` on Linux and macOS, the bundled
+`clang` targeting MSVC on Windows), so the flag needs no `/O2` spelling.
+Performance numbers for an `ext` artifact are therefore taken from a
+`--release` build, as the hosted `ext` benchmark protocol's **Versions**
+bullet already requires (`docs/TESTING.md`).
+
 [#1467](https://github.com/rotnov/pycc/issues/1467) adds the two PEP 562
 module hooks to that export set although D-038's public-name predicate
 refuses every dunder: a `def __getattr__` or `def __dir__` written at the top

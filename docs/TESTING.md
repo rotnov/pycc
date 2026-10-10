@@ -997,8 +997,36 @@ call, which has no method lookup. The remaining `pycc_ext_obj_getattr` cost
 (65k) comes from the loop's attribute loads. The parity driver matched CPython
 on both #1517 artifacts, with the same set-order exception.
 
-#1514 records the full attribution and the remaining parts:
-- #1516: an optimized shim and runtime in the default artifact;
+**Re-measured after #1516 (2026-10-10; Part 2 of #1514).** The #1516 branch
+compiles the C shim at `-O2` in every build profile, where `main` passed the
+driver no optimization flag ("Build profile of an `ext` artifact" in
+`docs/RUNTIME.md`). A build without `--release` still links the debug
+`pycc_rt` and emits unoptimized IR, as any `pycc build` does. Timings of an
+`ext` artifact are therefore taken from the `--release` build, as the
+protocol's **Versions** bullet already requires; the debug rows below are
+context only. The harness, machine, venvs, subject (`419d76a7...`) and
+build command are those of the #1515 re-measurement, with a debug build of
+`pycc`. Five arms alternated, five processes each: CPython; `main` `431a3366`
+(which includes #1515); and the #1516 branch on top of it.
+
+| Arm | `parse(test_json)`, median of 55 samples | 50-fold input | callgrind, instructions per parse |
+|---|---|---|---|
+| CPython 3.14.7 | 235 µs | 11.0 ms | 2.14M |
+| `main`, built without `--release` | 400 µs (1.71x) | 19.4 ms (1.77x) | 3.03M |
+| #1516, built without `--release` | 337 µs (1.44x) | 16.1 ms (1.47x) | 2.84M |
+| `main`, built with `--release` | 332 µs (1.41x) | 15.8 ms (1.44x) | 2.63M (1.23x) |
+| #1516, built with `--release` | 267 µs (1.14x) | 13.7 ms (1.25x) | 2.44M (1.14x) |
+
+The instruction counts use the same 600-minus-200-parses method as above.
+In this run CPython's per-process medians spread from 214 to 275 µs, so the
+wall-clock ratios are noisier than the instruction counts. The parity
+driver matched CPython on the #1516 release artifact. As before, the only
+difference was the order in which `str(e)` lists a set's members.
+
+#1514 records the full attribution and the parts that remained after #1515:
+- #1516: an optimized shim (delivered with a narrower scope than first
+  planned: the shim is optimized in every profile, while the runtime and IR
+  follow `--release`; measured above);
 - #1517: a method call without a bound method (measured above);
 - #1518: the residual per-operation costs.
 

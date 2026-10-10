@@ -261,6 +261,11 @@ directory once project mode exists.
                     shadows it, publishing the derived binding or nothing;
                     `docs/RUNTIME.md`'s `ext` boundary section states which
                     classes are published and which are constructible.
+                    `--release` applies to `--ext` as to any build (without
+                    it the artifact holds unoptimized IR and the debug
+                    `pycc_rt`); the fixed C shim is compiled at `-O2` in
+                    every profile (#1516; `docs/RUNTIME.md`, "Build profile
+                    of an `ext` artifact").
                     `--ext` imports a non-standard-library root from the
                     host's environment and needs no `pycc.lock`; an
                     embedded build bundles it from the lock (#1242).

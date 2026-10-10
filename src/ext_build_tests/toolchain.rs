@@ -292,6 +292,7 @@ fn the_elf_compile_args_name_the_include_directory_the_shim_and_fpic() {
     assert_eq!(
         args,
         vec![
+            OsString::from("-O2"),
             OsString::from("-I"),
             include.as_os_str().to_os_string(),
             OsString::from("-fPIC"),
@@ -311,6 +312,7 @@ fn the_mach_o_compile_args_state_fpic_rather_than_inherit_it() {
     assert_eq!(
         args,
         vec![
+            OsString::from("-O2"),
             OsString::from("-I"),
             include.as_os_str().to_os_string(),
             OsString::from("-fPIC"),
@@ -329,11 +331,37 @@ fn the_windows_compile_args_omit_fpic() {
     assert_eq!(
         args,
         vec![
+            OsString::from("-O2"),
             OsString::from("-I"),
             include.as_os_str().to_os_string(),
             shim.as_os_str().to_os_string(),
         ]
     );
+}
+
+/// #1516: the shim is compiled optimized on every arm, whatever the build
+/// profile, and with the same GNU-style spelling, since each arm's driver
+/// (`cc`, or the bundled `clang` on Windows) is GCC-compatible. Exactly one
+/// optimization flag, first, so a later `-O0` cannot silently override it.
+#[test]
+fn every_platform_compiles_the_shim_at_o2_and_exactly_once() {
+    let include = Path::new("inc").join("python3.13");
+    let shim = Path::new("scratch").join(SHIM_C_NAME);
+    for platform in [
+        ExtLinkPlatform::Linux,
+        ExtLinkPlatform::MacOs,
+        ExtLinkPlatform::Windows,
+    ] {
+        let args = ext_compile_args(platform, &include, &shim);
+        assert_eq!(args[0], OsString::from(EXT_SHIM_OPT_LEVEL), "{platform:?}");
+        let opt_flags: Vec<_> = args
+            .iter()
+            .filter(|arg| {
+                arg.to_string_lossy().starts_with("-O") || arg.to_string_lossy().starts_with("/O")
+            })
+            .collect();
+        assert_eq!(opt_flags, vec![&OsString::from("-O2")], "{platform:?}");
+    }
 }
 
 /// The C shim maps a pending exception's type tag to a `PyExc_*` object
