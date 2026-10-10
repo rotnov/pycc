@@ -167,6 +167,9 @@ extern void *pycc_rt_exception_alloc(unsigned char type_tag,
                                      size_t name_len,
                                      void *message);
 extern void pycc_rt_exception_raise(void *obj);
+/* #1511: registers the producer of a bridged exception's lazy message
+ * (`pycc_rt::exception::message`). */
+extern void pycc_rt_exception_set_message_resolver(void *(*resolver)(void *obj));
 
 /*
  * The two builtin tags the bridge raises, with the class name each one's
@@ -461,58 +464,91 @@ static int pycc_ext_bridge_restore(void *obj)
 }
 
 /*
- * Translates `exc` into a pending pycc exception of `tag`, whose message is
- * CPython's own `str(exc)`, and keeps `exc` in this thread's table. Shared
- * by both bridges. `class_name` must be a string literal: it outlives the
- * object as `pycc_rt_exception_alloc` requires, which a heap type's
- * `tp_name` does not.
+ * #1511: the message of the bridged pycc exception `obj`, produced only when
+ * compiled code first reads it (`str(e)`, `print(e)`, an f-string), never
+ * while the exception merely propagates -- CPython never formats an
+ * exception it only passes along, and a user `__str__` can observe the
+ * call. The runtime calls this through the pointer `pycc_ext_bridge_store`
+ * registers, and caches the answer on `obj`.
+ *
+ * Returns CPython's own `str(exc)` of `obj`'s original as a new pycc `str`
+ * whose reference passes to the caller, or NULL when this thread's bridge
+ * table no longer holds `obj` (its frame's watermark released the original)
+ * or `str(exc)` fails; the runtime then uses the class name, the degraded
+ * path's text. CPython's error indicator is left as it was found: an error
+ * `str(exc)` raised is cleared, and one already set is set aside around
+ * the call. The original is held across `str(exc)`, which can run arbitrary
+ * code -- including a nested bridge that grows and so moves the table.
+ */
+static void *pycc_ext_bridge_message(void *obj)
+{
+    pycc_ext_bridge_table *table = pycc_ext_bridge_current();
+    PyObject *orig = NULL;
+    PyObject *saved;
+    PyObject *text;
+    const char *utf8;
+    Py_ssize_t utf8_len = 0;
+    void *message = NULL;
+    Py_ssize_t i;
+
+    if (table == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < table->len; i++) {
+        if (table->entries[i].pycc == obj) {
+            orig = table->entries[i].orig;
+            break;
+        }
+    }
+    if (orig == NULL) {
+        return NULL;
+    }
+    saved = PyErr_GetRaisedException();
+    Py_INCREF(orig);
+    text = PyObject_Str(orig);
+    Py_DECREF(orig);
+    if (text != NULL) {
+        utf8 = PyUnicode_AsUTF8AndSize(text, &utf8_len);
+        if (utf8 != NULL) {
+            /* The copy completes before `text`, whose buffer `utf8` points
+             * into, is released -- the order `pycc_ext_obj_to_str`
+             * documents. */
+            message = pycc_rt_str_from_literal((const unsigned char *)utf8, (long long)utf8_len);
+        }
+        Py_DECREF(text);
+    }
+    PyErr_Clear();
+    PyErr_SetRaisedException(saved);
+    return message;
+}
+
+/*
+ * Translates `exc` into a pending pycc exception of `tag` and keeps `exc` in
+ * this thread's table. Shared by both bridges. `class_name` must be a string
+ * literal: it outlives the object as `pycc_rt_exception_alloc` requires,
+ * which a heap type's `tp_name` does not.
+ *
+ * The pycc exception carries no message (#1511): nothing here calls
+ * `str(exc)`, so no user code runs while an exception is bridged.
+ * `pycc_ext_bridge_message` produces the message if compiled code ever
+ * reads it.
  *
  * Returns 1 having taken over `exc`'s reference, with CPython's error
- * indicator clear. Returns 0 when the table cannot grow or `str(exc)`
- * fails, with `exc` still the caller's, no pycc exception pending, and the
- * error indicator clear. Every fallible step runs before any pycc state is
- * touched.
+ * indicator clear. Returns 0 when the table cannot grow, with `exc` still
+ * the caller's, no pycc exception pending, and the error indicator clear.
+ * The one fallible step runs before any pycc state is touched.
  */
 static int pycc_ext_bridge_store(PyObject *exc, unsigned char tag, const char *class_name,
                                  size_t class_name_len)
 {
     pycc_ext_bridge_table *table = pycc_ext_bridge_reserve();
-    PyObject *text;
-    const char *utf8;
-    Py_ssize_t utf8_len = 0;
-    void *message;
     void *obj;
 
     if (table == NULL) {
         return 0;
     }
-    text = PyObject_Str(exc);
-    if (text == NULL) {
-        PyErr_Clear();
-        return 0;
-    }
-    utf8 = PyUnicode_AsUTF8AndSize(text, &utf8_len);
-    if (utf8 == NULL) {
-        Py_DECREF(text);
-        PyErr_Clear();
-        return 0;
-    }
-    /* The copy completes before `text`, whose buffer `utf8` points into, is
-     * released -- the order `pycc_ext_obj_to_str` documents. The fresh +1
-     * is the message's owning reference, exactly as a string literal's is
-     * in a compiled `raise ImportError("...")`. */
-    message = pycc_rt_str_from_literal((const unsigned char *)utf8, (long long)utf8_len);
-    Py_DECREF(text);
-    /* `str(exc)` can run arbitrary code, and a `__str__` that itself failed
-     * a foreign operation and bridged would have moved the buffer: take the
-     * table again rather than trusting the pointer from before. The slot is
-     * still free -- a nested bridge that grew it reserved its own. */
-    table = pycc_ext_bridge_reserve();
-    if (table == NULL) {
-        pycc_rt_str_decref(message);
-        return 0;
-    }
-    obj = pycc_rt_exception_alloc(tag, (const unsigned char *)class_name, class_name_len, message);
+    pycc_rt_exception_set_message_resolver(pycc_ext_bridge_message);
+    obj = pycc_rt_exception_alloc(tag, (const unsigned char *)class_name, class_name_len, NULL);
     pycc_rt_exception_raise(obj);
     table->entries[table->len].pycc = obj;
     table->entries[table->len].orig = exc;
@@ -1648,15 +1684,16 @@ PyObject *pycc_ext_obj_import_dotted(const char *name, long long bind_root)
  *
  * An `ImportError` (a `ModuleNotFoundError` or a subclass of it becomes
  * pycc's tag 27, any other `ImportError` tag 26) is translated into a
- * pending pycc exception whose message is CPython's own `str(exc)`, and the
+ * pending pycc exception whose message is CPython's own `str(exc)`, produced
+ * only if compiled code reads it (#1511), and the
  * original is kept in the bridge table (see `pycc_ext_bridge_restore`).
  * Returns 1 with CPython's error indicator clear, and the generated code
  * branches to the enclosing handler exactly as an explicit `raise` does.
  *
  * Anything else -- a module body's own `ValueError`, a `SyntaxError`, a
  * `BaseException` -- is left exactly as CPython set it, and so is an
- * `ImportError` this function cannot translate (the table cannot grow, or
- * `str(exc)` fails): it returns 0, and the generated code takes the module
+ * `ImportError` this function cannot translate (the table cannot grow): it
+ * returns 0, and the generated code takes the module
  * body's foreign failure edge (Part 1 of #1096): `pycc_ext_obj_error_bridge`
  * inside a module-level `try`, and the direct `-1` edge out of
  * `Py_mod_exec` outside every one. Every fallible step
@@ -1778,7 +1815,7 @@ static unsigned char pycc_ext_obj_error_tag(PyObject *exc, const char **class_na
  *
  *  - No exception set. The shim that failed broke CPython's contract;
  *    bridge a `SystemError` saying so rather than raising nothing.
- *  - The table cannot grow, or `str(exc)` fails. Raise a pycc exception of
+ *  - The table cannot grow. Raise a pycc exception of
  *    the mapped class whose message is that class's name, and drop the
  *    original. The mapped tag, not tag 0, is kept deliberately, so a
  *    degraded `SystemExit` still escapes `except Exception`.
@@ -1804,7 +1841,7 @@ int pycc_ext_obj_error_bridge(void)
     if (pycc_ext_bridge_store(exc, tag, class_name, class_name_len)) {
         return 1;
     }
-    /* Defensive: reached only when an allocation or `str(exc)` fails. */
+    /* Defensive: reached only when the table cannot grow. */
     message = pycc_rt_str_from_literal((const unsigned char *)class_name,
                                        (long long)class_name_len);
     pycc_rt_exception_raise(pycc_rt_exception_alloc(

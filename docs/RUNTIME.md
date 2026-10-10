@@ -1445,7 +1445,9 @@ caught. When the import raises an `ImportError`, the shim's
 `pycc_ext_import_error_bridge` translates it into a pending pycc exception
 before anything else runs: a `ModuleNotFoundError` (or a subclass of it)
 becomes pycc's `ModuleNotFoundError` (tag 27), any other `ImportError` becomes
-`ImportError` (tag 26), and the message is CPython's own `str(exc)`. The
+`ImportError` (tag 26), and the message is CPython's own `str(exc)`,
+produced only if compiled code renders it (#1511, the function-body paragraph
+below). The
 generated code then branches to the innermost exception target exactly as an
 explicit `raise` does, so an enclosing `except ImportError`,
 `except ModuleNotFoundError`, `except Exception`, bare `except`, `except*` or
@@ -1681,8 +1683,8 @@ same source. Wherever this document says a module-body failure returns `-1`
 from `Py_mod_exec` or stops the module body, that is the edge outside every
 module-level `try`. Four consequences follow the function-body terms rather
 than CPython's. A failure inside a handler does not set `__context__` on the
-new exception, as for every pycc raise. The bridge calls `str(exc)`, and so a
-user `__str__`, as it does in a function body (#1316). A reference #1092
+new exception, as for every pycc raise. A caught exception's message is
+produced only when compiled code renders it, as in a function body (#1511). A reference #1092
 still leaks on a failing operation (an item, a bound or boxed value) now
 leaks once per *caught* failure rather than at most once per
 import. And the D-208 pending `int` temporaries a failing statement holds are
@@ -1712,13 +1714,31 @@ chosen by `isinstance` against a fixed list, most specific first:
 `except` clause (`T0021`) — as `Exception`. A `BaseException` that is not an
 `Exception` (`SystemExit`, `KeyboardInterrupt`, `GeneratorExit`) gets the
 reserved tag 255, which `except Exception` does not match and a bare `except`
-does. The message is CPython's own `str(exc)`. So `except ValueError` around
+does. The message is CPython's own `str(exc)`, but the bridge does not compute
+it: CPython never formats an exception it only propagates, and a user
+`__str__` can observe the call ([#1511](https://github.com/rotnov/pycc/issues/1511)).
+The pycc exception is allocated without a message, and the first time compiled
+code renders it -- `print(e)`, `f"{e}"` -- `pycc_rt_exception_message` asks the
+resolver the shim registers (`pycc_ext_bridge_message`, owned by
+`crates/pycc_rt/src/exception/message.rs`), which calls `str()` on the original
+in the bridge table and caches the result on the pycc exception. So an
+exception that only passes through compiled code, or is caught without being
+rendered, never runs `__str__`, and neither does `except*`: the matched group
+it derives from a bridged exception carries CPython's `''` wrapper message, and
+the unmatched rest group it re-raises (the recorded `except*` deviation) stays
+message-less until rendered, then renders as its sole member's own message.
+Three divergences remain: a second rendering of the same caught exception
+reuses the first one's text where CPython calls `__str__` again (the accessor's
+result is borrowed, so it cannot be replaced while an earlier read is live); a
+`__str__` that raises renders the pycc class name instead of propagating; and an
+exception rendered after its host call returned -- when the watermark has
+released the original -- renders the class name too. So `except ValueError` around
 `int(o)` catches the host's `ValueError`, `except AttributeError` (or
 `except Exception`) catches a missing attribute, and an exception that escapes the compiled code unchanged reaches
 the host as the *original* object, keeping its class, `.name` and traceback.
 The bridge is total, with two degraded paths: a helper that failed without
-setting an exception bridges a `SystemError` saying so, and an allocation or
-`str(exc)` failure raises the mapped class with the class name as its message
+setting an exception bridges a `SystemError` saying so, and a bridge table
+that cannot grow raises the mapped class with the class name as its message
 and drops the original. A function reading a module-level foreign name the
 module body has not bound yet — `f()` called above `import copy`, or an import
 inside a block that has not run — raises `NameError: name 'copy' is not
