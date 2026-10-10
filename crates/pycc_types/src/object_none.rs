@@ -32,6 +32,19 @@ pub(crate) fn admits_none_return(declared: &Ty, value: Option<&HirExpr>) -> bool
     *declared == Ty::Object && matches!(value, None | Some(HirExpr::NoneLiteral))
 }
 
+/// The check phase's verdict on an admitted bare `return` or `return None`
+/// in a function declared to return `declared` (#1508): `I0406` when that
+/// boxes CPython's `None` into an `object` slot in a fully native build
+/// (`crate::object_box::check_without_host`), whose packer
+/// `pycc_ext_obj_none` lives in the host shim; `Ok` otherwise, including a
+/// bare `return` from a `-> None` function.
+pub(crate) fn refuse_without_host(declared: &Ty) -> Result<(), pycc_diag::Diagnostic> {
+    if *declared == Ty::Object && crate::object_box::hostless() {
+        return Err(crate::object_box::boxing_without_host("`None`"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

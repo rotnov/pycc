@@ -2695,6 +2695,25 @@ below), frame slot (Part 2), instance attribute (Part 4), compiled call or
 its live carrier when it has one, so the same instance boxed twice is the
 same CPython object, as `is` sees it in CPython.
 
+**A fully native module references no host helper.**
+[#1508](https://github.com/rotnov/pycc/issues/1508): the packers above, like
+every `pycc_ext_*` helper, live in the CPython host shim, which only a
+`pycc build --ext` artifact and an embedded executable link
+(`CompileOptions::ext`). A fully native build still compiles `object`-typed
+code -- a legacy `T = TypeVar("T")` annotation lowers to `object`
+(`docs/TYPE_SYSTEM.md`, "Generics") -- so two rules keep it linkable. Its
+type check refuses every boxing seam with `I0406`
+(`pycc_types::check_without_host`, entered by `src/frontend.rs` only when the
+build is neither `--ext` nor embedded): with no packer there is no way to put
+a native value into an `object` slot, and no host to hand one in, so no
+`object` value exists at run time. And `pycc_codegen`'s `native_host_stubs`
+pass gives every `pycc_ext_*` declaration a non-`ext` module still holds an
+internal definition whose body is `llvm.trap`: the `object` bodies that
+reference them are unreachable, the module references no host symbol, and a
+trap that ever ran would be a front-end defect rather than a wrong answer.
+`tests/issue_1508_native_typevar_link.rs` pins both halves and the hosted
+paths, which box as before.
+
 **An object narrowed by `isinstance` is unboxed at each native read.** Part 3
 of [#1387](https://github.com/rotnov/pycc/issues/1387)
 ([#1476](https://github.com/rotnov/pycc/issues/1476); `docs/TYPE_SYSTEM.md`, "Narrowing an object by `isinstance`")

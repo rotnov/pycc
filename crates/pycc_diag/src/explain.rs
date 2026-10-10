@@ -1650,6 +1650,40 @@ def zeros(n: int) -> float:
 ",
     },
     DiagnosticExplanation {
+        code: "I0406",
+        severity: Severity::Error,
+        summary: "a native value boxed into a CPython `object` slot in a native build; a PEP 695 type parameter or `pycc build --ext` is required",
+        explanation: "\
+I0406 reports, in a build that produces a fully native executable (neither \
+`pycc build --ext` nor an embedded executable, which a CPython import \
+selects), a native value moved into a CPython `object` slot. The usual \
+source is a legacy type variable: `T = TypeVar(\"T\")` lowers `T` in an \
+annotation to the opaque `object`, so `ident(3)` for `def ident(key: T) -> T` \
+boxes the `int` into a CPython object. Every boxing seam is refused: a call \
+argument (a function, method, constructor or `super()` call), an annotated \
+binding or a rebinding of an `object` name, a `return` of a value, a bare \
+`return` or `return None` from a function declared to return the type \
+variable, and an attribute store into an `object` attribute. Boxing is done \
+by the CPython host's packers, and a native executable links no host, so no \
+`object` value can exist in it; before #1508 such a program failed in the \
+linker with undefined `pycc_ext_*` symbols. A program that only defines \
+type-variable functions or `Generic[T]` classes, and never boxes a value \
+into them, builds and runs natively. The fix is a PEP 695 type parameter, \
+`def ident[T](key: T) -> T`, which pycc compiles natively by \
+monomorphization, or `pycc build --ext`. `pycc check` selects no artifact \
+mode and so does not report I0406.",
+        example: "\
+from typing import TypeVar
+
+T = TypeVar(\"T\")
+
+def ident(key: T) -> T:
+    return key
+
+print(ident(3))  # error[I0406] in a native build; `def ident[T](key: T) -> T` compiles
+",
+    },
+    DiagnosticExplanation {
         code: "W1001",
         severity: Severity::Warning,
         summary: "unreachable code",

@@ -64,6 +64,7 @@ pub use module::{
 #[cfg(test)]
 pub(crate) use module::{check_with_signatures, checked_function_signatures};
 pub use monomorphize::*;
+pub use object_box::{NATIVE_BOXING_CODE, check_without_host};
 
 use pycc_diag::{Diagnostic, Span};
 #[cfg(test)]
@@ -2779,11 +2780,11 @@ fn check_stmt_in_function(
                 )
                 .with_help(format!("return a `{}` value", return_ty.name())));
             }
-            Ok(())
+            object_none::refuse_without_host(&return_ty)
         }
         HirStmt::Return(Some(expr)) if object_none::admits_none_return(&return_ty, Some(expr)) => {
             // #1387: `return None` into an `object` slot; see `object_none`.
-            Ok(())
+            object_none::refuse_without_host(&return_ty)
         }
         HirStmt::Return(Some(expr)) => {
             // Part 2b of #1142 (#1164): the one position an artifact-owned
