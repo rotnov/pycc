@@ -9,6 +9,12 @@ use super::{PyStrObj, PyStrPayload};
 use std::cell::Cell;
 use std::collections::HashSet;
 
+mod message;
+pub use message::{
+    ExceptionMessageResolver, pycc_rt_exception_message, pycc_rt_exception_set_message_resolver,
+    pycc_rt_ext_pending_message,
+};
+
 pub const EXCEPTION_TYPE_EXCEPTION: u8 = 0;
 pub const EXCEPTION_TYPE_VALUE_ERROR: u8 = 1;
 pub const EXCEPTION_TYPE_TYPE_ERROR: u8 = 2;
@@ -68,6 +74,13 @@ pub struct PyExceptionObj {
     pub(crate) name: *const u8,
     pub(crate) name_len: usize,
     pub(crate) message: *mut PyStrObj,
+    /// Whether this exception's message is produced lazily (#1511): a
+    /// bridged exception, allocated without one, or the rest group
+    /// `except*` derives from one. Set at allocation and never changed.
+    /// `message` is only a cache for such an exception, filled by the first
+    /// rendering, so whether it is null says nothing about where the
+    /// exception came from; this flag does.
+    pub(crate) lazy_message: bool,
     /// The enclosing function's source name (`"<module>"` at top level)
     /// where this exception was raised (#707), as a pointer to UTF-8 bytes
     /// with no terminator, plus `frame_function_len`. Null means "not
@@ -157,36 +170,6 @@ pub extern "C" fn pycc_rt_ext_pending_type() -> i32 {
     })
 }
 
-/// The pending exception's message as UTF-8 bytes, writing its length through
-/// `len`. Null (with `*len == 0`) when nothing is pending.
-///
-/// The bytes belong to the pending exception object, which this runtime never
-/// frees (see [`PyExceptionObj`]'s leak-only note), so they stay readable
-/// until the caller has copied them into a CPython exception -- which the
-/// shim does immediately, before [`pycc_rt_exception_clear`].
-///
-/// # Safety
-///
-/// `len` must be non-null and point to a writable, aligned `usize`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pycc_rt_ext_pending_message(len: *mut usize) -> *const u8 {
-    EXCEPTION_STATE.with(|state| {
-        let pending = state.get();
-        if pending.active == 0 || pending.value.is_null() {
-            unsafe { *len = 0 };
-            return std::ptr::null();
-        }
-        let message = unsafe { (*pending.value).message };
-        if message.is_null() {
-            unsafe { *len = 0 };
-            return std::ptr::null();
-        }
-        let bytes = unsafe { (*message).bytes() };
-        unsafe { *len = bytes.len() };
-        bytes.as_ptr()
-    })
-}
-
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_exception_alloc(
     type_tag: u8,
@@ -199,6 +182,7 @@ pub extern "C" fn pycc_rt_exception_alloc(
         name,
         name_len,
         message,
+        lazy_message: message.is_null(),
         frame_function: std::ptr::null(),
         frame_function_len: 0,
         cause: std::ptr::null_mut(),
@@ -288,6 +272,7 @@ fn build_group_or_null(
         name: group_name,
         name_len: group_name_len,
         message,
+        lazy_message: message.is_null(),
         frame_function: std::ptr::null(),
         frame_function_len: 0,
         cause: std::ptr::null_mut(),
@@ -325,6 +310,7 @@ pub unsafe extern "C" fn pycc_rt_exception_group_alloc(
         name,
         name_len,
         message,
+        lazy_message: message.is_null(),
         frame_function: std::ptr::null(),
         frame_function_len: 0,
         cause: std::ptr::null_mut(),
@@ -399,11 +385,36 @@ pub unsafe extern "C" fn pycc_rt_exception_group_partition(
             rest.push(member);
         }
     }
-    let message = obj.message;
+    // A lazily messaged exception (#1511) -- a bridged one, or the rest group
+    // an earlier `except*` derived from one -- must not have its message
+    // copied: that would call the original's `__str__`, which CPython never
+    // does here, or, once a handler has rendered it, put the leaf's text on
+    // the wrapper. Provenance comes from `lazy_message`, never from whether
+    // the message cache is still empty. The matched group a handler binds is
+    // CPython's `ExceptionGroup('', [exc])`, message `''`. The rest group
+    // re-raised in place of the naked original (the recorded `except*`
+    // deviation) stays lazily messaged: it renders as its sole member's own
+    // message, produced only if something renders it.
+    let (matched_message, rest_message) = if obj.lazy_message {
+        (alloc_exception_message(""), std::ptr::null_mut())
+    } else {
+        (obj.message, obj.message)
+    };
     unsafe {
-        *matched_out =
-            build_group_or_null(matched, group_type_tag, group_name, group_name_len, message);
-        *rest_out = build_group_or_null(rest, group_type_tag, group_name, group_name_len, message);
+        *matched_out = build_group_or_null(
+            matched,
+            group_type_tag,
+            group_name,
+            group_name_len,
+            matched_message,
+        );
+        *rest_out = build_group_or_null(
+            rest,
+            group_type_tag,
+            group_name,
+            group_name_len,
+            rest_message,
+        );
     }
 }
 
@@ -453,27 +464,6 @@ pub unsafe extern "C" fn pycc_rt_exception_type_matches(
     }
     let obj_tag = unsafe { (*obj).type_tag };
     i8::from(tag_matches(obj_tag, type_tag))
-}
-
-/// Returns the exception's own message string, borrowed and unretained
-/// (Part 3A of #541, #736): `print(e)`/f-string interpolation of a caught
-/// exception binding must render CPython's `str(e)` semantics -- the message
-/// alone, e.g. `boom` -- never `exception_print_and_exit`'s own uncaught-
-/// exception `"{type}: {message}"` format, which this function does not
-/// touch. No refcount/retain work is needed here: like
-/// `pycc_rt_print_write_str`/`pycc_rt_str_concat`, this only borrows an
-/// existing `PyStrObj` pointer rather than producing a new owned reference.
-///
-/// # Safety
-///
-/// A non-null `obj` must point to a live `PyExceptionObj` whose `message`
-/// field is a live `PyStrObj` pointer -- true of every `PyExceptionObj` this
-/// compiler's own codegen ever constructs (`pycc_rt_exception_alloc` always
-/// receives a message, defaulting to `"unknown"` when the source `raise` has
-/// no argument -- see `pycc_mir::lower_exception_value`).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pycc_rt_exception_message(obj: *mut PyExceptionObj) -> *mut PyStrObj {
-    unsafe { (*obj).message }
 }
 
 /// The exception class's name, or `Exception` when the object carries none.
@@ -704,8 +694,13 @@ mod tests {
             b"division by zero"
         );
 
-        // An exception with no message object at all: the shim substitutes
-        // an empty string rather than reading a null pointer.
+        // An exception with no message object at all (a bridged one, #1511):
+        // with no resolver registered, its message is its class name, and
+        // a null class name reads as `Exception`.
+        let registration = message::RESOLVER_REGISTRATION
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        pycc_rt_exception_set_message_resolver(None);
         pycc_rt_exception_clear();
         pycc_rt_exception_raise(pycc_rt_exception_alloc(
             EXCEPTION_TYPE_VALUE_ERROR,
@@ -718,8 +713,12 @@ mod tests {
             pycc_rt_ext_pending_type(),
             i32::from(EXCEPTION_TYPE_VALUE_ERROR)
         );
-        assert!(unsafe { pycc_rt_ext_pending_message(&raw mut len) }.is_null());
-        assert_eq!(len, 0);
+        let bytes = unsafe { pycc_rt_ext_pending_message(&raw mut len) };
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(bytes, len) },
+            b"Exception"
+        );
+        drop(registration);
 
         // An `active` flag with a null value is not a pending exception.
         EXCEPTION_STATE.with(|state| {
